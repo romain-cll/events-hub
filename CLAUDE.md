@@ -1,9 +1,16 @@
 # events-hub
 
 Un **hub d'événements** : on y ingère des événements de toutes provenances —
-analytics navigateur, deployments, uptime, erreurs, paiements — pour pouvoir les
-**croiser** et savoir ce qui cause quoi. L'analytics web est la première verticale
-livrée, pas le produit.
+analytics navigateur, produit, deployments, uptime, erreurs, paiements — pour
+pouvoir les **croiser** et savoir ce qui cause quoi. La question que le produit
+vise est « **qu'est-ce qui a un impact sur le revenu ?** » : quelle source
+rapporte, quelle fonctionnalité convertit, ce qu'a coûté cette erreur ou ce
+déploiement. L'analytics web est la première verticale livrée, pas le produit.
+
+Le revenu est une **famille d'événements comme les autres**, pas un module à
+part : le socle n'en sait rien, il route, stocke et compte. La seule contrainte
+que ce cadrage ajoute est négative — ne jamais supposer, dans le socle, qu'un
+événement vient du navigateur ou relève de l'analytics.
 
 Monorepo pnpm + turbo : `apps/api` (NestJS + Drizzle + Postgres), `apps/web`
 (TanStack Start + React), `packages/api-contract`, `packages/sdk`.
