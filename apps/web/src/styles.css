@@ -1,0 +1,287 @@
+/* apps/web/src/styles.css — remplace intégralement l'existant */
+
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@plugin '@tailwindcss/typography';
+
+@custom-variant dark (&:is(.dark *));
+
+/* ── 1. Les trois leviers ──────────────────────────── */
+
+@theme {
+  /* Densité : toute l'échelle Tailwind se resserre de 12 % */
+  --spacing: 0.22rem;
+
+  --font-sans: 'Plus Jakarta Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+
+  /* Échelle typo décalée d'un cran : text-sm = 13 px */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1.45;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.45;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.45;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.6;
+  --text-lg: 1rem;
+  --text-lg--line-height: 1.45;
+  --text-xl: 1.125rem;
+  --text-xl--line-height: 1.35;
+  --text-2xl: 1.375rem;
+  --text-2xl--line-height: 1.25;
+  --text-3xl: 1.75rem;
+  --text-3xl--line-height: 1.2;
+  --text-4xl: 2.25rem;
+  --text-4xl--line-height: 1.1;
+
+  /* Approches : serrer les grandes tailles, ouvrir les capitales */
+  --tracking-tight: -0.022em;
+  --tracking-snug: -0.008em;
+  --tracking-wide: 0.09em;
+}
+
+/* ── 2. Palette claire ─────────────────────────────── */
+
+:root {
+  --radius: 0.5rem;
+
+  --background: oklch(0.985 0.001 0);
+  --foreground: oklch(0.205 0.015 267);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.205 0.015 267);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.205 0.015 267);
+
+  --primary: oklch(0.546 0.215 263);
+  --primary-foreground: oklch(1 0 0);
+  --primary-hover: oklch(0.488 0.217 264);
+
+  --secondary: oklch(0.964 0.003 264);
+  --secondary-foreground: oklch(0.205 0.015 267);
+  --muted: oklch(0.964 0.003 264);
+  --muted-foreground: oklch(0.528 0.025 257);
+
+  /* --accent = surface de survol (convention shadcn) */
+  --accent: oklch(0.976 0.003 264);
+  --accent-foreground: oklch(0.205 0.015 267);
+
+  --destructive: oklch(0.537 0.18 22);
+  --destructive-foreground: oklch(1 0 0);
+
+  --border: oklch(0.931 0.006 264);
+  --input: oklch(0.885 0.01 267);
+  --ring: oklch(0.546 0.215 263);
+
+  /* Extensions maison */
+  --subtle-foreground: oklch(0.655 0.02 261);
+  --brand-soft: oklch(0.953 0.018 258);
+  /* texte sur fond doux = l'accent ; --primary-hover ne sert qu'au :hover/:active */
+  --brand-soft-foreground: oklch(0.546 0.215 263);
+  --success: oklch(0.511 0.11 159);
+  --success-soft: oklch(0.956 0.017 163);
+  --warning: oklch(0.548 0.127 59);
+  --warning-soft: oklch(0.96 0.022 74);
+  /* info : même teinte que l'accent mais chroma abaissé (0.091 vs 0.215),
+     pour qu'un bandeau informatif ne rivalise jamais avec un bouton */
+  --info: oklch(0.431 0.091 265);
+  --info-soft: oklch(0.945 0.017 264);
+  --neutral: oklch(0.506 0.023 253);
+  --neutral-soft: oklch(0.961 0.004 271);
+  --skeleton: oklch(0.951 0.005 258);
+
+  --chart-1: oklch(0.546 0.215 263);
+  --chart-2: oklch(0.671 0.175 41);
+  --chart-3: oklch(0.63 0.109 185);
+  --chart-4: oklch(0.586 0.189 325);
+  --chart-5: oklch(0.764 0.161 75);
+  --chart-6: oklch(0.716 0.141 357);
+
+  /* ── Rampe séquentielle du planisphère ───────────────
+     Six paliers, **dérivés** de --primary plutôt que posés à la main : la
+     planche « Analytics » les donne en dur, et ils retombent à 0,017 près en
+     OKLab sur ces mélanges-là. Deux d'entre eux sont même des jetons existants,
+     ce qui n'est pas une coïncidence — la rampe a été dessinée sur la marque.
+
+     L'alpha seul n'aurait pas suffi : --primary/50 éclaircit (il laisse passer
+     la surface) mais ne peut pas assombrir, or les deux derniers paliers sont
+     plus sombres que --primary. C'est color-mix qui débloque ça.
+
+     Les paliers clairs se mélangent à --card, la surface qui porte la carte —
+     pas à `white`. C'est ce qui les fait fondre dans le fond dans les deux
+     thèmes, sans qu'on ait à les redéfinir en sombre. */
+  --heat-1: color-mix(in oklab, var(--primary) 26%, var(--card));
+  --heat-2: color-mix(in oklab, var(--primary) 45%, var(--card));
+  --heat-3: color-mix(in oklab, var(--primary) 70%, var(--card));
+  --heat-4: var(--primary);
+  --heat-5: var(--primary-hover);
+  --heat-6: color-mix(in oklab, var(--primary) 75%, black);
+
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.205 0.015 267);
+  --sidebar-primary: oklch(0.546 0.215 263);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.953 0.018 258);
+  --sidebar-accent-foreground: oklch(0.546 0.215 263);
+  --sidebar-border: oklch(0.931 0.006 264);
+  --sidebar-ring: oklch(0.546 0.215 263);
+}
+/* ── 3. Palette sombre ─────────────────────────────── */
+
+.dark {
+  --background: oklch(0.163 0.009 264);
+  --foreground: oklch(0.94 0.006 264);
+  --card: oklch(0.204 0.011 261);
+  --card-foreground: oklch(0.94 0.006 264);
+  --popover: oklch(0.204 0.011 261);
+  --popover-foreground: oklch(0.94 0.006 264);
+
+  --primary: oklch(0.701 0.156 264);
+  --primary-foreground: oklch(0.197 0.062 265);
+  --primary-hover: oklch(0.730 0.139 265);
+
+  --secondary: oklch(0.238 0.015 262);
+  --secondary-foreground: oklch(0.94 0.006 264);
+  --muted: oklch(0.238 0.015 262);
+  --muted-foreground: oklch(0.706 0.022 258);
+
+  --accent: oklch(0.26 0.016 264);
+  --accent-foreground: oklch(0.94 0.006 264);
+
+  --destructive: oklch(0.683 0.171 19);
+  --destructive-foreground: oklch(0.204 0.011 261);
+
+  --border: oklch(0.288 0.016 260);
+  --input: oklch(0.343 0.021 263);
+  --ring: oklch(0.701 0.156 264);
+
+  --subtle-foreground: oklch(0.562 0.025 257);
+  --brand-soft: oklch(0.258 0.070 266);
+  --brand-soft-foreground: oklch(0.797 0.102 265);
+  --success: oklch(0.72 0.14 160);
+  --success-soft: oklch(0.26 0.039 165);
+  --warning: oklch(0.75 0.136 75);
+  --warning-soft: oklch(0.257 0.028 71);
+  --info: oklch(0.727 0.080 263);
+  --info-soft: oklch(0.253 0.034 265);
+  --neutral: oklch(0.706 0.022 258);
+  --neutral-soft: oklch(0.238 0.015 262);
+  --skeleton: oklch(0.26 0.016 264);
+
+  --chart-1: oklch(0.647 0.152 262);
+  --chart-2: oklch(0.651 0.175 41);
+  --chart-3: oklch(0.66 0.113 186);
+  --chart-4: oklch(0.565 0.188 323);
+  --chart-5: oklch(0.67 0.143 73);
+  --chart-6: oklch(0.622 0.171 1);
+
+  /* Le seul palier de la rampe qui ne s'inverse pas tout seul. Les autres
+     suivent le thème sans rien dire : --card est sombre, donc 1 à 3 s'y
+     fondent, et --primary-hover y est plus *clair* que --primary, ce qui est
+     déjà le bon sens pour un palier « plus ». Celui-ci non — mélangé au noir il
+     retomberait à L=0.526, soit sous le palier 3, et la rampe se replierait sur
+     elle-même. En sombre, « plus » veut dire plus clair. */
+  --heat-6: color-mix(in oklab, var(--primary) 75%, white);
+
+  --sidebar: oklch(0.204 0.011 261);
+  --sidebar-foreground: oklch(0.94 0.006 264);
+  --sidebar-primary: oklch(0.701 0.156 264);
+  --sidebar-primary-foreground: oklch(0.197 0.062 265);
+  --sidebar-accent: oklch(0.258 0.070 266);
+  --sidebar-accent-foreground: oklch(0.797 0.102 265);
+  --sidebar-border: oklch(0.288 0.016 260);
+  --sidebar-ring: oklch(0.701 0.156 264);
+}
+
+/* ── 4. Exposition à Tailwind ──────────────────────── */
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-soft-foreground: var(--brand-soft-foreground);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-neutral: var(--neutral);
+  --color-neutral-soft: var(--neutral-soft);
+  --color-skeleton: var(--skeleton);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-heat-1: var(--heat-1);
+  --color-heat-2: var(--heat-2);
+  --color-heat-3: var(--heat-3);
+  --color-heat-4: var(--heat-4);
+  --color-heat-5: var(--heat-5);
+  --color-heat-6: var(--heat-6);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Rayons redérivés : rounded-md vaut --radius */
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
+
+  --shadow-xs: 0 1px 2px oklch(0.205 0.015 267 / 0.06);
+  --shadow-sm: 0 1px 2px oklch(0.205 0.015 267 / 0.06);
+  --shadow-md: 0 4px 10px -2px oklch(0.205 0.015 267 / 0.08);
+  --shadow-lg: 0 12px 28px -6px oklch(0.205 0.015 267 / 0.14);
+  --shadow-xl: 0 24px 56px -12px oklch(0.205 0.015 267 / 0.22);
+}
+
+/* ── 5. Base ───────────────────────────────────────── */
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground text-sm;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Chiffres alignables partout */
+  .tabular,
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+}
