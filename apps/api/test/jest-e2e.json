@@ -1,0 +1,17 @@
+{
+  "moduleFileExtensions": [
+    "js",
+    "mjs",
+    "json",
+    "ts"
+  ],
+  "rootDir": ".",
+  "testEnvironment": "node",
+  "testRegex": ".e2e-spec.ts$",
+  "transform": {
+    "^.+\\.m?[tj]s$": "ts-jest"
+  },
+  "transformIgnorePatterns": [
+    "node_modules/(?!.*(better-auth|@noble|jose|kysely|nanostores|rou3))"
+  ]
+}

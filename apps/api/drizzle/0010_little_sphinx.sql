@@ -1,0 +1,1 @@
+ALTER TABLE "project_keys" DROP COLUMN "type";
