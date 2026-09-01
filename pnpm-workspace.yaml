@@ -1,3 +1,11 @@
 packages:
-  - "apps/*"
-  - "packages/*"
+  - 'apps/*'
+  - 'packages/*'
+
+allowBuilds:
+  esbuild: true
+  lightningcss: true
+  unrs-resolver: true
+
+minimumReleaseAgeExclude:
+  - '@tanstack/query-devtools@5.102.4'

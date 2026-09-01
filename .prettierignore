@@ -1,0 +1,6 @@
+pnpm-lock.yaml
+dist
+.output
+.nitro
+.turbo
+apps/web/src/routeTree.gen.ts
