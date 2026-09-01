@@ -1,0 +1,27 @@
+{
+  "name": "@events-hub/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./eh.js": "./dist/eh.js"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=esm --define:__SDK_VERSION__=\\\"$npm_package_version\\\" --outfile=dist/analytics.js && esbuild src/auto.ts --bundle --format=iife --minify --define:__SDK_VERSION__=\\\"$npm_package_version\\\" --outfile=dist/eh.js",
+    "demo": "node example.ts",
+    "demo:site": "pnpm build && python3 -m http.server 4000",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "check-types": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@events-hub/eslint-config": "workspace:*",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.39.5",
+    "jsdom": "^30.0.1",
+    "typescript": "5.9.2",
+    "vitest": "^4.1.11"
+  }
+}

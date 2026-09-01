@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <title>Site externe — test du SDK</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0 auto;
+        max-width: 52rem;
+        padding: 2rem 1rem 6rem;
+        line-height: 1.5;
+      }
+      section {
+        border-top: 1px solid #ddd;
+        padding-top: 1rem;
+        margin-top: 2rem;
+      }
+      button,
+      a.bouton {
+        font: inherit;
+        padding: 0.4rem 0.8rem;
+        margin: 0 0.3rem 0.3rem 0;
+      }
+      #journal {
+        background: #111;
+        color: #eee;
+        padding: 1rem;
+        overflow-x: auto;
+        font-size: 0.85rem;
+        min-height: 6rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Site externe</h1>
+    <p>
+      Cette page ne connaît rien du dashboard : ni React, ni TanStack, ni le
+      moindre code du monorepo. Elle charge le SDK buildé et rien d'autre.
+      <strong>Aucun <code>track()</code> n'est appelé à la main</strong> — tout
+      ce qui apparaît dans le journal vient des collecteurs automatiques.
+    </p>
+
+    <section>
+      <h2>Clics</h2>
+      <button id="filtrer" name="filtrer" type="button">Filtrer</button>
+      <button type="button"><span>Bouton avec un enfant</span></button>
+      <div role="button" tabindex="0">Un div en role=button</div>
+      <p>
+        <span id="inerte"
+          >Ce texte n'est pas interactif : aucun événement.</span
+        >
+      </p>
+    </section>
+
+    <section>
+      <h2>Formulaire</h2>
+      <p>
+        Tape ce que tu veux : ni le libellé, ni le nom du champ, ni sa valeur ne
+        partent.
+      </p>
+      <form id="recherche" name="recherche" method="get" action="/recherche">
+        <input name="q" placeholder="Recherche…" />
+        <button type="submit">Chercher</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Navigation SPA</h2>
+      <button id="push" type="button">pushState /resultats</button>
+      <button id="push-identique" type="button">
+        pushState vers la même URL (aucun événement)
+      </button>
+      <button id="replace" type="button">replaceState /resultats-bis</button>
+      <button id="retour" type="button">history.back()</button>
+    </section>
+
+    <section>
+      <h2>Navigation MPA</h2>
+      <p>
+        Ce lien recharge réellement le document — aucun <code>pushState</code>.
+        Le SDK redémarre de zéro et n'a plus rien en mémoire : c'est
+        <code>document.referrer</code> qui porte la page précédente, et
+        <code>navigation.from</code> doit valoir la même chose qu'en SPA.
+      </p>
+      <a class="bouton" id="mpa" href="./?page=2">Recharger vers ?page=2</a>
+      <a class="bouton" href="./">Revenir à /example/</a>
+    </section>
+
+    <section>
+      <h2>Sortie</h2>
+      <a class="bouton" id="sortie" href="https://example.com/"
+        >Lien sortant (quitte la page)</a
+      >
+      <a class="bouton" href="https://example.com/" target="_blank"
+        >Lien sortant en nouvel onglet (pas de départ)</a
+      >
+      <p>
+        Changer d'onglet déclenche aussi un <code>page_leave</code> :
+        <code>visibilitychange</code>.
+      </p>
+    </section>
+
+    <section>
+      <h2>Ce qui part sur le fil</h2>
+      <pre id="journal">en attente…</pre>
+    </section>
+
+    <script type="module">
+      import { Analytics } from '../dist/analytics.js';
+
+      const journal = document.querySelector('#journal');
+      const lignes = [];
+
+      function journaliser(transport, corps) {
+        const event = JSON.parse(corps);
+        lignes.push(
+          `${String(lignes.length + 1).padStart(2, '0')}  ${event.type.padEnd(15)} ${transport.padEnd(7)} ${JSON.stringify(event.properties)}`,
+        );
+        journal.textContent = lignes.join('\n');
+      }
+
+      // Le SDK n'expose pas de hook « événement envoyé » : ce n'est pas son
+      // travail. Pour cette page de démonstration, on met un mouchoir sur les
+      // deux transports pour voir passer le flux — et au passage vérifier de
+      // ses yeux que `page_leave` part bien en `keepalive`.
+      const fetchOriginal = window.fetch.bind(window);
+      window.fetch = (url, init) => {
+        if (init?.body) {
+          journaliser(init.keepalive ? 'keepalive' : 'fetch', init.body);
+        }
+        return fetchOriginal(url, init);
+      };
+
+      // Repli des navigateurs sans `keepalive` — on l'instrumente aussi pour
+      // constater qu'il n'est *pas* emprunté ici.
+      const beaconOriginal = navigator.sendBeacon.bind(navigator);
+      navigator.sendBeacon = (url, blob) => {
+        blob.text().then((corps) => {
+          journaliser('beacon', corps);
+        });
+        return beaconOriginal(url, blob);
+      };
+
+      const analytics = new Analytics({
+        apiKey: 'eh_pk_2e95b1b62a96443a919f2b3661106689',
+        endpoint: 'http://localhost:3003/v1/events',
+        onError: (error) => {
+          journal.textContent = `${journal.textContent}\n!!  ${error}`;
+        },
+      });
+
+      analytics.start();
+
+      const naviguer = (id, action) => {
+        document.querySelector(id).addEventListener('click', action);
+      };
+
+      // Formulaire d'une SPA : on annule la soumission native pour rester sur
+      // la page et voir la suite de la séquence. Le `submit` part quand même —
+      // le collecteur écoute l'événement, pas la navigation.
+      document
+        .querySelector('#recherche')
+        .addEventListener('submit', (event) => event.preventDefault());
+
+      naviguer('#push', () => history.pushState(null, '', '/resultats'));
+      naviguer('#push-identique', () =>
+        history.pushState(null, '', location.pathname + location.search),
+      );
+      naviguer('#replace', () =>
+        history.replaceState(null, '', '/resultats-bis'),
+      );
+      naviguer('#retour', () => history.back());
+    </script>
+  </body>
+</html>
