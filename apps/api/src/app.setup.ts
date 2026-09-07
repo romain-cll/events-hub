@@ -57,20 +57,36 @@ export function configureApp(app: INestApplication): void {
 
   // ## Deux politiques CORS, et elles s'excluent
   //
-  // Elles ne peuvent pas être fusionnées : `Access-Control-Allow-Origin: *` est
-  // incompatible avec l'envoi de cookies, et refléter *toutes* les origines
-  // avec `credentials: true` laisserait n'importe quel site lire les analytics
-  // d'un utilisateur connecté en se servant de son cookie.
+  // Les deux sont credentialées, mais pas de la même façon : l'ingestion
+  // **reflète** l'origine qui l'appelle, le dashboard en **nomme** une seule.
   //
-  // - l'ingestion reste ouverte à tous : le SDK est appelé depuis les sites
-  //   clients, la clé y est publique, et il n'y a aucune session à protéger ;
-  // - tout le reste — auth et dashboard — est credentialé sur une origine
-  //   nommée.
+  // - l'ingestion est appelée depuis les sites clients, dont on ne connaît pas
+  //   la liste à ce stade de la requête — le corps n'est pas encore parsé, donc
+  //   la clé de projet n'est pas encore lue. La refléter est la seule forme
+  //   compatible avec un cookie : `Access-Control-Allow-Origin: *` interdit de
+  //   les envoyer, et sans cookie le mode consenti n'existe pas ;
+  // - tout le reste — auth et dashboard — reste sur une origine nommée.
+  //
+  // Refléter n'ouvre rien ici, et c'est ce qui distingue cette route des
+  // autres : sa réponse ne contient que l'écho de ce que l'appelant a envoyé.
+  // Il n'y a rien à y lire qu'il ne détienne déjà. Le danger — un site tiers
+  // qui lirait les analytics d'un utilisateur connecté en se servant de sa
+  // session — vise les routes qui *renvoient* de la donnée, et celles-là sont
+  // sur `dashboardCors`.
+  //
+  // La vraie garde de l'ingestion n'est pas ici de toute façon : c'est
+  // l'allowlist d'origines portée par la clé, vérifiée par
+  // `ProjectKeysService.resolve`, qui tourne après et répond 204. Le CORS
+  // décide de ce que le navigateur s'autorise à lire ; l'allowlist décide de ce
+  // qui est écrit.
+  //
+  // `cors` pose `Vary: Origin` de lui-même en mode reflet — sans quoi un cache
+  // pourrait resservir à un site l'en-tête calculé pour un autre.
   //
   // L'aiguillage est explicite plutôt que deux `use()` empilés : montés l'un
   // après l'autre, le second réécrirait les en-têtes du premier sur
   // `/v1/events` et le navigateur verrait deux réponses contradictoires.
-  const publicCors = cors({ origin: '*' });
+  const publicCors = cors({ origin: true, credentials: true });
   const dashboardCors = cors({ origin: [webUrl], credentials: true });
 
   server.use((request, response, next) =>

@@ -47,6 +47,20 @@ export const createEventSchema = z.strictObject({
   // contrainte ici. Absentes -> `{}`, jamais `null` (la colonne est NOT NULL).
   attributes: z.record(z.string(), z.unknown()).default({}),
   properties: z.record(z.string(), z.unknown()).default({}),
+  /**
+   * Le consentement du visiteur au dépôt d'un identifiant durable, tel que la
+   * plateforme de consentement du client éditeur le rapporte.
+   *
+   * Optionnel à deux titres. Au sens du contrat d'abord : un SDK antérieur qui
+   * ne l'envoie pas reste accepté, et c'est ce qui permet de l'ajouter sans
+   * quitter `/v1`. Au sens du domaine ensuite — l'absence n'est **pas** un
+   * refus, voir `decideVisitorCookie`.
+   *
+   * Champ de premier niveau, et jamais une clé d'`attributes` : les deux sacs
+   * sont opaques pour le socle, y lire quoi que ce soit reviendrait à leur
+   * supposer une forme.
+   */
+  consent: z.boolean().optional(),
 });
 
 /** Payload tel qu'il arrive sur le fil (`occurredAt` est une chaîne). */

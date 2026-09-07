@@ -16,6 +16,7 @@ import { CoreService } from '../core/core.service';
 import { ProjectKeysService } from '../projects/project-keys.service';
 import type { PublicEvent } from '../events/event-store.service';
 import { Public } from '../auth/auth.decorators';
+import { decideVisitorCookie } from './visitor-cookie';
 
 /**
  * `version: '1'` + le versioning URI activé dans `main.ts` donnent le préfixe
@@ -75,6 +76,10 @@ export class IngestionController {
    *
    * Le User-Agent est optionnel côté HTTP : absent, on hache une chaîne vide
    * plutôt que de refuser l'événement.
+   *
+   * Le cookie de visiteur suit le même trajet, et seulement sur le chemin
+   * navigateur : une source serveur n'a pas de terminal où écrire, et le lui
+   * proposer n'aurait aucun sens.
    */
   @Post()
   @HttpCode(HttpStatus.CREATED)
@@ -84,12 +89,13 @@ export class IngestionController {
     @Res({ passthrough: true }) response: Response,
     @Headers('origin') origin?: string,
     @Headers('user-agent') userAgent?: string,
+    @Headers('cookie') cookie?: string,
   ): Promise<PublicEvent | undefined> {
     // La clé désigne le projet et sa nature ; l'origine dit si une clé publique
     // a le droit de servir depuis ce site. Tout est résolu ici, dans
     // l'adaptateur HTTP, parce qu'`Origin` est une notion HTTP — le socle reçoit
     // un `projectId` et une `source`, et n'a jamais à connaître d'en-tête.
-    const { apiKey, ...event } = payload;
+    const { apiKey, consent, ...event } = payload;
     const resolved = await this.projectKeys.resolve(apiKey, origin);
 
     // Origine refusée : rien n'est écrit, et on ne le dit pas.
@@ -109,8 +115,16 @@ export class IngestionController {
       return this.core.ingest({ ...event, projectId, source });
     }
 
+    // Le cookie s'arrête ici, comme `Origin` : ce qui descend est un
+    // identifiant opaque, jamais un en-tête. Et il est décidé *après* le 204 —
+    // un événement écarté ne laisse rien derrière lui, pas même un cookie.
+    const { setCookie, ...visitor } = decideVisitorCookie(cookie, consent);
+
+    if (setCookie) response.setHeader('Set-Cookie', setCookie);
+
     return this.core.ingest({
       ...event,
+      ...visitor,
       projectId,
       source,
       network: { ip, userAgent: userAgent ?? '' },
