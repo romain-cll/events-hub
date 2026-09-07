@@ -41,6 +41,7 @@ describe('beaconEvent', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(ENVELOPE),
       keepalive: true,
+      credentials: 'include',
     });
     // `sendBeacon` perdrait son preflight au déchargement : on ne l'emprunte pas
     // tant que `keepalive` est disponible.

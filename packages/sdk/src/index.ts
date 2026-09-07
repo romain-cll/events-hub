@@ -13,6 +13,14 @@
  * pas non plus ici — il s'agit d'abord de vérifier qu'on sait produire un flux
  * d'événements propre.
  *
+ * ## Le consentement, transporté et jamais demandé
+ *
+ * Le SDK ne montre aucun bandeau et n'en montrera jamais : le responsable de
+ * traitement est le site client, pas le hub. Ce qu'il fait, c'est **relayer**
+ * la décision que la plateforme de consentement du site a déjà prise, via
+ * `setConsent()`. Un site qui n'appelle rien reste parfaitement fonctionnel,
+ * dans le mode qui ne dépose rien sur le terminal.
+ *
  * ## Frontière entre `attributes` et `properties`
  *
  * `attributes` appartient au SDK. Ce sont les clés pointées et namespacées
@@ -74,6 +82,15 @@ export interface AnalyticsOptions {
    * l'appelant.
    */
   onError?: (error: unknown) => void;
+  /**
+   * Le consentement du visiteur, s'il est déjà connu à la construction.
+   *
+   * Rarement le cas — une plateforme de consentement répond après le démarrage
+   * de la page. D'où `setConsent()`, qui est la voie normale ; cette option
+   * n'est là que pour un site qui aurait déjà la réponse sous la main, et pour
+   * éviter de devoir appeler une méthode juste après le constructeur.
+   */
+  consent?: boolean;
 }
 
 /**
@@ -95,11 +112,35 @@ export class Analytics {
   private readonly apiKey: string;
   private readonly endpoint: string;
   private readonly onError: (error: unknown) => void;
+  /**
+   * `undefined` tant que rien n'a été déclaré, et c'est un troisième état, pas
+   * un `false` en attente : le hub honore alors un identifiant déjà posé au
+   * lieu de l'effacer. Confondre les deux ferait perdre son identité à tout
+   * visiteur d'un site qui ne câble pas le signal.
+   */
+  private consent: boolean | undefined;
 
-  constructor({ apiKey, endpoint, onError }: AnalyticsOptions) {
+  constructor({ apiKey, endpoint, onError, consent }: AnalyticsOptions) {
     this.apiKey = apiKey;
     this.endpoint = endpoint;
     this.onError = onError ?? (() => undefined);
+    this.consent = consent;
+  }
+
+  /**
+   * Rapporte la décision de la plateforme de consentement du site.
+   *
+   * À appeler à chaque fois qu'elle change, dans les deux sens : accorder pose
+   * un identifiant durable côté hub, retirer l'efface. Rien n'est envoyé à cet
+   * instant — la décision voyage avec le prochain événement, ce qui évite une
+   * requête dont le seul contenu serait un booléen.
+   *
+   * Il n'y a donc rien à nettoyer et rien à attendre : le retrait prend effet
+   * au premier événement qui suit, et si aucun ne suit, il n'y avait rien à
+   * rattacher.
+   */
+  setConsent(granted: boolean): void {
+    this.consent = granted;
   }
 
   /**
@@ -203,6 +244,10 @@ export class Analytics {
       occurredAt: new Date().toISOString(),
       attributes: collectAttributes(),
       properties,
+      // Étalé plutôt que posé à `undefined` : le schéma du hub refuse les clés
+      // inconnues, et une clé présente à `undefined` disparaît certes de la
+      // sérialisation, mais laisse le type mentir sur ce qui part.
+      ...(this.consent === undefined ? {} : { consent: this.consent }),
     };
   }
 }

@@ -13,7 +13,30 @@ export interface EventEnvelope {
   occurredAt: string;
   attributes: EventAttributes;
   properties: EventProperties;
+  /**
+   * Le consentement du visiteur au dépôt d'un identifiant durable.
+   *
+   * Absent tant que le site n'a rien déclaré, et l'absence n'est pas un refus :
+   * le hub continue d'honorer un identifiant déjà posé. C'est ce qui permet à
+   * un site sans plateforme de consentement de ne rien câbler du tout.
+   */
+  consent?: boolean;
 }
+
+/**
+ * Sans quoi rien du mode consenti ne fonctionne.
+ *
+ * Le défaut de `fetch` est `same-origin`, et le hub est par construction sur
+ * une autre origine que le site instrumenté : le navigateur n'enverrait aucun
+ * cookie, et surtout n'enregistrerait pas celui que la réponse pose. Le mode
+ * sans consentement, lui, n'en a pas besoin — c'est le seul endroit du SDK où
+ * cette ligne se voit.
+ *
+ * `sendBeacon`, en repli plus bas, envoie déjà les credentials sans qu'on le
+ * lui demande. Il ne peut pas lire la réponse, ce qui est sans importance : le
+ * `Set-Cookie` est appliqué par le navigateur, pas par nous.
+ */
+const CREDENTIALS = 'include' as const;
 
 /**
  * POST classique, pour tout ce qui est émis pendant que la page vit.
@@ -31,6 +54,7 @@ export async function postEvent(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(envelope),
+    credentials: CREDENTIALS,
   });
 
   if (!response.ok) {
@@ -81,6 +105,7 @@ export function beaconEvent(endpoint: string, envelope: EventEnvelope): void {
       headers: { 'Content-Type': 'application/json' },
       body,
       keepalive: true,
+      credentials: CREDENTIALS,
     }).catch(() => {
       // Sans page pour l'afficher ni appelant pour la rattraper, l'erreur n'a
       // nulle part où aller. On l'avale plutôt que de laisser un rejet non géré.
