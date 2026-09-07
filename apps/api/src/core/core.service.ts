@@ -53,7 +53,32 @@ interface IngestBase {
  * recevoir d'IP, donc il ne peut pas en faire quelque chose.
  */
 export type IngestCommand =
-  | (IngestBase & { source: 'browser'; network: NetworkIdentity })
+  | (IngestBase & {
+      source: 'browser';
+      network: NetworkIdentity;
+      /**
+       * L'identifiant durable en vigueur pour ce visiteur, quand il en a un.
+       *
+       * Opaque ici : le socle ne sait ni d'où il vient, ni comment il voyage,
+       * ni ce qui autorise à le poser. Il constate qu'il y en a un, et cesse
+       * alors de dériver l'identité du réseau.
+       */
+      visitorId?: string;
+      /**
+       * Vrai sur le **seul** événement qui vient de poser cet identifiant.
+       *
+       * Ce n'est pas une redite de `visitorId` : c'est ce qui distingue la
+       * bascule du régime établi, et les deux n'appellent pas le même repli.
+       */
+      visitorIdJustGranted?: boolean;
+      /**
+       * L'identifiant durable que cet événement même vient de retirer.
+       *
+       * Il n'est plus en vigueur — l'identité repasse au réseau dès celui-ci —
+       * mais il a encore servi il y a quelques secondes.
+       */
+      retiredVisitorId?: string;
+    })
   | (IngestBase & { source: 'server' });
 
 /**
@@ -110,7 +135,7 @@ export class CoreService {
       return await this.db.transaction(async (tx) => {
         const sessionId =
           command.source === 'browser'
-            ? await this.assignSession(tx, command.projectId, command)
+            ? await this.assignSession(tx, command)
             : null;
 
         await this.eventTypes.register(tx, command.projectId, command.type);
@@ -144,20 +169,30 @@ export class CoreService {
    * journalisés, ni renvoyés. Seuls en sortent la clé visiteur et trois libellés
    * géographiques grossiers, tous non réversibles, et tous sur la ligne
    * `sessions`. `network` sort de portée avec la requête.
+   *
+   * Les deux modes d'identification se rejoignent ici, et nulle part ailleurs.
+   * En sortie il n'y a qu'une clé opaque : `SessionAssigner`, `EventStore` et
+   * tout ce qui lit ensuite ignorent lequel des deux l'a produite, et c'est ce
+   * qui permet d'en changer en cours de route sans rien reconstruire.
    */
   private async assignSession(
     tx: Parameters<typeof this.sessionAssigner.assign>[0],
-    projectId: string,
-    { network, occurredAt }: { network: NetworkIdentity; occurredAt: Date },
+    command: Extract<IngestCommand, { source: 'browser' }>,
   ): Promise<string> {
+    const { projectId, network, occurredAt } = command;
     const identity = { projectId, ...network };
     const now = new Date();
-    const visitorKey = this.visitorKeys.compute(identity, now);
+    const derivedKey = this.visitorKeys.compute(identity, now);
 
     return await this.sessionAssigner.assign(tx, {
       projectId,
-      visitorKey,
-      fallbackKey: this.previousKey(identity, now, visitorKey),
+      // Le seul aiguillage entre les deux modes d'identification, et il tient
+      // en une ligne parce que rien en aval ne les distingue : la clé est
+      // opaque, la session l'est aussi.
+      visitorKey: command.visitorId
+        ? this.visitorKeys.computeStable(projectId, command.visitorId)
+        : derivedKey,
+      fallbackKey: this.chooseFallback(identity, now, derivedKey, command),
       occurredAt,
       // Résolue à chaque événement, écrite seulement à l'ouverture d'une
       // session — c'est l'assigneur qui le sait, pas nous. Le lookup est en
@@ -165,6 +200,52 @@ export class CoreService {
       // session existe déjà, donc de dupliquer sa décision.
       location: this.geoIp.locate(network.ip),
     });
+  }
+
+  /**
+   * La seconde clé sous laquelle `SessionAssigner` cherchera un voisin.
+   *
+   * Il n'y a qu'un repli, et le mode décide qui l'occupe. Les quatre cas
+   * s'excluent, et trois d'entre eux ne se produisent jamais en régime établi.
+   *
+   * ## Pourquoi le régime établi durable n'a aucun repli
+   *
+   * C'est le seul cas qui mérite d'être justifié. Y laisser la clé dérivée
+   * ferait chercher un voisin sous une clé que **plusieurs personnes
+   * partagent** : deux visiteurs derrière la même sortie réseau, avec le même
+   * navigateur, produisent la même. Le voisin trouvé pourrait alors ne pas
+   * être le bon, et l'assigneur fusionnerait deux visites étrangères l'une à
+   * l'autre — à chaque événement, indéfiniment.
+   *
+   * Le même risque existe à la bascule, mais il y est **borné à un seul
+   * événement**, et c'est ce qui le rend acceptable : sans lui, toute visite
+   * en cours au moment de l'acceptation serait coupée en deux, et une visite
+   * de deux pages compterait pour deux visites d'une page.
+   */
+  private chooseFallback(
+    identity: VisitorIdentity,
+    now: Date,
+    derivedKey: string,
+    {
+      visitorId,
+      visitorIdJustGranted,
+      retiredVisitorId,
+    }: Extract<IngestCommand, { source: 'browser' }>,
+  ): string | undefined {
+    // Il vient d'accepter : ce qu'il a laissé juste avant porte la clé dérivée.
+    if (visitorIdJustGranted) return derivedKey;
+
+    // Il vient de se rétracter : symétrie exacte, l'identifiant ne vaut plus
+    // mais le voisin d'il y a dix secondes le porte encore.
+    if (retiredVisitorId)
+      return this.visitorKeys.computeStable(
+        identity.projectId,
+        retiredVisitorId,
+      );
+
+    if (visitorId) return undefined;
+
+    return this.previousKey(identity, now, derivedKey);
   }
 
   /**

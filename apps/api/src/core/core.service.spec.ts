@@ -12,16 +12,17 @@ import type {
 import { CoreService, type IngestCommand } from './core.service';
 
 /**
- * La décision du tampon de minuit, et rien d'autre.
+ * Ce que `CoreService` décide avant d'écrire, et rien d'autre.
  *
- * Tout le reste de `CoreService` — la transaction, le verrou, la traduction
- * d'une violation de clé étrangère — est éprouvé contre un vrai Postgres dans
- * `test/`. Ce qui se teste utilement ici est la seule chose que la base ne peut
- * pas montrer : **avec quelle clé de repli l'assigneur est appelé**, selon
- * l'heure d'arrivée de la requête.
+ * Tout le reste — la transaction, le verrou, la traduction d'une violation de
+ * clé étrangère — est éprouvé contre un vrai Postgres dans `test/`. Ce qui se
+ * teste utilement ici est la seule chose que la base ne peut pas montrer :
+ * **avec quelles clés l'assigneur est appelé**, selon l'heure d'arrivée de la
+ * requête et selon le mode d'identification.
  *
  * `VisitorKeyService` est le vrai, pas un double : c'est lui qui décide où
- * tombe la frontière de journée, et un double la réécrirait ici.
+ * tombe la frontière de journée et où vivent les deux espaces de clés, et un
+ * double les réécrirait ici.
  */
 
 const identity = { ip: '203.0.113.42', userAgent: 'Mozilla/5.0' };
@@ -47,6 +48,29 @@ const TRENTE_MINUTES = 30 * 60 * 1000;
 
 const UNKNOWN: Location = { countryCode: null, region: null, city: null };
 
+/** Un `CoreService` dont seuls la clé visiteur et l'assigneur sont réels. */
+function coreAvec(visitorKeys: VisitorKeyService, assign: jest.Mock): CoreService {
+  return new CoreService(
+    // La transaction se réduit à « exécute le corps » : ces tests ne regardent
+    // pas ce qui est écrit, seulement ce qui est décidé avant.
+    {
+      transaction: (run: (tx: unknown) => unknown) => run({}),
+    } as unknown as DrizzleDatabase,
+    visitorKeys,
+    // La géo ne joue aucun rôle dans ce que ce fichier éprouve : un service qui
+    // ne sait rien suffit, et évite de faire dépendre un test de décision d'un
+    // fichier de 124 Mo.
+    { locate: () => UNKNOWN } as unknown as GeoIpService,
+    { assign } as unknown as SessionAssigner,
+    // Le registre des types est appelé sur les deux chemins, mais ce fichier
+    // n'éprouve pas ce qu'il inscrit : un double muet suffit.
+    {
+      register: jest.fn().mockResolvedValue(undefined),
+    } as unknown as EventTypeRegistry,
+    { insert: jest.fn().mockResolvedValue({}) } as unknown as EventStore,
+  );
+}
+
 describe('CoreService — le tampon de minuit', () => {
   const visitorKeys = new VisitorKeyService({
     getOrThrow: () => 'secret-de-test',
@@ -70,26 +94,7 @@ describe('CoreService — le tampon de minuit', () => {
 
   beforeEach(() => {
     assign = jest.fn().mockResolvedValue('session-1');
-
-    service = new CoreService(
-      // La transaction se réduit à « exécute le corps » : ce test ne regarde
-      // pas ce qui est écrit, seulement ce qui est décidé avant.
-      {
-        transaction: (run: (tx: unknown) => unknown) => run({}),
-      } as unknown as DrizzleDatabase,
-      visitorKeys,
-      // La géo ne joue aucun rôle dans ce que ce fichier éprouve : un service
-      // qui ne sait rien suffit, et évite de faire dépendre un test de décision
-      // d'un fichier de 124 Mo.
-      { locate: () => UNKNOWN } as unknown as GeoIpService,
-      { assign } as unknown as SessionAssigner,
-      // Le registre des types est appelé sur les deux chemins, mais ce fichier
-      // n'éprouve pas ce qu'il inscrit : un double muet suffit.
-      {
-        register: jest.fn().mockResolvedValue(undefined),
-      } as unknown as EventTypeRegistry,
-      { insert: jest.fn().mockResolvedValue({}) } as unknown as EventStore,
-    );
+    service = coreAvec(visitorKeys, assign);
   });
 
   afterEach(() => {
@@ -144,5 +149,92 @@ describe('CoreService — le tampon de minuit', () => {
     await service.ingest(command);
 
     expect(recu().fallbackKey).toBeUndefined();
+  });
+});
+
+describe('CoreService — le choix du mode d’identification', () => {
+  const visitorKeys = new VisitorKeyService({
+    getOrThrow: () => 'secret-de-test',
+  } as unknown as ConfigService);
+
+  const VISITOR_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
+  let assign: jest.Mock;
+  let service: CoreService;
+
+  const recu = (): SessionCandidate => {
+    const calls = assign.mock.calls as [unknown, SessionCandidate][];
+
+    return calls[0][1];
+  };
+
+  /** La clé que le réseau produirait à l'instant figé. */
+  const derivee = () =>
+    visitorKeys.compute({ projectId: PROJECT_ID, ...identity }, new Date());
+
+  const durable = (id: string) => visitorKeys.computeStable(PROJECT_ID, id);
+
+  const arriveeA = (instant: string) => {
+    jest.useFakeTimers().setSystemTime(new Date(instant));
+  };
+
+  beforeEach(() => {
+    // Pleine journée par défaut : le tampon de minuit ne joue pas, donc ce
+    // qu'on observe sur le repli ne vient que du mode.
+    arriveeA('2026-08-22T12:00:00.000Z');
+    assign = jest.fn().mockResolvedValue('session-1');
+    service = coreAvec(visitorKeys, assign);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('dérive l’identité quand rien n’est présenté', async () => {
+    await service.ingest(command);
+
+    expect(recu().visitorKey).toBe(derivee());
+  });
+
+  it('emploie l’identifiant durable dès qu’il y en a un', async () => {
+    await service.ingest({ ...command, visitorId: VISITOR_ID });
+
+    expect(recu().visitorKey).toBe(durable(VISITOR_ID));
+  });
+
+  it('ignore le tampon de minuit en régime établi durable', async () => {
+    // Le test qui discrimine vraiment les deux modes : à cette heure-ci, le
+    // mode dérivé poserait un repli. Le mode durable n'en a aucun à poser —
+    // sa clé ne tourne pas, il n'y a pas de frontière à franchir — et
+    // surtout il ne doit pas y laisser la clé dérivée, que plusieurs
+    // personnes derrière la même sortie réseau partagent.
+    arriveeA('2026-08-22T00:02:00.000Z');
+
+    await service.ingest({ ...command, visitorId: VISITOR_ID });
+
+    expect(recu().fallbackKey).toBeUndefined();
+  });
+
+  it('recolle la visite en cours au moment de l’acceptation', async () => {
+    await service.ingest({
+      ...command,
+      visitorId: VISITOR_ID,
+      visitorIdJustGranted: true,
+    });
+
+    // Sans ce repli, la visite en cours serait coupée en deux : deux pages
+    // vues compteraient pour deux visites d'une page.
+    expect(recu().visitorKey).toBe(durable(VISITOR_ID));
+    expect(recu().fallbackKey).toBe(derivee());
+  });
+
+  it('la recolle symétriquement au moment du retrait', async () => {
+    await service.ingest({ ...command, retiredVisitorId: VISITOR_ID });
+
+    // L'identité repasse au réseau dès cet événement-ci, pas au suivant : le
+    // retrait vaut immédiatement. C'est le voisin d'avant qui porte encore la
+    // clé durable.
+    expect(recu().visitorKey).toBe(derivee());
+    expect(recu().fallbackKey).toBe(durable(VISITOR_ID));
   });
 });
