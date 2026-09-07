@@ -50,6 +50,20 @@ const SEPARATOR = '\n';
  * assumé et borné, pas un effet de bord : sans lui, tout visiteur actif à
  * minuit compterait double.
  *
+ * ## Le mode durable
+ *
+ * `computeStable` répond à l'autre besoin : une identité qui traverse les
+ * jours, quand le visiteur y a consenti. Elle ne dérive rien du réseau — elle
+ * hache un identifiant que l'appelant présente déjà. D'où il vient et comment
+ * il voyage ne regarde pas ce service : c'est l'affaire de l'adaptateur HTTP.
+ *
+ * Deux raisons de le hacher plutôt que de l'écrire tel quel. Le cloisonnement
+ * par projet d'abord : sans le `projectId` dans l'empreinte, deux projets
+ * servis à la même personne partageraient la même valeur, et le mode durable
+ * serait *moins* cloisonné que le mode dérivé. La base ensuite ne contient
+ * alors rien qui permette de reconnaître l'identifiant présenté — la lire ne
+ * dit pas de qui il s'agit, et ne suffit pas à en fabriquer un.
+ *
  * ## Ce que ça protège, et ce que ça ne protège pas
  *
  * Le HMAC est à sens unique : la clé stockée ne redonne pas l'IP. Mais l'espace
@@ -88,6 +102,21 @@ export class VisitorKeyService {
 
     return createHmac('sha256', this.dailySecret(now))
       .update(payload)
+      .digest('hex');
+  }
+
+  /**
+   * La clé d'un visiteur qui présente un identifiant durable.
+   *
+   * Aucune composante temporelle, et c'est tout ce qui la distingue de
+   * `compute` : la même paire rend la même clé indéfiniment. Le secret maître
+   * est employé directement plutôt que le secret du jour, donc les deux modes
+   * vivent dans des espaces disjoints — une clé dérivée et une clé durable ne
+   * peuvent pas se confondre, même par accident.
+   */
+  computeStable(projectId: string, visitorId: string): string {
+    return createHmac('sha256', this.masterSecret)
+      .update([projectId, visitorId].join(SEPARATOR))
       .digest('hex');
   }
 
