@@ -17,6 +17,9 @@ const AUTH_PATH = '/v1/auth';
 /** La route d'ingestion, seule à être ouverte à toutes les origines. */
 const INGESTION_PATH = '/v1/events';
 
+/** Le webhook Stripe, seule route dont le corps ne doit pas être parsé. */
+const STRIPE_WEBHOOK_PATH = '/v1/webhooks/stripe';
+
 /**
  * Configuration commune à l'application réelle et aux tests e2e.
  *
@@ -107,6 +110,15 @@ export function configureApp(app: INestApplication): void {
   // préfixe de `req.url`, alors que le handler reconstruit l'URL à partir du
   // `basePath` complet et ne retrouverait plus ses routes.
   server.all(`${AUTH_PATH}/*splat`, toNodeHandler(auth));
+
+  // Même contrainte que Better Auth, pour une autre raison. Stripe signe les
+  // **octets** du corps : parser puis re-sérialiser ne redonne pas la même
+  // chaîne, donc la signature ne vérifierait plus jamais. `express.raw` doit
+  // donc précéder le parsing JSON — monté après, il ne verrait qu'un corps déjà
+  // consommé, et tous les webhooks seraient refusés.
+  //
+  // Cantonné à ce chemin : le reste de l'API veut du JSON parsé.
+  server.use(STRIPE_WEBHOOK_PATH, express.raw({ type: 'application/json' }));
   server.use(express.json());
 
   // Versioning par l'URI : un contrôleur annoté `version: '1'` est servi sous

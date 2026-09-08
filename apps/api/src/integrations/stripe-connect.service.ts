@@ -59,6 +59,7 @@ export class StripeConnectService {
   private readonly logger = new Logger(StripeConnectService.name);
   private readonly clientId: string | undefined;
   private readonly secretKey: string | undefined;
+  private readonly webhookSecret: string | undefined;
   private readonly redirectUri: string;
   private client: Stripe | undefined;
 
@@ -79,6 +80,7 @@ export class StripeConnectService {
   constructor(config: ConfigService) {
     this.secretKey = config.get<string>('STRIPE_SECRET_KEY');
     this.clientId = config.get<string>('STRIPE_CONNECT_CLIENT_ID');
+    this.webhookSecret = config.get<string>('STRIPE_WEBHOOK_SECRET');
     this.redirectUri = `${config.get<string>('WEB_URL') ?? 'http://localhost:3002'}/integrations/stripe/callback`;
 
     if (!this.secretKey || !this.clientId) {
@@ -91,6 +93,57 @@ export class StripeConnectService {
   /** Configuré, donc utilisable ? Ce que l'appelant peut demander sans échouer. */
   get available(): boolean {
     return Boolean(this.secretKey && this.clientId);
+  }
+
+  /**
+   * Un client authentifié, à l'usage des modules qui lisent chez Stripe.
+   *
+   * Exposé plutôt que recopié : les identifiants Stripe vivent **ici**, et un
+   * module métier qui construirait son propre client relirait la configuration
+   * de son côté — deux endroits à changer le jour d'une rotation de clé, et un
+   * qu'on oublierait.
+   *
+   * L'appelant passe `{ stripeAccount }` sur chaque requête pour agir au nom
+   * d'un compte connecté. C'est tout ce que Connect demande : il n'y a pas de
+   * jeton par compte à retrouver.
+   */
+  get api(): Stripe {
+    return this.stripe;
+  }
+
+  /**
+   * Vérifie la signature d'un webhook et rend l'événement.
+   *
+   * Ici, et pas dans le module qui consomme les webhooks, pour la même raison
+   * que `api` : c'est cette classe qui détient les secrets Stripe. La
+   * vérification est le seul rempart contre quelqu'un qui posterait de faux
+   * paiements sur une route ouverte — s'en passer reviendrait à laisser
+   * n'importe qui fabriquer du revenu dans le projet d'un client.
+   *
+   * `constructEvent` exige le **corps brut**, pas l'objet parsé : la signature
+   * porte sur les octets reçus, et re-sérialiser du JSON ne redonne pas les
+   * mêmes. C'est pourquoi `app.setup.ts` monte `express.raw` sur cette route.
+   */
+  verifyWebhook(payload: Buffer, signature: string): Stripe.Event {
+    if (!this.webhookSecret) {
+      throw new ServiceUnavailableException(
+        'STRIPE_WEBHOOK_SECRET absente : les webhooks Stripe ne peuvent pas être vérifiés.',
+      );
+    }
+
+    try {
+      return this.stripe.webhooks.constructEvent(
+        payload,
+        signature,
+        this.webhookSecret,
+      );
+    } catch (error) {
+      // Le détail va au journal, jamais à l'appelant : lui dire *pourquoi* la
+      // signature est refusée l'aiderait à en fabriquer une valide.
+      this.logger.warn(`Signature de webhook Stripe refusée : ${String(error)}`);
+
+      throw new BadRequestException('Signature invalide.');
+    }
   }
 
   /**

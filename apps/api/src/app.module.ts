@@ -9,6 +9,7 @@ import { FaviconsModule } from './favicons/favicons.module';
 import { AnalyticsModule } from './features/analytics/analytics.module';
 import { EventTypesFeatureModule } from './features/event-types/event-types.module';
 import { EventsFeatureModule } from './features/events/events.module';
+import { StripeModule } from './features/stripe/stripe.module';
 import { IngestionModule } from './ingestion/ingestion.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { OrganizationsModule } from './organizations/organizations.module';
@@ -41,6 +42,7 @@ import { SdkModule } from './sdk/sdk.module';
     AnalyticsModule,
     EventsFeatureModule,
     EventTypesFeatureModule,
+    StripeModule,
   ],
   controllers: [AppController],
   providers: [AppService],
