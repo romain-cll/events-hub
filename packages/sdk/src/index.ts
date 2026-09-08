@@ -21,6 +21,12 @@
  * `setConsent()`. Un site qui n'appelle rien reste parfaitement fonctionnel,
  * dans le mode qui ne dépose rien sur le terminal.
  *
+ * Quand le consentement est accordé, le hub rend l'identifiant durable du
+ * visiteur avec chaque réponse, et le SDK en dépose une copie lisible sur le
+ * domaine du site — voir `browser/visitor-mirror.ts`. C'est cette copie que le
+ * backend du site joint à ses paiements ; c'est elle qui permettra de dire quel
+ * revenu vient de quelle visite.
+ *
  * ## Frontière entre `attributes` et `properties`
  *
  * `attributes` appartient au SDK. Ce sont les clés pointées et namespacées
@@ -42,6 +48,7 @@
  * site ne doit pouvoir se faire passer pour du contexte collecté.
  */
 import { collectAttributes } from './browser/attributes.ts';
+import { mirrorVisitorId } from './browser/visitor-mirror.ts';
 import { trackClicks } from './tracking/click.ts';
 import { trackOutboundClicks } from './tracking/outbound-click.ts';
 import { trackPageLeave } from './tracking/page-leave.ts';
@@ -119,6 +126,17 @@ export class Analytics {
    * visiteur d'un site qui ne câble pas le signal.
    */
   private consent: boolean | undefined;
+  /** Le dernier identifiant rendu par le hub. Jamais forgé ici. */
+  private visitorId: string | undefined;
+  /**
+   * A-t-on déjà répercuté une réponse depuis le chargement de la page ?
+   *
+   * Sans ce drapeau, la première réponse *sans* identifiant serait confondue
+   * avec l'état initial et n'effacerait rien — laissant survivre une copie
+   * posée lors d'une visite précédente, alors que le consentement a été retiré
+   * entre-temps.
+   */
+  private mirrored = false;
 
   constructor({ apiKey, endpoint, onError, consent }: AnalyticsOptions) {
     this.apiKey = apiKey;
@@ -144,6 +162,22 @@ export class Analytics {
   }
 
   /**
+   * Le dernier identifiant durable rendu par le hub, s'il y en a un.
+   *
+   * Pour les sites qui construisent leur paiement en JS. Ceux qui le
+   * construisent côté serveur n'en ont pas besoin : ils lisent la copie déposée
+   * dans leurs propres cookies, et c'est le chemin recommandé — il ne dépend
+   * d'aucun ordre d'exécution.
+   *
+   * Synchrone, donc `undefined` tant qu'aucune réponse n'est revenue. Le rendre
+   * asynchrone déplacerait l'attente dans le code du site pour ne rien y
+   * gagner : un paiement arrive toujours après une navigation.
+   */
+  getVisitorId(): string | undefined {
+    return this.visitorId;
+  }
+
+  /**
    * Envoie un événement et rend le corps renvoyé par le hub (l'événement
    * persisté, id compris).
    *
@@ -159,7 +193,14 @@ export class Analytics {
     type: string,
     properties: EventProperties = {},
   ): Promise<unknown> {
-    return postEvent(this.endpoint, this.envelope(type, properties));
+    const body = await postEvent(
+      this.endpoint,
+      this.envelope(type, properties),
+    );
+
+    this.receive(body);
+
+    return body;
   }
 
   /**
@@ -198,7 +239,11 @@ export class Analytics {
         return;
       }
 
-      postEvent(this.endpoint, envelope).catch(this.onError);
+      postEvent(this.endpoint, envelope)
+        .then((body) => {
+          this.receive(body);
+        })
+        .catch(this.onError);
     };
 
     const teardowns: Teardown[] = [];
@@ -237,6 +282,37 @@ export class Analytics {
    * observe. `toISOString()` produit exactement la forme ISO 8601 UTC que le
    * schéma attend.
    */
+  /**
+   * Répercute ce que le hub vient de dire de ce visiteur.
+   *
+   * Le SDK n'invente jamais d'identifiant : il n'y a ici que de la recopie. La
+   * réponse fait autorité dans les deux sens — elle en porte un, on l'écrit ;
+   * elle n'en porte plus, on efface.
+   *
+   * L'écriture est conditionnée au changement pour ne pas toucher
+   * `document.cookie` à chaque événement, ce qui n'apporterait rien : la copie
+   * porte déjà sa propre durée de vie.
+   *
+   * La lecture est défensive parce que le transport rend `unknown` : un corps
+   * vide (une origine refusée répond 204) ou une forme inattendue ne doit pas
+   * faire échouer un envoi qui, lui, a réussi.
+   */
+  private receive(body: unknown): void {
+    const visitorId =
+      typeof body === 'object' &&
+      body !== null &&
+      'visitorId' in body &&
+      typeof body.visitorId === 'string'
+        ? body.visitorId
+        : undefined;
+
+    if (this.mirrored && visitorId === this.visitorId) return;
+
+    this.mirrored = true;
+    this.visitorId = visitorId;
+    mirrorVisitorId(visitorId);
+  }
+
   private envelope(type: string, properties: EventProperties): EventEnvelope {
     return {
       apiKey: this.apiKey,

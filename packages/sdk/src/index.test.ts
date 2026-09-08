@@ -22,7 +22,14 @@ const ENDPOINT = 'https://hub.test/v1/events';
  * par `fetch`, mais du point de vue du produit c'est un seul flux. Deux
  * journaux séparés ne diraient rien de la séquence.
  */
-function createHub({ ok = true }: { ok?: boolean } = {}) {
+function createHub({
+  ok = true,
+  visitorId,
+}: { ok?: boolean; visitorId?: string } = {}) {
+  // Modifiable en cours de test : c'est ce que fait un hub quand le visiteur
+  // accorde puis retire son consentement.
+  let identifiant = visitorId;
+
   const sent: {
     transport: 'fetch' | 'keepalive' | 'beacon';
     body: Promise<string>;
@@ -46,7 +53,10 @@ function createHub({ ok = true }: { ok?: boolean } = {}) {
       ok,
       status: ok ? 201 : 422,
       statusText: ok ? 'Created' : 'Unprocessable Entity',
-      json: () => Promise.resolve({ id: 'evt_1' }),
+      json: () =>
+        Promise.resolve(
+          identifiant ? { id: 'evt_1', visitorId: identifiant } : { id: 'evt_1' },
+        ),
       text: () => Promise.resolve('{"message":"projet inconnu"}'),
     });
   });
@@ -72,6 +82,9 @@ function createHub({ ok = true }: { ok?: boolean } = {}) {
         (body) => (JSON.parse(body) as EventEnvelope).type,
       ),
     transports: () => sent.map((call) => call.transport),
+    setVisitorId: (next: string | undefined) => {
+      identifiant = next;
+    },
   };
 }
 
@@ -318,6 +331,73 @@ describe('Analytics', () => {
 
       await expect(analytics.track('nimporte_quoi')).rejects.toThrow(
         /422.*projet inconnu/s,
+      );
+    });
+  });
+
+  describe('la copie du visitorId', () => {
+    const VISITOR_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
+    /** jsdom garde ses cookies d'un test à l'autre : on repart du vide. */
+    beforeEach(() => {
+      document.cookie = 'eh_visitor_id=; Path=/; Max-Age=0';
+    });
+
+    it('dépose ce que le hub rend, et le tient à disposition', async () => {
+      hub.setVisitorId(VISITOR_ID);
+
+      await analytics.track('checkout_started');
+
+      // Le cookie pour le backend du site, le getter pour son JS. Les deux
+      // portent la même valeur, et aucune n'a été forgée ici.
+      expect(document.cookie).toContain(`eh_visitor_id=${VISITOR_ID}`);
+      expect(analytics.getVisitorId()).toBe(VISITOR_ID);
+    });
+
+    it('efface la copie dès que le hub cesse d’en rendre une', async () => {
+      hub.setVisitorId(VISITOR_ID);
+      await analytics.track('avant');
+
+      // Le visiteur retire son consentement : le hub ne rend plus rien.
+      hub.setVisitorId(undefined);
+      await analytics.track('apres');
+
+      expect(document.cookie).not.toContain('eh_visitor_id=');
+      expect(analytics.getVisitorId()).toBeUndefined();
+    });
+
+    it('efface une copie laissée par une visite précédente', async () => {
+      // Le cas que le drapeau interne existe pour couvrir : le consentement a
+      // été retiré entre deux chargements de page, donc rien en mémoire ne
+      // signale qu'il y a quelque chose à effacer. Sans lui, cette copie
+      // survivrait 400 jours et continuerait de partir dans les paiements.
+      document.cookie = `eh_visitor_id=${VISITOR_ID}; Path=/`;
+
+      await analytics.track('premier_de_la_page');
+
+      expect(document.cookie).not.toContain('eh_visitor_id=');
+    });
+
+    it('ne réécrit rien tant que la valeur ne change pas', async () => {
+      hub.setVisitorId(VISITOR_ID);
+      await analytics.track('premier');
+
+      const cookie = vi.spyOn(document, 'cookie', 'set');
+      await analytics.track('second');
+
+      // La copie porte déjà sa propre durée de vie : la réécrire à chaque
+      // événement n'ajouterait rien.
+      expect(cookie).not.toHaveBeenCalled();
+      cookie.mockRestore();
+    });
+
+    it('suit aussi les événements collectés, pas seulement track()', async () => {
+      hub.setVisitorId(VISITOR_ID);
+
+      start();
+
+      await vi.waitFor(() =>
+        expect(document.cookie).toContain(`eh_visitor_id=${VISITOR_ID}`),
       );
     });
   });
