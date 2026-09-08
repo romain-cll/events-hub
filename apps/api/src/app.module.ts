@@ -10,6 +10,7 @@ import { AnalyticsModule } from './features/analytics/analytics.module';
 import { EventTypesFeatureModule } from './features/event-types/event-types.module';
 import { EventsFeatureModule } from './features/events/events.module';
 import { IngestionModule } from './ingestion/ingestion.module';
+import { IntegrationsModule } from './integrations/integrations.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { ProjectsModule } from './projects/projects.module';
 import { SdkModule } from './sdk/sdk.module';
@@ -36,6 +37,7 @@ import { SdkModule } from './sdk/sdk.module';
     FaviconsModule,
     OrganizationsModule,
     ProjectsModule,
+    IntegrationsModule,
     AnalyticsModule,
     EventsFeatureModule,
     EventTypesFeatureModule,

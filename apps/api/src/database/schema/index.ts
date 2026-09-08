@@ -15,3 +15,4 @@ export * from './project-keys';
 export * from './events';
 export * from './sessions';
 export * from './event-types';
+export * from './integrations';
