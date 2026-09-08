@@ -141,3 +141,54 @@ submits, outbound clicks and page leaves on its own, and sends them for you.
 ```
 
 For your own events: `window.eventsHub.track('signed_up')`.
+
+## Consent, and the durable visitor
+
+By default the hub identifies visitors without storing anything on their device:
+the key it derives rotates every day, which is enough to count people and not
+enough to follow them. Nothing to display, no banner, no cookie.
+
+Relaying your consent platform's decision unlocks the durable mode:
+
+```js
+window.eventsHub.setConsent(true);   // and false when it is withdrawn
+```
+
+We never show a banner of our own — you are the controller, we are the processor.
+The SDK only carries the answer you already have.
+
+## Linking a payment to a visit
+
+With consent, the hub keeps a durable id for the visitor. It lives in a cookie on
+**our** domain, so your code cannot read it — which is exactly what lets it last
+400 days instead of the seven Safari grants to cookies written in JavaScript.
+
+So the SDK writes a readable copy on **your** domain, `eh_visitor_id`, and rewrites
+it on every page view. Read it like any of your own cookies:
+
+```js
+const visitorId = cookies().get('eh_visitor_id')?.value;
+
+await stripe.checkout.sessions.create({
+  // …
+  metadata: { eh_visitor_id: visitorId },
+});
+```
+
+**Put it on the Customer too, not just the session.** A subscription renewal is
+billed months later, with no browser anywhere near it — without the id on the
+Customer, only the first payment is ever attributable and everything after it
+lands nowhere.
+
+```js
+await stripe.customers.update(customerId, {
+  metadata: { eh_visitor_id: visitorId },
+});
+```
+
+Building your checkout in the browser instead? `window.eventsHub.getVisitorId()`
+returns the same value, once the first event has come back. The cookie is the
+recommended path: it does not depend on that ordering.
+
+No consent means no durable id, so nothing to join — attribution is one of the
+things consent buys, and it cannot be worked around.
