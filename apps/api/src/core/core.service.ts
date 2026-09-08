@@ -29,6 +29,20 @@ interface IngestBase {
   occurredAt: Date;
   attributes: Record<string, unknown>;
   properties: Record<string, unknown>;
+  /**
+   * L'identité durable du visiteur que cet événement concerne, s'il y en a une.
+   *
+   * Opaque ici : le socle ne sait ni d'où elle vient, ni comment elle voyage, ni
+   * ce qui autorise à la poser. Il constate qu'il y en a une.
+   *
+   * **Sur les deux branches**, et c'est le point. Un événement navigateur la
+   * tient d'un cookie ; un paiement rapporté par un serveur la tient de la
+   * charge utile du fournisseur de paiement. Ce second cas n'a pas de visite —
+   * il peut survenir des mois après la dernière — mais il désigne bel et bien
+   * quelqu'un. La réserver au chemin navigateur rendrait ce revenu-là
+   * inattribuable.
+   */
+  visitorId?: string;
 }
 
 /**
@@ -56,14 +70,6 @@ export type IngestCommand =
   | (IngestBase & {
       source: 'browser';
       network: NetworkIdentity;
-      /**
-       * L'identifiant durable en vigueur pour ce visiteur, quand il en a un.
-       *
-       * Opaque ici : le socle ne sait ni d'où il vient, ni comment il voyage,
-       * ni ce qui autorise à le poser. Il constate qu'il y en a un, et cesse
-       * alors de dériver l'identité du réseau.
-       */
-      visitorId?: string;
       /**
        * Vrai sur le **seul** événement qui vient de poser cet identifiant.
        *
@@ -133,9 +139,19 @@ export class CoreService {
   async ingest(command: IngestCommand): Promise<PublicEvent> {
     try {
       return await this.db.transaction(async (tx) => {
+        // Résolue une fois, pour les deux usages qui suivent : l'identité de la
+        // session, et la corrélation persistée sur l'événement. Le chemin
+        // serveur n'a que le second — il n'a pas de visite à rattacher.
+        const visitorKey = command.visitorId
+          ? this.visitorKeys.computeStable(
+              command.projectId,
+              command.visitorId,
+            )
+          : null;
+
         const sessionId =
           command.source === 'browser'
-            ? await this.assignSession(tx, command)
+            ? await this.assignSession(tx, command, visitorKey)
             : null;
 
         await this.eventTypes.register(tx, command.projectId, command.type);
@@ -148,6 +164,7 @@ export class CoreService {
           properties: command.properties,
           source: command.source,
           sessionId,
+          visitorKey,
         });
       });
     } catch (error) {
@@ -178,6 +195,7 @@ export class CoreService {
   private async assignSession(
     tx: Parameters<typeof this.sessionAssigner.assign>[0],
     command: Extract<IngestCommand, { source: 'browser' }>,
+    durableKey: string | null,
   ): Promise<string> {
     const { projectId, network, occurredAt } = command;
     const identity = { projectId, ...network };
@@ -186,12 +204,10 @@ export class CoreService {
 
     return await this.sessionAssigner.assign(tx, {
       projectId,
-      // Le seul aiguillage entre les deux modes d'identification, et il tient
-      // en une ligne parce que rien en aval ne les distingue : la clé est
-      // opaque, la session l'est aussi.
-      visitorKey: command.visitorId
-        ? this.visitorKeys.computeStable(projectId, command.visitorId)
-        : derivedKey,
+      // Tout l'aiguillage entre les deux modes d'identification tient dans ce
+      // `??`, parce que rien en aval ne les distingue : la clé est opaque, la
+      // session l'est aussi.
+      visitorKey: durableKey ?? derivedKey,
       fallbackKey: this.chooseFallback(identity, now, derivedKey, command),
       occurredAt,
       // Résolue à chaque événement, écrite seulement à l'ouverture d'une

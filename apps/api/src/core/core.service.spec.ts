@@ -49,7 +49,11 @@ const TRENTE_MINUTES = 30 * 60 * 1000;
 const UNKNOWN: Location = { countryCode: null, region: null, city: null };
 
 /** Un `CoreService` dont seuls la clé visiteur et l'assigneur sont réels. */
-function coreAvec(visitorKeys: VisitorKeyService, assign: jest.Mock): CoreService {
+function coreAvec(
+  visitorKeys: VisitorKeyService,
+  assign: jest.Mock,
+  insert: jest.Mock = jest.fn().mockResolvedValue({}),
+): CoreService {
   return new CoreService(
     // La transaction se réduit à « exécute le corps » : ces tests ne regardent
     // pas ce qui est écrit, seulement ce qui est décidé avant.
@@ -67,7 +71,7 @@ function coreAvec(visitorKeys: VisitorKeyService, assign: jest.Mock): CoreServic
     {
       register: jest.fn().mockResolvedValue(undefined),
     } as unknown as EventTypeRegistry,
-    { insert: jest.fn().mockResolvedValue({}) } as unknown as EventStore,
+    { insert } as unknown as EventStore,
   );
 }
 
@@ -236,5 +240,76 @@ describe('CoreService — le choix du mode d’identification', () => {
     // clé durable.
     expect(recu().visitorKey).toBe(derivee());
     expect(recu().fallbackKey).toBe(durable(VISITOR_ID));
+  });
+});
+
+describe('CoreService — ce qui est persisté sur l’événement', () => {
+  const visitorKeys = new VisitorKeyService({
+    getOrThrow: () => 'secret-de-test',
+  } as unknown as ConfigService);
+
+  const VISITOR_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
+  let insert: jest.Mock;
+  let service: CoreService;
+
+  /** Ce que l'Event Store a reçu à écrire. */
+  const ecrit = (): { visitorKey: string | null; sessionId: string | null } => {
+    const calls = insert.mock.calls as [
+      unknown,
+      { visitorKey: string | null; sessionId: string | null },
+    ][];
+
+    return calls[0][1];
+  };
+
+  beforeEach(() => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-08-22T12:00:00.000Z'));
+    insert = jest.fn().mockResolvedValue({});
+    service = coreAvec(
+      visitorKeys,
+      jest.fn().mockResolvedValue('session-1'),
+      insert,
+    );
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('écrit la clé durable quand le visiteur en présente une', async () => {
+    await service.ingest({ ...command, visitorId: VISITOR_ID });
+
+    expect(ecrit().visitorKey).toBe(
+      visitorKeys.computeStable(PROJECT_ID, VISITOR_ID),
+    );
+  });
+
+  it('n’écrit jamais la clé dérivée du réseau', async () => {
+    await service.ingest(command);
+
+    // Le test qui protège le sens de la colonne. La clé dérivée tourne chaque
+    // jour et deux visiteurs derrière la même sortie réseau la partagent : l'y
+    // figer laisserait croire à une continuité qui n'existe pas.
+    expect(ecrit().visitorKey).toBeNull();
+  });
+
+  it('relie un événement serveur à un visiteur, sans lui inventer de visite', async () => {
+    // Le cas qui a fait naître la colonne : un paiement rapporté par un
+    // serveur désigne quelqu'un, mais ne s'est pas produit pendant une visite.
+    await service.ingest({
+      projectId: PROJECT_ID,
+      type: 'payment_succeeded',
+      occurredAt: new Date('2026-08-22T12:00:00.000Z'),
+      attributes: {},
+      properties: {},
+      source: 'server',
+      visitorId: VISITOR_ID,
+    });
+
+    expect(ecrit().visitorKey).toBe(
+      visitorKeys.computeStable(PROJECT_ID, VISITOR_ID),
+    );
+    expect(ecrit().sessionId).toBeNull();
   });
 });

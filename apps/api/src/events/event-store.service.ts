@@ -389,14 +389,19 @@ function isOlder({ occurredAt, id }: { occurredAt: Date; id: string }): SQL {
 }
 
 /**
- * Événement tel qu'il est rendu au client : tout sauf `sessionId`.
+ * Événement tel qu'il est rendu au client : tout sauf ce qui identifie.
  *
- * La session est une infrastructure serveur, pas une donnée du site appelant. La
- * renvoyer donnerait à n'importe quelle page un identifiant stable pour son
- * visiteur — exactement le cookie qu'on cherche à ne pas poser. La clé visiteur,
- * elle, n'est même plus sur cette table : elle vit sur `sessions`.
+ * `sessionId` et `visitorKey` restent dedans. Ce sont des infrastructures
+ * serveur, pas des données du site appelant, et les renvoyer donnerait à
+ * n'importe quelle page un identifiant stable pour son visiteur — exactement ce
+ * qu'on prend soin de ne rendre que sous consentement, et sous une autre forme.
+ *
+ * `insert` liste ses colonnes une à une plutôt que de rendre la ligne entière :
+ * ce type décrit ce que cette liste contient, et les deux doivent rester
+ * d'accord. C'est pour ça qu'une colonne ajoutée au schéma ne s'expose pas
+ * toute seule.
  */
-export type PublicEvent = Omit<Event, 'sessionId'>;
+export type PublicEvent = Omit<Event, 'sessionId' | 'visitorKey'>;
 
 /**
  * L'Event Store : le seul accès à la table `events`, en lecture comme en

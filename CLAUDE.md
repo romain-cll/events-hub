@@ -75,9 +75,17 @@ voyage dans `attributes` sous `sdk.version`.
   présentée à l'ingestion, jamais lu dans le payload. C'est ce qui le rend digne de
   confiance.
 - **`sessionId` à `null`** n'est pas une valeur manquante : c'est un événement
-  **sans visiteur** — un deploy, un paiement, une sonde. Les compteurs adossés à la
+  **sans visite** — un deploy, un paiement, une sonde. Les compteurs adossés à la
   session s'en filtrent structurellement (`COUNT DISTINCT` ignore les `NULL`, une
   jointure interne écarte ces lignes) : il n'y a **rien à filtrer à la main**.
+- **`visitorKey` à `null`** est l'autre question, et ce n'est pas la même : « pas de
+  visite » ne veut pas dire « pas de visiteur ». Un paiement rapporté par un serveur
+  désigne quelqu'un dont on connaît le parcours, des mois après sa dernière visite.
+  La colonne ne porte **que** l'identité durable, celle qui a été consentie —
+  jamais la clé dérivée du réseau, qui tourne chaque jour. Sans consentement, un
+  paiement n'est corrélable à rien, et c'est le cadre qui le veut.
+  `features/` n'a pas le droit de **nommer** cette clé : la corrélation passe par
+  `EventStore`.
 
 **La règle de rangement :** colonne = axe de corrélation **dérivé par le serveur** ;
 `jsonb` = charge utile **fournie par le client**, de forme dépendante du `type`. Les
