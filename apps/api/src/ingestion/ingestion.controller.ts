@@ -19,6 +19,28 @@ import { Public } from '../auth/auth.decorators';
 import { decideVisitorCookie } from './visitor-cookie';
 
 /**
+ * L'événement écrit, plus l'identifiant durable du visiteur quand il en a un.
+ *
+ * ## Pourquoi il remonte
+ *
+ * Le SDK est le seul à ne **pas** pouvoir lire le cookie qui le porte : celui-ci
+ * est posé sur notre domaine, la page tourne sur celui du site client. Sans ce
+ * renvoi, le site n'a aucun moyen d'obtenir la valeur qu'il doit joindre à son
+ * paiement — et c'est cette jointure qui donne toute sa raison d'être au mode
+ * consenti.
+ *
+ * Rien n'est révélé au passage : la réponse part vers le navigateur du visiteur
+ * concerné, qui est déjà porteur du cookie.
+ *
+ * ## Son absence dit quelque chose
+ *
+ * Elle n'est pas un « rien à signaler » : elle dit au SDK d'effacer la copie
+ * qu'il tient sur le domaine du site. Sans consentement il n'y a pas
+ * d'identifiant, donc il ne doit rien en rester nulle part.
+ */
+export type IngestedEvent = PublicEvent & { visitorId?: string };
+
+/**
  * `version: '1'` + le versioning URI activé dans `main.ts` donnent le préfixe
  * `/v1`. La route complète est donc `POST /v1/events`.
  */
@@ -90,7 +112,7 @@ export class IngestionController {
     @Headers('origin') origin?: string,
     @Headers('user-agent') userAgent?: string,
     @Headers('cookie') cookie?: string,
-  ): Promise<PublicEvent | undefined> {
+  ): Promise<IngestedEvent | undefined> {
     // La clé désigne le projet et sa nature ; l'origine dit si une clé publique
     // a le droit de servir depuis ce site. Tout est résolu ici, dans
     // l'adaptateur HTTP, parce qu'`Origin` est une notion HTTP — le socle reçoit
@@ -122,12 +144,14 @@ export class IngestionController {
 
     if (setCookie) response.setHeader('Set-Cookie', setCookie);
 
-    return this.core.ingest({
+    const written = await this.core.ingest({
       ...event,
       ...visitor,
       projectId,
       source,
       network: { ip, userAgent: userAgent ?? '' },
     });
+
+    return { ...written, visitorId: visitor.visitorId };
   }
 }

@@ -126,6 +126,9 @@ describe('consentement et identité du visiteur (e2e)', () => {
     // Le défaut est le mode qui ne dépose rien sur le terminal. Un site qui ne
     // câble pas le signal n'a rien à afficher à ses visiteurs.
     expect(poseParLaReponse(response)).toBeUndefined();
+    // Et rien à recopier sur son domaine : l'absence du champ dit au SDK
+    // d'effacer la copie qu'il tiendrait encore.
+    expect(response.body).not.toHaveProperty('visitorId');
     expect(await clesDesSessions(projet.id)).toHaveLength(1);
   });
 
@@ -138,6 +141,11 @@ describe('consentement et identité du visiteur (e2e)', () => {
     ).expect(201);
 
     expect(poseParLaReponse(accepte)).toBeDefined();
+    // Le corps rend le même identifiant que le cookie : c'est la seule voie par
+    // laquelle le site peut l'obtenir, notre cookie étant sur notre domaine.
+    expect((accepte.body as { visitorId?: string }).visitorId).toBe(
+      identifiantPose(accepte),
+    );
     // Le cœur du repli : la visite commencée sans consentement et celle qui
     // suit l'acceptation sont **la même**. Sans lui, deux pages vues
     // compteraient pour deux visites d'une page.
@@ -218,7 +226,8 @@ describe('consentement et identité du visiteur (e2e)', () => {
       .expect(201);
 
     // Une source serveur n'a pas de terminal où écrire, et pas de visiteur à
-    // identifier : le cookie n'a aucun sens sur ce chemin.
+    // identifier : ni le cookie ni l'identifiant n'ont de sens sur ce chemin.
     expect(poseParLaReponse(response)).toBeUndefined();
+    expect(response.body).not.toHaveProperty('visitorId');
   });
 });
