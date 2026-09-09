@@ -18,12 +18,14 @@ import { Route as AuthSignupRouteImport } from './routes/auth/signup'
 import { Route as AuthedInvitationsInvitationIdRouteImport } from './routes/_authed/invitations/$invitationId'
 import { Route as AuthedProjectsIndexRouteImport } from './routes/_authed/projects/index'
 import { Route as AuthedProjectsNewRouteImport } from './routes/_authed/projects/new'
+import { Route as AuthedIntegrationsStripeCallbackRouteImport } from './routes/_authed/integrations/stripe/callback'
 import { Route as AuthedProjectsProjectIdAnalyticsRouteImport } from './routes/_authed/projects/$projectId/analytics'
 import { Route as AuthedProjectsProjectIdEventsRouteImport } from './routes/_authed/projects/$projectId/events'
 import { Route as AuthedProjectsProjectIdSettingsRouteRouteImport } from './routes/_authed/projects/$projectId/settings/route'
 import { Route as AuthedProjectsProjectIdSetupRouteImport } from './routes/_authed/projects/$projectId/setup'
 import { Route as AuthedProjectsProjectIdWaitingRouteImport } from './routes/_authed/projects/$projectId/waiting'
 import { Route as AuthedProjectsProjectIdSettingsIndexRouteImport } from './routes/_authed/projects/$projectId/settings/index'
+import { Route as AuthedProjectsProjectIdSettingsIntegrationsRouteImport } from './routes/_authed/projects/$projectId/settings/integrations'
 import { Route as AuthedProjectsProjectIdSettingsKeysRouteImport } from './routes/_authed/projects/$projectId/settings/keys'
 import { Route as AuthedProjectsProjectIdSettingsMembersRouteImport } from './routes/_authed/projects/$projectId/settings/members'
 import { Route as AuthedProjectsProjectIdSettingsOrganizationRouteImport } from './routes/_authed/projects/$projectId/settings/organization'
@@ -75,6 +77,12 @@ const AuthedProjectsNewRoute = AuthedProjectsNewRouteImport.update({
   path: '/projects/new',
   getParentRoute: () => AuthedRouteRoute,
 } as any)
+const AuthedIntegrationsStripeCallbackRoute =
+  AuthedIntegrationsStripeCallbackRouteImport.update({
+    id: '/integrations/stripe/callback',
+    path: '/integrations/stripe/callback',
+    getParentRoute: () => AuthedRouteRoute,
+  } as any)
 const AuthedProjectsProjectIdAnalyticsRoute =
   AuthedProjectsProjectIdAnalyticsRouteImport.update({
     id: '/projects/$projectId/analytics',
@@ -109,6 +117,12 @@ const AuthedProjectsProjectIdSettingsIndexRoute =
   AuthedProjectsProjectIdSettingsIndexRouteImport.update({
     id: '/',
     path: '/',
+    getParentRoute: () => AuthedProjectsProjectIdSettingsRouteRoute,
+  } as any)
+const AuthedProjectsProjectIdSettingsIntegrationsRoute =
+  AuthedProjectsProjectIdSettingsIntegrationsRouteImport.update({
+    id: '/integrations',
+    path: '/integrations',
     getParentRoute: () => AuthedProjectsProjectIdSettingsRouteRoute,
   } as any)
 const AuthedProjectsProjectIdSettingsKeysRoute =
@@ -152,10 +166,12 @@ export interface FileRoutesByFullPath {
   '/projects/new': typeof AuthedProjectsNewRoute
   '/projects/': typeof AuthedProjectsIndexRoute
   '/projects/$projectId/settings': typeof AuthedProjectsProjectIdSettingsRouteRouteWithChildren
+  '/integrations/stripe/callback': typeof AuthedIntegrationsStripeCallbackRoute
   '/projects/$projectId/analytics': typeof AuthedProjectsProjectIdAnalyticsRoute
   '/projects/$projectId/events': typeof AuthedProjectsProjectIdEventsRoute
   '/projects/$projectId/setup': typeof AuthedProjectsProjectIdSetupRoute
   '/projects/$projectId/waiting': typeof AuthedProjectsProjectIdWaitingRoute
+  '/projects/$projectId/settings/integrations': typeof AuthedProjectsProjectIdSettingsIntegrationsRoute
   '/projects/$projectId/settings/keys': typeof AuthedProjectsProjectIdSettingsKeysRoute
   '/projects/$projectId/settings/members': typeof AuthedProjectsProjectIdSettingsMembersRoute
   '/projects/$projectId/settings/organization': typeof AuthedProjectsProjectIdSettingsOrganizationRoute
@@ -171,10 +187,12 @@ export interface FileRoutesByTo {
   '/invitations/$invitationId': typeof AuthedInvitationsInvitationIdRoute
   '/projects/new': typeof AuthedProjectsNewRoute
   '/projects': typeof AuthedProjectsIndexRoute
+  '/integrations/stripe/callback': typeof AuthedIntegrationsStripeCallbackRoute
   '/projects/$projectId/analytics': typeof AuthedProjectsProjectIdAnalyticsRoute
   '/projects/$projectId/events': typeof AuthedProjectsProjectIdEventsRoute
   '/projects/$projectId/setup': typeof AuthedProjectsProjectIdSetupRoute
   '/projects/$projectId/waiting': typeof AuthedProjectsProjectIdWaitingRoute
+  '/projects/$projectId/settings/integrations': typeof AuthedProjectsProjectIdSettingsIntegrationsRoute
   '/projects/$projectId/settings/keys': typeof AuthedProjectsProjectIdSettingsKeysRoute
   '/projects/$projectId/settings/members': typeof AuthedProjectsProjectIdSettingsMembersRoute
   '/projects/$projectId/settings/organization': typeof AuthedProjectsProjectIdSettingsOrganizationRoute
@@ -194,10 +212,12 @@ export interface FileRoutesById {
   '/_authed/projects/new': typeof AuthedProjectsNewRoute
   '/_authed/projects/': typeof AuthedProjectsIndexRoute
   '/_authed/projects/$projectId/settings': typeof AuthedProjectsProjectIdSettingsRouteRouteWithChildren
+  '/_authed/integrations/stripe/callback': typeof AuthedIntegrationsStripeCallbackRoute
   '/_authed/projects/$projectId/analytics': typeof AuthedProjectsProjectIdAnalyticsRoute
   '/_authed/projects/$projectId/events': typeof AuthedProjectsProjectIdEventsRoute
   '/_authed/projects/$projectId/setup': typeof AuthedProjectsProjectIdSetupRoute
   '/_authed/projects/$projectId/waiting': typeof AuthedProjectsProjectIdWaitingRoute
+  '/_authed/projects/$projectId/settings/integrations': typeof AuthedProjectsProjectIdSettingsIntegrationsRoute
   '/_authed/projects/$projectId/settings/keys': typeof AuthedProjectsProjectIdSettingsKeysRoute
   '/_authed/projects/$projectId/settings/members': typeof AuthedProjectsProjectIdSettingsMembersRoute
   '/_authed/projects/$projectId/settings/organization': typeof AuthedProjectsProjectIdSettingsOrganizationRoute
@@ -217,10 +237,12 @@ export interface FileRouteTypes {
     | '/projects/new'
     | '/projects/'
     | '/projects/$projectId/settings'
+    | '/integrations/stripe/callback'
     | '/projects/$projectId/analytics'
     | '/projects/$projectId/events'
     | '/projects/$projectId/setup'
     | '/projects/$projectId/waiting'
+    | '/projects/$projectId/settings/integrations'
     | '/projects/$projectId/settings/keys'
     | '/projects/$projectId/settings/members'
     | '/projects/$projectId/settings/organization'
@@ -236,10 +258,12 @@ export interface FileRouteTypes {
     | '/invitations/$invitationId'
     | '/projects/new'
     | '/projects'
+    | '/integrations/stripe/callback'
     | '/projects/$projectId/analytics'
     | '/projects/$projectId/events'
     | '/projects/$projectId/setup'
     | '/projects/$projectId/waiting'
+    | '/projects/$projectId/settings/integrations'
     | '/projects/$projectId/settings/keys'
     | '/projects/$projectId/settings/members'
     | '/projects/$projectId/settings/organization'
@@ -258,10 +282,12 @@ export interface FileRouteTypes {
     | '/_authed/projects/new'
     | '/_authed/projects/'
     | '/_authed/projects/$projectId/settings'
+    | '/_authed/integrations/stripe/callback'
     | '/_authed/projects/$projectId/analytics'
     | '/_authed/projects/$projectId/events'
     | '/_authed/projects/$projectId/setup'
     | '/_authed/projects/$projectId/waiting'
+    | '/_authed/projects/$projectId/settings/integrations'
     | '/_authed/projects/$projectId/settings/keys'
     | '/_authed/projects/$projectId/settings/members'
     | '/_authed/projects/$projectId/settings/organization'
@@ -341,6 +367,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedProjectsNewRouteImport
       parentRoute: typeof AuthedRouteRoute
     }
+    '/_authed/integrations/stripe/callback': {
+      id: '/_authed/integrations/stripe/callback'
+      path: '/integrations/stripe/callback'
+      fullPath: '/integrations/stripe/callback'
+      preLoaderRoute: typeof AuthedIntegrationsStripeCallbackRouteImport
+      parentRoute: typeof AuthedRouteRoute
+    }
     '/_authed/projects/$projectId/analytics': {
       id: '/_authed/projects/$projectId/analytics'
       path: '/projects/$projectId/analytics'
@@ -383,6 +416,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedProjectsProjectIdSettingsIndexRouteImport
       parentRoute: typeof AuthedProjectsProjectIdSettingsRouteRoute
     }
+    '/_authed/projects/$projectId/settings/integrations': {
+      id: '/_authed/projects/$projectId/settings/integrations'
+      path: '/integrations'
+      fullPath: '/projects/$projectId/settings/integrations'
+      preLoaderRoute: typeof AuthedProjectsProjectIdSettingsIntegrationsRouteImport
+      parentRoute: typeof AuthedProjectsProjectIdSettingsRouteRoute
+    }
     '/_authed/projects/$projectId/settings/keys': {
       id: '/_authed/projects/$projectId/settings/keys'
       path: '/keys'
@@ -422,6 +462,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AuthedProjectsProjectIdSettingsRouteRouteChildren {
+  AuthedProjectsProjectIdSettingsIntegrationsRoute: typeof AuthedProjectsProjectIdSettingsIntegrationsRoute
   AuthedProjectsProjectIdSettingsKeysRoute: typeof AuthedProjectsProjectIdSettingsKeysRoute
   AuthedProjectsProjectIdSettingsMembersRoute: typeof AuthedProjectsProjectIdSettingsMembersRoute
   AuthedProjectsProjectIdSettingsOrganizationRoute: typeof AuthedProjectsProjectIdSettingsOrganizationRoute
@@ -432,6 +473,8 @@ interface AuthedProjectsProjectIdSettingsRouteRouteChildren {
 
 const AuthedProjectsProjectIdSettingsRouteRouteChildren: AuthedProjectsProjectIdSettingsRouteRouteChildren =
   {
+    AuthedProjectsProjectIdSettingsIntegrationsRoute:
+      AuthedProjectsProjectIdSettingsIntegrationsRoute,
     AuthedProjectsProjectIdSettingsKeysRoute:
       AuthedProjectsProjectIdSettingsKeysRoute,
     AuthedProjectsProjectIdSettingsMembersRoute:
@@ -456,6 +499,7 @@ interface AuthedRouteRouteChildren {
   AuthedProjectsNewRoute: typeof AuthedProjectsNewRoute
   AuthedProjectsIndexRoute: typeof AuthedProjectsIndexRoute
   AuthedProjectsProjectIdSettingsRouteRoute: typeof AuthedProjectsProjectIdSettingsRouteRouteWithChildren
+  AuthedIntegrationsStripeCallbackRoute: typeof AuthedIntegrationsStripeCallbackRoute
   AuthedProjectsProjectIdAnalyticsRoute: typeof AuthedProjectsProjectIdAnalyticsRoute
   AuthedProjectsProjectIdEventsRoute: typeof AuthedProjectsProjectIdEventsRoute
   AuthedProjectsProjectIdSetupRoute: typeof AuthedProjectsProjectIdSetupRoute
@@ -468,6 +512,7 @@ const AuthedRouteRouteChildren: AuthedRouteRouteChildren = {
   AuthedProjectsIndexRoute: AuthedProjectsIndexRoute,
   AuthedProjectsProjectIdSettingsRouteRoute:
     AuthedProjectsProjectIdSettingsRouteRouteWithChildren,
+  AuthedIntegrationsStripeCallbackRoute: AuthedIntegrationsStripeCallbackRoute,
   AuthedProjectsProjectIdAnalyticsRoute: AuthedProjectsProjectIdAnalyticsRoute,
   AuthedProjectsProjectIdEventsRoute: AuthedProjectsProjectIdEventsRoute,
   AuthedProjectsProjectIdSetupRoute: AuthedProjectsProjectIdSetupRoute,
