@@ -1,6 +1,7 @@
 import type {
   AnalyticsSummary as WireAnalyticsSummary,
   EventsPage as WireEventsPage,
+  Integration as WireIntegration,
   Invitation as WireInvitation,
   InvitationDetail as WireInvitationDetail,
   LocationsPage as WireLocationsPage,
@@ -14,6 +15,7 @@ import type {
 } from '@events-hub/api-contract';
 
 import type { Auth } from './auth/auth';
+import type { PublicIntegration } from './integrations/integrations.controller';
 import type { ProjectEventType } from './event-types/event-type-registry.service';
 import type { ListedProjectKey } from './projects/project-keys.service';
 import type {
@@ -138,6 +140,9 @@ export type EventsPageConforms = Assert<
 >;
 export type EventTypeConforms = Assert<
   Conforms<Wire<ProjectEventType>, WireEventType>
+>;
+export type IntegrationConforms = Assert<
+  Conforms<Wire<PublicIntegration>, WireIntegration>
 >;
 export type LocationsPageConforms = Assert<
   Conforms<Wire<LocationsPage>, WireLocationsPage>

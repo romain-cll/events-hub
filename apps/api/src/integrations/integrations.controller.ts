@@ -2,8 +2,7 @@ import {
   Body,
   Controller,
   Delete,
-  HttpCode,
-  HttpStatus,
+  Get,
   NotFoundException,
   Param,
   Post,
@@ -12,6 +11,10 @@ import {
 import { z } from 'zod';
 
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+import type {
+  Integration,
+  IntegrationProvider,
+} from '../database/schema';
 import { ProjectMemberGuard, ProjectRoles } from '../projects/project-member.guard';
 import { IntegrationsService } from './integrations.service';
 import { StripeConnectService } from './stripe-connect.service';
@@ -27,13 +30,29 @@ const callbackSchema = z.strictObject({
   state: z.string().min(1),
 });
 
-/** Ce qu'on rend d'une connexion : de quoi l'afficher, rien de plus. */
-interface PublicIntegration {
-  provider: string;
+/**
+ * Ce qu'on rend d'une connexion : de quoi l'afficher, rien de plus.
+ *
+ * Ni `id`, ni `projectId` — le premier ne sert à personne, le second est déjà
+ * dans l'URL. Aucun secret non plus, et il n'y en a pas : Connect ne rend pas
+ * de jeton à conserver.
+ */
+export interface PublicIntegration {
+  provider: IntegrationProvider;
   externalAccountId: string;
+  scope: string;
   livemode: boolean;
   connectedAt: Date;
 }
+
+/** La projection, en un seul endroit : deux routes la rendent. */
+const publicOf = (row: Integration): PublicIntegration => ({
+  provider: row.provider,
+  externalAccountId: row.externalAccountId,
+  scope: row.scope,
+  livemode: row.livemode,
+  connectedAt: row.connectedAt,
+});
 
 /**
  * Brancher et débrancher une source de paiement.
@@ -55,7 +74,6 @@ interface PublicIntegration {
  */
 @Controller({ path: 'projects/:projectId/integrations', version: '1' })
 @UseGuards(ProjectMemberGuard)
-@ProjectRoles('owner', 'admin')
 export class IntegrationsController {
   constructor(
     private readonly integrations: IntegrationsService,
@@ -70,7 +88,24 @@ export class IntegrationsController {
    * différente. La rendre sur un `GET` inviterait à la mettre en cache, et un
    * lien mis en cache expire sans prévenir.
    */
+  /**
+   * Ce qui est branché sur ce projet.
+   *
+   * Ouvert à **tout membre**, contrairement aux trois autres : savoir d'où vient
+   * le revenu affiché fait partie de la lecture ordinaire. Le brancher et le
+   * débrancher, non — c'est du même ordre que les clés d'ingestion.
+   */
+  @Get()
+  async list(
+    @Param('projectId', new ZodValidationPipe(z.uuid())) projectId: string,
+  ): Promise<PublicIntegration[]> {
+    const stripe = await this.integrations.find(projectId, 'stripe');
+
+    return stripe ? [publicOf(stripe)] : [];
+  }
+
   @Post('stripe/authorize')
+  @ProjectRoles('owner', 'admin')
   authorize(
     @Param('projectId', new ZodValidationPipe(z.uuid())) projectId: string,
   ): { url: string } {
@@ -78,20 +113,15 @@ export class IntegrationsController {
   }
 
   @Post('stripe/callback')
+  @ProjectRoles('owner', 'admin')
   async callback(
     @Param('projectId', new ZodValidationPipe(z.uuid())) projectId: string,
     @Body(new ZodValidationPipe(callbackSchema))
     { code, state }: z.infer<typeof callbackSchema>,
   ): Promise<PublicIntegration> {
     const account = await this.stripeConnect.exchange(projectId, code, state);
-    const row = await this.integrations.connect(projectId, 'stripe', account);
 
-    return {
-      provider: row.provider,
-      externalAccountId: row.externalAccountId,
-      livemode: row.livemode,
-      connectedAt: row.connectedAt,
-    };
+    return publicOf(await this.integrations.connect(projectId, 'stripe', account));
   }
 
   /**
@@ -103,10 +133,10 @@ export class IntegrationsController {
    * échec est journalisé, il n'annule rien.
    */
   @Delete('stripe')
-  @HttpCode(HttpStatus.NO_CONTENT)
+  @ProjectRoles('owner', 'admin')
   async disconnect(
     @Param('projectId', new ZodValidationPipe(z.uuid())) projectId: string,
-  ): Promise<void> {
+  ): Promise<PublicIntegration> {
     const existing = await this.integrations.find(projectId, 'stripe');
 
     if (!existing) {
@@ -115,5 +145,10 @@ export class IntegrationsController {
 
     await this.integrations.disconnect(projectId, 'stripe');
     await this.stripeConnect.deauthorize(existing.externalAccountId);
+
+    // La connexion retirée, et pas un 204 : c'est la convention des écritures de
+    // cette API — une suppression rend ce qu'elle a supprimé, pour que le client
+    // sache sur quoi il a agi sans relire.
+    return publicOf(existing);
   }
 }
