@@ -38,6 +38,10 @@ describe('intégrations (e2e)', () => {
   beforeAll(async () => {
     process.env.STRIPE_SECRET_KEY = 'sk_test_e2e';
     process.env.STRIPE_CONNECT_CLIENT_ID = 'ca_e2e';
+    // Posée explicitement : sans ça, la suite dépendrait du `.env` de qui la
+    // lance, et passerait au rouge le jour où quelqu'un bascule en
+    // `read_write` pour débloquer sa connexion locale.
+    process.env.STRIPE_CONNECT_SCOPE = 'read_only';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],

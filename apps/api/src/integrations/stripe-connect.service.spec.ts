@@ -60,16 +60,43 @@ describe('StripeConnectService — le state', () => {
     jest.useRealTimers();
   });
 
-  it('demande read_only, et rien d’autre', () => {
+  it('demande read_only par défaut', () => {
     const url = new URL(service.authorizeUrl(PROJECT));
 
-    // On ne demandera jamais `read_write` : le hub lit des paiements, il n'en
-    // crée aucun. C'est aussi ce qui nous évite la restriction de juin 2021 sur
-    // les comptes déjà contrôlés par une autre plateforme.
+    // La cible : le hub lit des paiements, il n'en crée aucun. C'est aussi ce
+    // qui évite la restriction de juin 2021 sur les comptes déjà contrôlés par
+    // une autre plateforme.
     expect(url.searchParams.get('scope')).toBe('read_only');
     expect(url.searchParams.get('redirect_uri')).toBe(
       'http://localhost:3002/integrations/stripe/callback',
     );
+  });
+
+  it('accepte read_write, le temps que Stripe débloque le read-only', () => {
+    // Stripe refuse `read_only` aux plateformes qui ne l'ont pas demandé à son
+    // support. La variable existe pour ce délai-là, et pour pouvoir en sortir
+    // sans redéployer.
+    const large = serviceAvec({
+      STRIPE_SECRET_KEY: 'sk_test_secret',
+      STRIPE_CONNECT_CLIENT_ID: 'ca_test',
+      STRIPE_CONNECT_SCOPE: 'read_write',
+    });
+
+    expect(
+      new URL(large.authorizeUrl(PROJECT)).searchParams.get('scope'),
+    ).toBe('read_write');
+  });
+
+  it('refuse une portée qu’on ne sait pas demander, au démarrage', () => {
+    // Sinon la faute de frappe voyage jusqu'à Stripe, qui répond `invalid_scope`
+    // sur une page blanche de son domaine — loin du `.env` qui en est la cause.
+    expect(() =>
+      serviceAvec({
+        STRIPE_SECRET_KEY: 'sk_test_secret',
+        STRIPE_CONNECT_CLIENT_ID: 'ca_test',
+        STRIPE_CONNECT_SCOPE: 'readonly',
+      }),
+    ).toThrow(/STRIPE_CONNECT_SCOPE/);
   });
 
   it('refuse un state qui n’a pas été signé par nous', async () => {

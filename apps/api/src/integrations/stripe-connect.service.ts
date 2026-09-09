@@ -16,16 +16,32 @@ export interface ConnectedAccount {
   livemode: boolean;
 }
 
+/** Les deux portées que Connect accepte. */
+type ConnectScope = 'read_only' | 'read_write';
+
 /**
- * La portée demandée, et elle ne changera pas.
+ * La portée demandée. `read_only` est ce qu'on veut, et pas toujours ce qu'on
+ * peut.
  *
- * `read_only` est le défaut de Stripe et c'est exactement notre besoin : le hub
- * lit des paiements, il n'en crée aucun. Deux conséquences qu'on encaisse
- * gratuitement — nous ne pouvons rien casser chez un client même en cas de bug,
- * et la restriction de juin 2021 sur les comptes Standard déjà contrôlés par une
- * autre plateforme ne s'applique qu'à `read_write`, donc pas à nous.
+ * Le hub lit des paiements, il n'en crée aucun : `read_only` décrit exactement
+ * ce dont il a besoin, et nous met hors d'état de casser quoi que ce soit chez
+ * un client même en cas de bug. C'est donc le défaut, et ce doit rester la
+ * cible.
+ *
+ * Mais Stripe ne l'accorde pas à toutes les plateformes — « Please use the
+ * `read_write` scope, or contact support in order to use read-only
+ * connections ». Tant que le read-only n'est pas débloqué, une plateforme n'a
+ * que `read_write` à sa disposition.
+ *
+ * D'où une variable d'environnement plutôt qu'une constante : le jour où le
+ * support l'accorde, on repasse en `read_only` sans redéployer de logique. C'est
+ * un réglage daté, pas une option de conception.
+ *
+ * ⚠️ `read_write` a un coût qui n'est pas qu'un principe : la restriction de
+ * juin 2021 s'y applique, donc un compte Standard déjà contrôlé par une autre
+ * plateforme devient impossible à connecter.
  */
-const SCOPE = 'read_only';
+const DEFAULT_SCOPE: ConnectScope = 'read_only';
 
 /** Un lien d'autorisation ne doit pas survivre à la page qui l'a affiché. */
 const STATE_TTL_MS = 15 * 60 * 1000;
@@ -60,6 +76,7 @@ export class StripeConnectService {
   private readonly clientId: string | undefined;
   private readonly secretKey: string | undefined;
   private readonly webhookSecret: string | undefined;
+  private readonly scope: ConnectScope;
   private readonly redirectUri: string;
   private client: Stripe | undefined;
 
@@ -81,6 +98,7 @@ export class StripeConnectService {
     this.secretKey = config.get<string>('STRIPE_SECRET_KEY');
     this.clientId = config.get<string>('STRIPE_CONNECT_CLIENT_ID');
     this.webhookSecret = config.get<string>('STRIPE_WEBHOOK_SECRET');
+    this.scope = readScope(config.get<string>('STRIPE_CONNECT_SCOPE'));
     this.redirectUri = `${config.get<string>('WEB_URL') ?? 'http://localhost:3002'}/integrations/stripe/callback`;
 
     if (!this.secretKey || !this.clientId) {
@@ -182,7 +200,7 @@ export class StripeConnectService {
     return stripe.oauth.authorizeUrl({
       client_id: this.clientId as string,
       response_type: 'code',
-      scope: SCOPE,
+      scope: this.scope,
       redirect_uri: this.redirectUri,
       state: this.signState(projectId),
     });
@@ -218,7 +236,7 @@ export class StripeConnectService {
     // où les deux divergent, on veut le lire en base plutôt que le supposer.
     return {
       accountId: token.stripe_user_id,
-      scope: token.scope ?? SCOPE,
+      scope: token.scope ?? this.scope,
       livemode: token.livemode ?? false,
     } satisfies ConnectedAccount;
   }
@@ -276,6 +294,11 @@ export class StripeConnectService {
     }
   }
 
+  /** La portée courante, à l'usage des tests et de qui veut l'afficher. */
+  get requestedScope(): ConnectScope {
+    return this.scope;
+  }
+
   private sign(payload: string): string {
     // `stripe` a déjà levé si la clé manque — la lire ici est donc sûre, et le
     // dire par une assertion évite de propager un `string | undefined` dans
@@ -284,4 +307,24 @@ export class StripeConnectService {
       .update(payload)
       .digest('hex');
   }
+}
+
+/**
+ * Lit la portée, et refuse une valeur qu'on ne sait pas demander.
+ *
+ * Une faute de frappe passerait sinon jusqu'à Stripe, qui répondrait
+ * `invalid_scope` sur une page blanche de son domaine — loin du fichier
+ * `.env` qui en est la cause. Ici l'erreur nomme la variable et les valeurs
+ * possibles, au démarrage.
+ */
+function readScope(value: string | undefined): ConnectScope {
+  if (value === undefined) return DEFAULT_SCOPE;
+
+  if (value !== 'read_only' && value !== 'read_write') {
+    throw new Error(
+      `STRIPE_CONNECT_SCOPE vaut « ${value} » : attendu « read_only » ou « read_write ».`,
+    );
+  }
+
+  return value;
 }
