@@ -293,10 +293,32 @@ describe('frontière du contrat d’API', () => {
  *
  * ## Ce qu'il ferme
  *
- * `visitor_key` est un HMAC stable sur une journée UTC. Il vit sur la table
- * `sessions`, il sert au Core à rattacher un événement entrant, et il s'arrête
- * là — les modules métier reçoivent un **alias** tiré au hasard à chaque
- * lecture, qui dit « même visiteur, dans cette réponse » et rien de plus.
+ * `visitor_key` est un HMAC : dérivé du réseau et rotatif à la journée sans
+ * consentement, dérivé d'un identifiant durable et stable avec. Il vit sur
+ * `sessions`, et depuis le lot revenu sur `events` aussi — un paiement a un
+ * visiteur sans avoir de visite. Les modules métier, eux, reçoivent un **alias**
+ * tiré au hasard à chaque lecture, qui dit « même visiteur, dans cette réponse »
+ * et rien de plus.
+ *
+ * ## Ce n'est pas une règle de confidentialité
+ *
+ * On pourrait croire qu'elle protège le visiteur, et qu'elle devient donc
+ * caduque dès qu'il a consenti. C'est l'inverse : elle dit que **le socle est
+ * seul à décider ce qu'est une identité**. Le consentement a changé ce qu'on
+ * stocke, pas qui en décide.
+ *
+ * Le jour où un module métier a le droit de *nommer* une clé visiteur, il a
+ * aussi celui d'en *fabriquer* une — `VisitorKeyService.computeStable` est
+ * public, et il accepte n'importe quelle chaîne. Un module la calculerait depuis
+ * un email, un autre depuis un identifiant de client d'un fournisseur de
+ * paiement, et on aurait deux espaces d'identité qui ne se recoupent pas, sans
+ * que rien ne dise lequel fait foi.
+ *
+ * C'est le raisonnement d'`EventStore.where()`, appliqué à l'identité : une
+ * règle posée dans un module de `features/` sera oubliée par le suivant.
+ *
+ * Le coût de la tenir est une signature — une attribution exposée par le socle,
+ * qui prend en **argument** ce qu'il ne doit pas nommer.
  *
  * Cette frontière ne tient pas toute seule. Il suffit d'ajouter `visitorKey`
  * au `select` de `EventStore.events()` — une ligne, dans un fichier qui a
