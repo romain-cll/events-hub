@@ -463,6 +463,46 @@ export class EventStore {
     return event;
   }
 
+  /**
+   * Rattache des événements déjà écrits à un visiteur.
+   *
+   * ## Pourquoi une écriture après coup existe
+   *
+   * Une source de paiement n'annonce pas toujours son visiteur au moment où elle
+   * annonce le paiement. Le lien se découvre parfois quelques secondes plus tard,
+   * parfois des mois — un client qui existait avant l'installation, un abonnement
+   * dont l'identité n'a été posée qu'après le premier encaissement. Sans cette
+   * écriture, ce revenu-là resterait à jamais hors de portée alors qu'on finit par
+   * savoir d'où il vient.
+   *
+   * ## Elle n'écrase jamais
+   *
+   * `isNull` dans la condition, et c'est le cœur de la méthode : une identité
+   * **affirmée à l'ingestion** l'emporte sur une identité **déduite après coup**.
+   * L'inverse laisserait une déduction tardive et faillible réécrire ce qu'une
+   * source avait dit d'elle-même — et le ferait en silence, sur des lignes que
+   * personne ne relit.
+   *
+   * Elle est donc idempotente : la rejouer ne déplace rien.
+   *
+   * ## Ce qu'elle ne prend pas
+   *
+   * Ni période, ni projet, ni type : des **ids**, que l'appelant a obtenus
+   * autrement. C'est ce qui permet à un module métier de s'en servir sans jamais
+   * nommer la clé qu'elle écrit, ni décider ce qu'est une identité.
+   */
+  async attribute(eventIds: string[], visitorKey: string): Promise<number> {
+    if (eventIds.length === 0) return 0;
+
+    const attributed = await this.db
+      .update(events)
+      .set({ visitorKey })
+      .where(and(inArray(events.id, eventIds), isNull(events.visitorKey)))
+      .returning({ id: events.id });
+
+    return attributed.length;
+  }
+
   /** Nombre d'événements dans le périmètre. */
   async countEvents(scope: EventScope): Promise<number> {
     const [row] = await this.db

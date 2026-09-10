@@ -1,6 +1,13 @@
 import type Stripe from 'stripe';
 
-import { customerIdOf, occurredAtOf, propertiesOf, typeOf } from './event-mapping';
+import {
+  customerIdOf,
+  customerLinkOf,
+  customerOf,
+  occurredAtOf,
+  propertiesOf,
+  typeOf,
+} from './event-mapping';
 
 /**
  * La traduction du vocabulaire Stripe, et rien d'autre.
@@ -134,5 +141,62 @@ describe('occurredAtOf', () => {
     expect(occurredAtOf(evenement('x')).toISOString()).toBe(
       new Date(1_788_000_000_000).toISOString(),
     );
+  });
+});
+
+describe('customerOf', () => {
+  it('trouve le client désigné par l’objet', () => {
+    expect(customerOf({ object: 'invoice', customer: 'cus_1' })).toBe('cus_1');
+  });
+
+  it('trouve le client quand l’objet **est** le client', () => {
+    // `customer.created` et `customer.updated` n'ont pas de champ `customer`.
+    // Les traiter comme les autres perdrait les deux seuls événements par
+    // lesquels un site annonce l'identité de son client — donc la seule chose
+    // qui rende un renouvellement attribuable.
+    expect(customerOf({ object: 'customer', id: 'cus_2' })).toBe('cus_2');
+  });
+});
+
+describe('customerLinkOf', () => {
+  const avec = (object: Record<string, unknown>) =>
+    customerLinkOf(evenement('x', object));
+
+  it('lit la paire sur un objet qui désigne son client', () => {
+    expect(
+      avec({
+        object: 'checkout.session',
+        customer: 'cus_1',
+        metadata: { eh_visitor_id: 'v-1' },
+      }),
+    ).toEqual({ customerId: 'cus_1', visitorId: 'v-1' });
+  });
+
+  it('lit la paire sur le client lui-même', () => {
+    expect(
+      avec({
+        object: 'customer',
+        id: 'cus_2',
+        metadata: { eh_visitor_id: 'v-2' },
+      }),
+    ).toEqual({ customerId: 'cus_2', visitorId: 'v-2' });
+  });
+
+  it('n’affirme rien sans metadata', () => {
+    // Un événement sans metadata ne dit pas « pas de visiteur » : il ne dit
+    // rien. Le déduire écraserait une paire apprise ailleurs.
+    expect(avec({ object: 'invoice', customer: 'cus_1' })).toBeUndefined();
+  });
+
+  it('n’affirme rien sans client à qui rattacher', () => {
+    expect(
+      avec({ object: 'invoice', metadata: { eh_visitor_id: 'v-1' } }),
+    ).toBeUndefined();
+  });
+
+  it('ignore une metadata vide plutôt que d’apprendre du vide', () => {
+    expect(
+      avec({ object: 'customer', id: 'cus_3', metadata: { eh_visitor_id: '' } }),
+    ).toBeUndefined();
   });
 });

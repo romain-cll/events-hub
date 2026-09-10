@@ -45,13 +45,43 @@ endroits, et le second est celui qui compte :
   des mois plus tard n'a plus aucun navigateur derrière lui, et la LTV tombe à
   côté.
 
-Ce module lit la première, et va chercher la seconde quand la première est vide.
-Il transmet la valeur **brute** au socle, qui en dérive la clé : la corrélation
-est calculée à un seul endroit, et ce module ne tient jamais de clé visiteur.
+La valeur brute est transmise au socle, qui en dérive la clé. Ce module ne tient
+jamais de clé visiteur, et ne saurait pas en fabriquer une.
 
 Pas de consentement, pas de `eh_visitor_id`, donc pas d'attribution. Le paiement
 est écrit quand même — il compte dans le revenu, il n'est simplement rattaché à
-aucun parcours.
+aucun parcours. Et cet état **reste réparable** : voir plus bas.
+
+## La paire client ↔ visiteur, et pourquoi elle est retenue
+
+La première version interrogeait Stripe à chaque événement pour lire la metadata
+du client. Éprouvée sur un vrai abonnement, elle attribuait **deux événements sur
+douze**.
+
+La cause était une course : un site pose l'identifiant sur son client *après* le
+checkout, or les webhooks du paiement arrivent avant. On lisait un client encore
+vide, deux secondes trop tôt — et c'est le paiement, le seul qui compte, qui
+repartait muet pendant que les événements sans intérêt étaient rattachés.
+
+`stripe_customers` retient la paire dès qu'un événement l'affirme. Trois
+conséquences :
+
+- l'ordre d'arrivée des webhooks n'a plus d'importance ;
+- les renouvellements et les actions du portail, qui n'ont jamais de metadata
+  propre, sont attribués par le client ;
+- **ce qui a déjà été écrit est rattrapé** — `stripe_webhook_events` sert d'index
+  du client vers nos événements, et le socle les attribue rétroactivement. Y
+  compris des clients antérieurs à l'installation, le jour où leur metadata
+  arrive.
+
+L'attribution rétroactive **n'écrase jamais** : une identité affirmée à
+l'ingestion l'emporte sur une identité déduite après coup.
+
+## Le trou connu
+
+`invoice_payment.paid` ne référence que la facture, jamais le client. Il n'y a
+donc rien à interroger, et il restera inattribuable — sans conséquence, il fait
+doublon avec `invoice.paid`, qui porte le même montant et le même client.
 
 ## Idempotence
 

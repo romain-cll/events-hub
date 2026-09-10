@@ -90,7 +90,7 @@ export function propertiesOf(event: Stripe.Event): Record<string, unknown> {
     'stripe.event.id': event.id,
     'stripe.event.type': event.type,
     'stripe.object.id': 'id' in object ? object.id : undefined,
-    'stripe.customer.id': customerIdOf(object),
+    'stripe.customer.id': customerOf(object),
     'stripe.billing_reason':
       'billing_reason' in object ? object.billing_reason : undefined,
     'stripe.livemode': event.livemode,
@@ -133,6 +133,73 @@ function currencyOf(object: Stripe.Event.Data.Object): string | undefined {
   return 'currency' in object && typeof object.currency === 'string'
     ? object.currency
     : undefined;
+}
+
+/** La clé que le site du client pose dans la metadata de ses objets Stripe. */
+export const VISITOR_METADATA_KEY = 'eh_visitor_id';
+
+/**
+ * Le client concerné par un événement, qu'il soit **désigné** par l'objet ou
+ * qu'il **soit** l'objet.
+ *
+ * `customer.created` et `customer.updated` n'ont pas de champ `customer` : le
+ * client, c'est l'objet lui-même. Les traiter comme les autres perdrait
+ * précisément les deux événements par lesquels un site annonce l'identité de
+ * son client — donc la seule chose qui rende un renouvellement attribuable.
+ *
+ * On reconnaît la nature par `object`, que Stripe pose sur tous ses objets,
+ * plutôt que par le type de l'événement : le premier décrit ce qu'on tient, le
+ * second ce qui vient d'arriver, et c'est le premier qui répond ici.
+ */
+export function customerOf(
+  object: Stripe.Event.Data.Object,
+): string | undefined {
+  if ('object' in object && object.object === 'customer') {
+    const id: unknown = 'id' in object ? object.id : undefined;
+
+    return typeof id === 'string' ? id : undefined;
+  }
+
+  return customerIdOf(object);
+}
+
+/**
+ * La paire client ↔ visiteur que cet événement **affirme**, s'il en affirme une.
+ *
+ * C'est la seule source de vérité sur ce lien : un site le pose dans la metadata
+ * de ses objets Stripe, et nous ne faisons que le constater. Rien n'est déduit
+ * ici — un événement sans metadata ne dit rien, il ne dit pas « pas de
+ * visiteur ».
+ */
+export function customerLinkOf(
+  event: Stripe.Event,
+): { customerId: string; visitorId: string } | undefined {
+  const object = event.data.object;
+  const visitorId = visitorIdOf(object);
+
+  if (!visitorId) return undefined;
+
+  const customerId = customerOf(object);
+
+  return customerId ? { customerId, visitorId } : undefined;
+}
+
+/** L'identifiant de visiteur posé dans la metadata de cet objet, s'il y est. */
+export function visitorIdOf(
+  object: Stripe.Event.Data.Object,
+): string | undefined {
+  if (!('metadata' in object)) return undefined;
+
+  // L'union des objets d'événement ne décrit pas `metadata` assez finement pour
+  // que le compilateur l'indexe : on constate la forme reçue, comme pour
+  // `customer`.
+  const metadata: unknown = object.metadata;
+
+  if (typeof metadata !== 'object' || metadata === null) return undefined;
+
+  const value = (metadata as Record<string, unknown>)[VISITOR_METADATA_KEY];
+
+  return typeof value === 'string' && value ? value : undefined;
 }
 
 /** Le client Stripe, qu'il soit rendu en identifiant ou en objet développé. */

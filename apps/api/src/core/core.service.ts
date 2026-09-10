@@ -179,6 +179,38 @@ export class CoreService {
   }
 
   /**
+   * Rattache après coup des événements déjà écrits à un visiteur.
+   *
+   * ## Pourquoi ici et pas dans `EventStore`
+   *
+   * Parce que dériver la clé est le travail de ce service, et de lui seul.
+   * `EventStore` écrit ce qu'on lui donne ; c'est le Core qui tient
+   * `VisitorKeyService`, et donc qui décide ce qu'une identité *devient* une fois
+   * en base. La dérivation est exactement la même qu'à l'ingestion — deux
+   * chemins qui produiraient des clés différentes pour le même visiteur seraient
+   * pires que pas d'attribution du tout.
+   *
+   * ## Ce que l'appelant passe, et ce qu'il ne voit jamais
+   *
+   * Un identifiant durable **opaque** et des ids d'événements. Jamais une clé :
+   * c'est cette signature qui permet à un module métier de rattacher son revenu
+   * à un parcours sans jamais nommer, ni pouvoir fabriquer, une clé visiteur.
+   *
+   * Rend le nombre de lignes réellement rattachées — celles qui n'avaient pas
+   * déjà une identité, `EventStore.attribute` n'écrasant rien.
+   */
+  async attribute(
+    projectId: string,
+    eventIds: string[],
+    visitorId: string,
+  ): Promise<number> {
+    return await this.eventStore.attribute(
+      eventIds,
+      this.visitorKeys.computeStable(projectId, visitorId),
+    );
+  }
+
+  /**
    * Le chemin navigateur, isolé pour que le chemin serveur ne puisse pas
    * l'emprunter par distraction.
    *
