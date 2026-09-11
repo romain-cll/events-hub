@@ -99,6 +99,18 @@ export interface VisitorCookieDecision {
 }
 
 /**
+ * L'en-tête qui retire l'identité durable, pour les appelants qui doivent
+ * l'effacer sans passer par une décision de consentement.
+ *
+ * Il n'y en a qu'un aujourd'hui : l'opposition. Un visiteur qui s'oppose au
+ * traitement ne doit pas conserver l'identifiant qui le rendait suivable —
+ * l'écarter des écritures tout en lui laissant son cookie serait un demi-geste.
+ */
+export function clearVisitorCookie(): string {
+  return `${NAME}=; ${ATTRIBUTES}; Max-Age=0`;
+}
+
+/**
  * Traduit l'en-tête `Cookie` et le signal de consentement en une décision.
  *
  * ## Le signal est à trois états, et l'absence n'est pas un refus

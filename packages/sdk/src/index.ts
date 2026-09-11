@@ -144,6 +144,21 @@ export class Analytics {
    * entre-temps.
    */
   private mirrored = false;
+  /**
+   * L'opposition, portée par le prochain événement puis oubliée.
+   *
+   * Remise à `undefined` une fois partie : la répéter à chaque événement ne
+   * changerait rien côté hub, où c'est le cookie qui fait foi. C'est ce qui
+   * distingue ce champ de `consent`, dont le site réaffirme la valeur aussi
+   * longtemps qu'elle vaut.
+   */
+  private optingOut: boolean | undefined;
+  /**
+   * De quoi arrêter ce que `start()` a démarré, sans que l'appelant ait à nous
+   * rendre le `Teardown` qu'il a peut-être jeté. Un site qui s'oppose ne doit
+   * pas continuer d'émettre parce qu'il a oublié de le garder.
+   */
+  private stopCollectors: Teardown = () => undefined;
 
   constructor({ apiKey, endpoint, onError, consent }: AnalyticsOptions) {
     this.apiKey = apiKey;
@@ -166,6 +181,38 @@ export class Analytics {
    */
   setConsent(granted: boolean): void {
     this.consent = granted;
+  }
+
+  /**
+   * Enregistre l'opposition du visiteur au traitement, tout entier.
+   *
+   * ## Ce n'est pas `setConsent(false)`
+   *
+   * Le consentement ne porte que sur l'identifiant durable : le refuser laisse
+   * la mesure d'audience se faire, sans rien déposer sur le terminal. S'opposer
+   * l'arrête. Les deux répondent à deux questions différentes, et un site qui a
+   * un bandeau a besoin des deux — l'un pour son bandeau, l'autre pour le lien
+   * d'opposition de sa politique de confidentialité.
+   *
+   * ## Ce que ça fait, et dans quel ordre
+   *
+   * Les collecteurs démarrés sont arrêtés immédiatement, et un dernier
+   * événement part porter la décision — c'est lui qui la fait enregistrer côté
+   * hub, et il est écarté à l'arrivée sans rien écrire. Sans cet envoi, le
+   * refus ne vivrait que dans cet onglet et serait oublié au rechargement.
+   *
+   * `optIn()` fait le chemin inverse. Il ne redémarre **pas** les collecteurs :
+   * ce n'est pas à nous de décider qu'un site veut recommencer à mesurer, et
+   * `start()` est là pour ça.
+   */
+  optOut(): void {
+    this.stopCollectors();
+    this.declareOptOut(true);
+  }
+
+  /** Retire une opposition. Ne redémarre rien — voir `optOut()`. */
+  optIn(): void {
+    this.declareOptOut(false);
   }
 
   /**
@@ -288,6 +335,13 @@ export class Analytics {
 
     const teardowns: Teardown[] = [];
 
+    // Retenu ici pour qu'`optOut()` puisse tout arrêter sans que l'appelant ait
+    // à nous rendre le `Teardown` qu'on lui a donné.
+    this.stopCollectors = () => {
+      for (const stop of teardowns) stop();
+      teardowns.length = 0;
+    };
+
     if (pageView) teardowns.push(trackPageViews(emit));
 
     // Créé avant les collecteurs de clic : c'est `outboundClick` qui déclenche
@@ -337,6 +391,30 @@ export class Analytics {
    * vide (une origine refusée répond 204) ou une forme inattendue ne doit pas
    * faire échouer un envoi qui, lui, a réussi.
    */
+  /**
+   * Envoie la décision, puis l'oublie.
+   *
+   * Par `beacon` plutôt que par `fetch` : `optOut()` est souvent appelé depuis
+   * un gestionnaire de clic qui navigue dans la foulée, et une requête ordinaire
+   * serait annulée au déchargement — le refus serait perdu au moment précis où
+   * il compte. Rien n'est attendu en retour : la réponse est un 204 vide.
+   */
+  private declareOptOut(refused: boolean): void {
+    this.optingOut = refused;
+
+    if (typeof window === 'undefined') return;
+
+    beaconEvent(this.endpoint, this.envelope('opt_out', {}));
+    this.optingOut = undefined;
+
+    // Le miroir sur le domaine du site n'a plus de raison d'être : il ne sert
+    // qu'à joindre un identifiant à un paiement, et il n'y a plus d'identifiant.
+    if (refused) {
+      this.visitorId = undefined;
+      mirrorVisitorId(undefined);
+    }
+  }
+
   private receive(body: unknown): void {
     // Avant la garde de recopie, et pas après : elle ne parle que du cookie
     // miroir. Un visiteur sans consentement n'a jamais d'identifiant durable,
@@ -367,6 +445,7 @@ export class Analytics {
       // inconnues, et une clé présente à `undefined` disparaît certes de la
       // sérialisation, mais laisse le type mentir sur ce qui part.
       ...(this.consent === undefined ? {} : { consent: this.consent }),
+      ...(this.optingOut === undefined ? {} : { optOut: this.optingOut }),
       // Relue à **chaque** événement, comme les attributs : après une navigation
       // interne l'URL a changé, et c'est celle du moment qui compte. Le hub, lui,
       // n'en retient que celle de l'ouverture de session — décider quand figer

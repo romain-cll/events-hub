@@ -364,6 +364,49 @@ describe('Analytics', () => {
     });
   });
 
+  describe('l’opposition', () => {
+    it('arrête les collecteurs et déclare la décision', async () => {
+      start();
+
+      analytics.optOut();
+
+      const envoyees = await hub.envelopes();
+
+      // Sans cet envoi, le refus ne vivrait que dans cet onglet et serait
+      // oublié au rechargement : c'est le hub qui le mémorise.
+      expect(envoyees[envoyees.length - 1]).toMatchObject({ optOut: true });
+
+      document.body.click();
+
+      // Et plus rien ne part : s'opposer sans arrêter d'émettre laisserait le
+      // hub jeter des événements qu'on continuerait de lui envoyer.
+      expect(await hub.envelopes()).toHaveLength(envoyees.length);
+    });
+
+    it('ne répète pas la décision sur les événements suivants', async () => {
+      analytics.optIn();
+      await analytics.track('ensuite');
+
+      const envoyees = await hub.envelopes();
+
+      // Côté hub c'est un cookie qui fait foi : la répéter n'apprendrait rien.
+      expect(envoyees[envoyees.length - 1]).not.toHaveProperty('optOut');
+    });
+
+    it('efface la copie du visitorId en s’opposant', async () => {
+      const VISITEUR = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+      hub.setVisitorId(VISITEUR);
+      await analytics.track('avant');
+
+      analytics.optOut();
+
+      // Elle ne sert qu'à joindre un identifiant à un paiement, et il n'y a
+      // plus d'identifiant à joindre.
+      expect(document.cookie).not.toContain(`eh_visitor_id=${VISITEUR}`);
+      expect(analytics.getVisitorId()).toBeUndefined();
+    });
+  });
+
   describe('la copie du visitorId', () => {
     const VISITOR_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 

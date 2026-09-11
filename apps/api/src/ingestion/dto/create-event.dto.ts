@@ -62,6 +62,19 @@ export const createEventSchema = z.strictObject({
    */
   consent: z.boolean().optional(),
   /**
+   * L'opposition du visiteur au traitement, tout entier.
+   *
+   * À ne pas confondre avec `consent`, qui ne parle que de l'identifiant
+   * durable : refuser le cookie laisse la mesure d'audience se faire, s'opposer
+   * l'arrête. Les deux existent parce qu'ils répondent à deux questions
+   * différentes — l'une porte sur ce qu'on écrit sur le terminal, l'autre sur
+   * le fondement même du traitement.
+   *
+   * Même tri-état, et pour la même raison : l'absence n'est pas une
+   * révocation. Voir `decideOptOut`.
+   */
+  optOut: z.boolean().optional(),
+  /**
    * Les paramètres de campagne lus dans l'URL par le SDK.
    *
    * Champ de premier niveau pour la même raison que `consent` : les deux sacs
@@ -69,9 +82,9 @@ export const createEventSchema = z.strictObject({
    * y est rangée. Le serveur ne peut donc pas les y chercher, et
    * `architecture.spec.ts` le lui interdit nommément.
    *
-   * `strictObject` ici aussi : un `utm_term` glissé dans l'objet est un 400, pas
-   * une clé ignorée en silence. On ne garde que les trois qui répondent à
-   * « quelle campagne rapporte » ; les autres restent entiers dans l'URL.
+   * `strictObject` ici aussi : un quatrième paramètre glissé dans l'objet est un
+   * 400, pas une clé ignorée en silence. On ne garde que les trois qui répondent
+   * à « quelle campagne rapporte » ; les autres restent entiers dans l'URL.
    *
    * Les valeurs arrivent **brutes**. La normalisation — casse, espaces,
    * longueur — est faite côté serveur, par `normalizeCampaign`, et là seulement :

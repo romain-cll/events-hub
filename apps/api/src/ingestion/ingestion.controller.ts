@@ -18,7 +18,11 @@ import {
 } from '../core/core.service';
 import { ProjectKeysService } from '../projects/project-keys.service';
 import { Public } from '../auth/auth.decorators';
-import { decideVisitorCookie } from './visitor-cookie';
+import { decideOptOut } from './opt-out';
+import {
+  clearVisitorCookie,
+  decideVisitorCookie,
+} from './visitor-cookie';
 
 /**
  * L'événement écrit, sa visite, et l'identifiant durable du visiteur quand il
@@ -127,6 +131,7 @@ export class IngestionController {
     @Headers('origin') origin?: string,
     @Headers('user-agent') userAgent?: string,
     @Headers('cookie') cookie?: string,
+    @Headers('sec-gpc') secGpc?: string,
   ): Promise<IngestedEvent | undefined> {
     // La clé désigne le projet et sa nature ; l'origine dit si une clé publique
     // a le droit de servir depuis ce site. Tout est résolu ici, dans
@@ -137,7 +142,30 @@ export class IngestionController {
     // aucun sens — une source serveur n'a pas de visite d'où venir. Le
     // détournement serait silencieux, les objets étalés n'étant pas soumis au
     // contrôle des propriétés excédentaires.
-    const { apiKey, consent, campaign, ...event } = payload;
+    const { apiKey, consent, optOut, campaign, ...event } = payload;
+
+    // Tranché **avant** de résoudre la clé, donc avant d'aller en base : un
+    // événement qu'on n'écrira pas ne mérite pas une requête. Et avant le 204
+    // d'origine, parce qu'une opposition vaut quelle que soit la provenance —
+    // la refuser pour cause de domaine non déclaré serait la perdre.
+    const opposition = decideOptOut(cookie, secGpc, optOut);
+
+    // Accumulés plutôt que posés au fil de l'eau : `setHeader` écrase, et une
+    // réponse peut avoir à porter les deux — celle qui enregistre l'opposition
+    // retire aussi l'identité durable.
+    const cookies = opposition.setCookie ? [opposition.setCookie] : [];
+
+    if (opposition.refused) {
+      // S'opposer sans perdre son identifiant durable serait un demi-geste : il
+      // resterait sur le terminal, prêt à resservir si l'opposition tombe.
+      if (optOut === true) cookies.push(clearVisitorCookie());
+
+      response.setHeader('Set-Cookie', cookies);
+      response.status(HttpStatus.NO_CONTENT);
+
+      return undefined;
+    }
+
     const resolved = await this.projectKeys.resolve(apiKey, origin);
 
     // Origine refusée : rien n'est écrit, et on ne le dit pas.
@@ -154,6 +182,8 @@ export class IngestionController {
     // chemin serveur ne la reçoit pas, donc il ne peut rien en faire. L'union
     // discriminée d'`IngestCommand` fait échouer la compilation de l'inverse.
     if (source === 'server') {
+      if (cookies.length > 0) response.setHeader('Set-Cookie', cookies);
+
       return this.core.ingest({ ...event, projectId, source });
     }
 
@@ -162,7 +192,8 @@ export class IngestionController {
     // un événement écarté ne laisse rien derrière lui, pas même un cookie.
     const { setCookie, ...visitor } = decideVisitorCookie(cookie, consent);
 
-    if (setCookie) response.setHeader('Set-Cookie', setCookie);
+    if (setCookie) cookies.push(setCookie);
+    if (cookies.length > 0) response.setHeader('Set-Cookie', cookies);
 
     const written = await this.core.ingest({
       ...event,

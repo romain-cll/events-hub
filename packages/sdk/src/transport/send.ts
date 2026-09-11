@@ -23,6 +23,13 @@ export interface EventEnvelope {
    */
   consent?: boolean;
   /**
+   * L'opposition du visiteur au traitement, quand il vient de l'exprimer.
+   *
+   * Ne voyage que sur l'événement qui la porte : côté hub c'est un cookie qui
+   * fait foi ensuite, donc la répéter n'apprendrait rien.
+   */
+  optOut?: boolean;
+  /**
    * Les paramètres de campagne lus dans l'URL, s'il y en a.
    *
    * Champ de premier niveau, jamais une clé d'`attributes` : les deux sacs sont
