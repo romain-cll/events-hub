@@ -32,6 +32,7 @@ import {
   type EventSource,
   type NewEvent,
 } from '../database/schema';
+import { retentionCutoff } from '../retention/cutoff';
 
 /**
  * Combien de valeurs distinctes `topValues` rend par défaut.
@@ -637,6 +638,23 @@ export class EventStore {
    *
    * Elle est donc idempotente : la rejouer ne déplace rien.
    *
+   * ## Elle ne ré-identifie jamais ce que la purge a anonymisé
+   *
+   * C'est la borne de rétention, et sans elle le lot de purge ne servirait à
+   * rien. Un événement anonymisé a **exactement la forme** que cette méthode
+   * cherche — une ligne écrite, sans clé visiteur. La première paire client
+   * apprise après coup ré-identifierait donc un paiement de vingt-six mois, et
+   * la purge et le rattrapage rétroactif se contrediraient en silence, chacun
+   * défaisant le travail de l'autre à son rythme.
+   *
+   * La condition vit **ici** plutôt que chez l'appelant pour la raison qui fait
+   * vivre `where()` dans ce fichier : une règle posée dans un module de
+   * `features/` sera oubliée par le suivant. Celle-ci vaut pour tout appelant,
+   * présent et futur, et c'est le seul endroit d'où elle peut le garantir.
+   *
+   * Le seuil est un fragment SQL, donc évalué par Postgres à chaque appel, sur
+   * la même horloge que les lignes qu'il compare — voir `retentionCutoff`.
+   *
    * ## Ce qu'elle ne prend pas
    *
    * Ni période, ni projet, ni type : des **ids**, que l'appelant a obtenus
@@ -649,7 +667,13 @@ export class EventStore {
     const attributed = await this.db
       .update(events)
       .set({ visitorKey })
-      .where(and(inArray(events.id, eventIds), isNull(events.visitorKey)))
+      .where(
+        and(
+          inArray(events.id, eventIds),
+          isNull(events.visitorKey),
+          gte(events.occurredAt, retentionCutoff()),
+        ),
+      )
       .returning({ id: events.id });
 
     return attributed.length;
