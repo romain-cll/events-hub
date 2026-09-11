@@ -52,6 +52,22 @@ le serveur n'écoute pas déjà, et ce cycle échoue de lui-même une fois sur
 qui l'a causé. Une suite qui rebâtit le démarrage à la main déstabilise donc les
 autres, pas la sienne.
 
+Le même fichier exige la symétrique : une suite qui crée des fixtures appelle
+`cleanupFixtures(db)` (`test/fixtures.ts`). `organizations` n'a **aucune clé
+étrangère vers `users`** — supprimer un compte emporte son appartenance, jamais
+l'organisation que l'inscription lui a créée. Deux suites affirmaient le
+contraire en commentaire, et la base locale a atteint vingt-cinq mille
+organisations vides. Le coût n'est pas le volume : `slug` est unique, et une
+collision fait échouer une inscription en 500 dans un hook hors transaction, au
+milieu d'une suite qui ne parle pas d'organisations.
+
+La rétention tourne **seule**, en seconde passe (`test/jest-e2e.retention.js`).
+Non pas parce que `purge()` est globale — aucune fixture n'a plus de vingt-cinq
+mois, elle n'emporte rien — mais parce que ses assertions le sont : le verrou
+consultatif est pris au niveau du cluster, et la seconde passe affirme que la
+purge ne trouve plus rien **nulle part**. Les borner supprimerait la garantie en
+même temps que la contrainte.
+
 ## La frontière socle / métier
 
 Le **socle** — `core/`, `events/`, `event-types/`, `sessions/`, `privacy/`,
