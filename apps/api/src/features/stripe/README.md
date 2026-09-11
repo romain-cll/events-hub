@@ -91,6 +91,35 @@ deux livraisons concurrentes ne peuvent pas gagner toutes les deux. Un échec
 d'écriture relâche la réservation, sans quoi le rejeu de Stripe, seul filet
 restant, serait pris pour un doublon.
 
+## L'état d'abonnement, projeté
+
+Le flux d'événements ne contient **rien d'antérieur à la connexion** : un client
+abonné depuis deux ans n'a produit aucun `subscription.started` chez nous. Aucune
+lecture de rétention, de cohorte ou de churn ne tient sans un état courant, d'où
+deux tables — `stripe_subscriptions` et `stripe_subscription_items`.
+
+La charge utile du webhook **est** l'objet `Subscription`, items compris : la
+projection ne fait aucun appel sortant. Elle recopie, change les secondes en
+instants, et rien d'autre.
+
+Trois choses à ne pas défaire :
+
+- **`observedAt` est le garde-fou d'ordre.** Stripe ne garantit pas l'ordre de
+  livraison et `Subscription` n'a pas de champ de version. L'upsert ne s'applique
+  que si `event.created` est plus récent que l'observation en base — sans quoi un
+  `.updated` en retard ressuscite un abonnement résilié.
+- **Les items sont remplacés, pas fusionnés.** Un downgrade fait disparaître une
+  ligne ; une fusion la laisserait avec son ancien montant, sans rien casser.
+- **`deleted` ne supprime rien.** Stripe envoie `status: 'canceled'` et son
+  `ended_at` : c'est exactement la ligne dont le churn a besoin.
+
+La projection vit dans le bloc « après l'écriture » de `handle()`, avec le
+rattrapage : elle est réparable, un paiement écrit deux fois ne l'est pas.
+
+⚠️ Prérequis opérationnel : cocher `customer.subscription.*` sur l'endpoint
+Connect. Le pass-through les laisse déjà traverser le fil, mais rien n'arrive
+tant qu'ils ne sont pas souscrits.
+
 ## La lecture : `GET /v1/projects/:id/revenue/campaigns`
 
 Le revenu croisé à l'acquisition, et **une seule question à la fois**. `kind`

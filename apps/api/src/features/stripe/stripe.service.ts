@@ -1,10 +1,15 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, eq, isNotNull, lt } from 'drizzle-orm';
 import type Stripe from 'stripe';
 
 import { CoreService } from '../../core/core.service';
 import { DRIZZLE, type DrizzleDatabase } from '../../database/database.module';
-import { stripeCustomers, stripeWebhookEvents } from '../../database/schema';
+import {
+  stripeCustomers,
+  stripeSubscriptionItems,
+  stripeSubscriptions,
+  stripeWebhookEvents,
+} from '../../database/schema';
 import { IntegrationsService } from '../../integrations/integrations.service';
 import { StripeConnectService } from '../../integrations/stripe-connect.service';
 import {
@@ -17,6 +22,7 @@ import {
   visitorIdOf,
   VISITOR_METADATA_KEY,
 } from './event-mapping';
+import { projectionOf } from './subscription-projection';
 
 /** Une paire client ↔ visiteur, telle qu'un site l'affirme. */
 interface CustomerLink {
@@ -167,6 +173,12 @@ export class StripeService {
     try {
       await this.link(event.id, written.id);
 
+      // La projection est là et pas ailleurs pour la même raison que le reste de
+      // ce bloc : elle est **réparable**. Une projection ratée se rattrape à la
+      // prochaine mise à jour de l'abonnement, ou au rattrapage manuel ; un
+      // paiement écrit deux fois, non.
+      await this.project(projectId, event);
+
       if (learned) await this.backfill(projectId, learned);
     } catch (error) {
       this.logger.error(
@@ -212,6 +224,69 @@ export class StripeService {
     await this.db
       .delete(stripeWebhookEvents)
       .where(eq(stripeWebhookEvents.eventId, eventId));
+  }
+
+  /**
+   * Range l'état courant de l'abonnement que cet événement décrit.
+   *
+   * ## Le garde-fou d'ordre, et ce qu'il empêche
+   *
+   * Stripe ne garantit pas l'ordre de livraison, et `Subscription` ne porte
+   * aucun numéro de version. Un `.updated` livré après un `.deleted`
+   * ressusciterait donc un abonnement résilié — la ligne redeviendrait
+   * `active`, et rien ne le signalerait.
+   *
+   * `setWhere` ferme ça en une ligne : l'upsert ne s'applique que si
+   * l'observation est plus récente que celle déjà en base. Une observation
+   * périmée ne rend aucune ligne, donc les items ne sont pas remplacés non
+   * plus — c'est ce qui rend le `returning` significatif plutôt que décoratif.
+   *
+   * ## Les items sont remplacés, pas fusionnés
+   *
+   * Un client qui retire un produit de son abonnement fait **disparaître** une
+   * ligne. Une fusion la laisserait en place, avec son montant, et le total de
+   * l'abonnement resterait celui d'avant sans que rien n'échoue. La suppression
+   * puis la réécriture, dans la même transaction, est la seule forme qui ne
+   * puisse pas mentir.
+   *
+   * ## `deleted` ne supprime rien
+   *
+   * Stripe envoie l'abonnement avec `status: 'canceled'` et son `ended_at` : la
+   * recopie suffit. Supprimer la ligne effacerait le départ en même temps que
+   * l'abonnement, et c'est précisément ce qu'une lecture de churn cherche.
+   */
+  private async project(projectId: string, event: Stripe.Event): Promise<void> {
+    const projection = projectionOf(event);
+
+    if (!projection) return;
+
+    const { subscription, items } = projection;
+
+    await this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(stripeSubscriptions)
+        .values({ projectId, ...subscription })
+        .onConflictDoUpdate({
+          target: [stripeSubscriptions.projectId, stripeSubscriptions.stripeId],
+          set: { ...subscription, projectedAt: new Date() },
+          setWhere: lt(stripeSubscriptions.observedAt, subscription.observedAt),
+        })
+        .returning({ id: stripeSubscriptions.id });
+
+      // Observation périmée : la ligne en base décrit un état postérieur, on la
+      // laisse tranquille.
+      if (!row) return;
+
+      await tx
+        .delete(stripeSubscriptionItems)
+        .where(eq(stripeSubscriptionItems.subscriptionId, row.id));
+
+      if (items.length === 0) return;
+
+      await tx
+        .insert(stripeSubscriptionItems)
+        .values(items.map((item) => ({ subscriptionId: row.id, ...item })));
+    });
   }
 
   /**
