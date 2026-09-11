@@ -24,6 +24,7 @@ import {
   expectMatchesContract,
   joinOrganization,
   organizationId,
+  perRun,
   signUp,
   type SignedUpUser,
   type TestProject,
@@ -134,6 +135,13 @@ describe('resynchronisation Stripe (e2e)', () => {
   let lecteur: SignedUpUser;
   let ecritAvant: string;
   const created: string[] = [];
+  /**
+   * Les réservations à effacer : `stripe_webhook_events` n'est pas cloisonnée
+   * par projet, rien ne part en cascade avec le projet supprimé.
+   *
+   * C'est un ménage, pas une protection — ce qui rend un résidu inoffensif est
+   * `perRun`, parce que ce tableau ne s'exécute pas quand la suite meurt.
+   */
   const reservations: string[] = [];
 
   /** Les paramètres du dernier `invoices.list`, pour éprouver la borne. */
@@ -159,7 +167,10 @@ describe('resynchronisation Stripe (e2e)', () => {
 
   const clients = [client('cus_ancien', VISITEUR), client('cus_muet')];
   let abonnements = [abonnement('sub_ancien')];
-  const factures = [facture('in_1', 4900, T0), facture('in_2', 1900, T0 + 10)];
+  const factures = [
+    facture(perRun('in_1'), 4900, T0),
+    facture(perRun('in_2'), 1900, T0 + 10),
+  ];
 
   const api = {
     customers: { list: () => pages(clients) },
@@ -178,9 +189,7 @@ describe('resynchronisation Stripe (e2e)', () => {
     app = await createTestApp((builder) =>
       // Seul le client sortant est doublé : tout le reste de la chaîne est le
       // vrai, y compris les réservations et l'attribution.
-      builder
-        .overrideProvider(StripeConnectService)
-        .useValue({ api }),
+      builder.overrideProvider(StripeConnectService).useValue({ api }),
     );
 
     db = app.get<DrizzleDatabase>(DRIZZLE);
@@ -215,10 +224,10 @@ describe('resynchronisation Stripe (e2e)', () => {
     });
 
     ecritAvant = written.id;
-    reservations.push('evt_avant');
+    reservations.push(perRun('evt_avant'));
 
     await db.insert(stripeWebhookEvents).values({
-      eventId: 'evt_avant',
+      eventId: perRun('evt_avant'),
       projectId: projet.id,
       customerId: 'cus_ancien',
       writtenEventId: written.id,

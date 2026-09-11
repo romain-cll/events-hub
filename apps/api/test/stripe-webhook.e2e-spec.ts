@@ -14,7 +14,7 @@ import {
   stripeWebhookEvents,
 } from '../src/database/schema';
 import { VisitorKeyService } from '../src/privacy/visitor-key.service';
-import { createProject, type TestProject } from './fixtures';
+import { createProject, perRun, type TestProject } from './fixtures';
 import { createTestApp } from './harness';
 
 /**
@@ -47,7 +47,7 @@ function webhook(
   } = {},
 ) {
   const payload = JSON.stringify({
-    id: overrides.id ?? 'evt_e2e_1',
+    id: overrides.id ?? perRun('evt_e2e_1'),
     object: 'event',
     api_version: '2025-01-01',
     created: 1_788_000_000,
@@ -81,6 +81,13 @@ describe('webhooks Stripe (e2e)', () => {
   let visitorKeys: VisitorKeyService;
   let projet: TestProject;
   const created: string[] = [];
+  /**
+   * Les réservations à effacer : `stripe_webhook_events` n'est pas cloisonnée
+   * par projet, rien ne part en cascade avec le projet supprimé.
+   *
+   * C'est un ménage, pas une protection — ce qui rend un résidu inoffensif est
+   * `perRun`, parce que ce tableau ne s'exécute pas quand la suite meurt.
+   */
   const seenEvents: string[] = [];
 
   beforeAll(async () => {
@@ -111,9 +118,7 @@ describe('webhooks Stripe (e2e)', () => {
         .where(eq(stripeWebhookEvents.eventId, id));
     }
     for (const id of created) {
-      await db
-        .delete(stripeCustomers)
-        .where(eq(stripeCustomers.projectId, id));
+      await db.delete(stripeCustomers).where(eq(stripeCustomers.projectId, id));
       await db.delete(events).where(eq(events.projectId, id));
       await db.delete(sessions).where(eq(sessions.projectId, id));
       await db.delete(projects).where(eq(projects.id, id));
@@ -141,7 +146,7 @@ describe('webhooks Stripe (e2e)', () => {
       .where(eq(events.projectId, projet.id));
 
   it('refuse un corps qui n’est pas signé par Stripe', async () => {
-    const { payload } = webhook({ id: 'evt_e2e_faux' });
+    const { payload } = webhook({ id: perRun('evt_e2e_faux') });
 
     await request(app.getHttpServer())
       .post('/v1/webhooks/stripe')
@@ -156,7 +161,7 @@ describe('webhooks Stripe (e2e)', () => {
   });
 
   it('écrit un renouvellement, relié à son visiteur et sans visite', async () => {
-    seenEvents.push('evt_e2e_1');
+    seenEvents.push(perRun('evt_e2e_1'));
 
     await post(webhook()).expect(200);
 
@@ -171,7 +176,7 @@ describe('webhooks Stripe (e2e)', () => {
     );
     expect(event.properties).toMatchObject({
       'payment.amount': 4900,
-      'stripe.event.id': 'evt_e2e_1',
+      'stripe.event.id': perRun('evt_e2e_1'),
     });
   });
 
@@ -184,23 +189,23 @@ describe('webhooks Stripe (e2e)', () => {
   });
 
   it('ignore un compte branché sur aucun projet, sans faire échouer Stripe', async () => {
-    seenEvents.push('evt_e2e_inconnu');
+    seenEvents.push(perRun('evt_e2e_inconnu'));
 
     // Répondre 4xx ferait rejouer Stripe indéfiniment pour un événement qu'on a
     // délibérément écarté.
     await post(
-      webhook({ id: 'evt_e2e_inconnu', account: 'acct_jamais_vu' }),
+      webhook({ id: perRun('evt_e2e_inconnu'), account: 'acct_jamais_vu' }),
     ).expect(200);
 
     expect(await ecrits()).toHaveLength(1);
   });
 
   it('laisse passer un type Stripe qu’on n’interprète pas', async () => {
-    seenEvents.push('evt_e2e_inconnu_type');
+    seenEvents.push(perRun('evt_e2e_inconnu_type'));
 
     await post(
       webhook({
-        id: 'evt_e2e_inconnu_type',
+        id: perRun('evt_e2e_inconnu_type'),
         type: 'charge.dispute.funds_withdrawn',
         object: { id: 'dp_1', amount: 4900, currency: 'eur' },
       }),
@@ -212,13 +217,13 @@ describe('webhooks Stripe (e2e)', () => {
   });
 
   it('écrit un paiement sans metadata, mais sans visiteur', async () => {
-    seenEvents.push('evt_e2e_anonyme');
+    seenEvents.push(perRun('evt_e2e_anonyme'));
 
     // Pas de consentement, pas d'`eh_visitor_id`. Le paiement reste du revenu ;
     // il n'est rattaché à aucun parcours, et c'est le cadre qui le veut.
     await post(
       webhook({
-        id: 'evt_e2e_anonyme',
+        id: perRun('evt_e2e_anonyme'),
         object: {
           id: 'in_e2e_2',
           amount_paid: 1900,
@@ -229,7 +234,7 @@ describe('webhooks Stripe (e2e)', () => {
     ).expect(200);
 
     const anonyme = (await ecrits()).find(
-      (row) => row.properties['stripe.event.id'] === 'evt_e2e_anonyme',
+      (row) => row.properties['stripe.event.id'] === perRun('evt_e2e_anonyme'),
     );
 
     expect(anonyme?.type).toBe('stripe.subscription.started');
@@ -310,7 +315,7 @@ describe('attribution rétroactive (e2e)', () => {
     //    posé l'identifiant sur son client.
     await post(
       webhook({
-        id: 'evt_e2e_course_paiement',
+        id: perRun('evt_e2e_course_paiement'),
         type: 'invoice.paid',
         object: {
           id: 'in_e2e_course',
@@ -332,7 +337,7 @@ describe('attribution rétroactive (e2e)', () => {
     // 2. Deux secondes plus tard, le site pose l'identifiant sur le client.
     await post(
       webhook({
-        id: 'evt_e2e_course_client',
+        id: perRun('evt_e2e_course_client'),
         type: 'customer.updated',
         object: {
           id: CUSTOMER,
@@ -361,7 +366,7 @@ describe('attribution rétroactive (e2e)', () => {
     // qui porte la LTV — est attribué par son client.
     await post(
       webhook({
-        id: 'evt_e2e_course_renouvellement',
+        id: perRun('evt_e2e_course_renouvellement'),
         type: 'invoice.paid',
         object: {
           id: 'in_e2e_course_2',

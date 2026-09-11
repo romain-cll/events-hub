@@ -15,7 +15,7 @@ import {
   stripeSubscriptions,
   stripeWebhookEvents,
 } from '../src/database/schema';
-import { createProject, type TestProject } from './fixtures';
+import { createProject, perRun, type TestProject } from './fixtures';
 import { createTestApp } from './harness';
 
 /**
@@ -119,6 +119,13 @@ describe('projection d’abonnement (e2e)', () => {
   let app: INestApplication<App>;
   let db: DrizzleDatabase;
   let projet: TestProject;
+  /**
+   * Les réservations à effacer : `stripe_webhook_events` n'est pas cloisonnée
+   * par projet, rien ne part en cascade avec le projet supprimé.
+   *
+   * C'est un ménage, pas une protection — ce qui rend un résidu inoffensif est
+   * `perRun`, parce que ce tableau ne s'exécute pas quand la suite meurt.
+   */
   const seenEvents: string[] = [];
 
   beforeAll(async () => {
@@ -186,7 +193,7 @@ describe('projection d’abonnement (e2e)', () => {
 
   it('range l’abonnement et sa ligne à la création', async () => {
     await post({
-      id: 'evt_abo_1',
+      id: perRun('evt_abo_1'),
       type: 'customer.subscription.created',
       object: abonnement(),
     }).expect(200);
@@ -210,7 +217,7 @@ describe('projection d’abonnement (e2e)', () => {
 
   it('remplace les lignes plutôt que de les fusionner', async () => {
     await post({
-      id: 'evt_abo_2',
+      id: perRun('evt_abo_2'),
       created: T0 + 120,
       object: abonnement({
         items: {
@@ -240,7 +247,7 @@ describe('projection d’abonnement (e2e)', () => {
     // retard, porteur d'un état antérieur. Sans le garde-fou, l'abonnement
     // repasserait au plan d'avant et rien ne le signalerait.
     await post({
-      id: 'evt_abo_perime',
+      id: perRun('evt_abo_perime'),
       created: T0 + 30,
       object: abonnement({ status: 'past_due' }),
     }).expect(200);
@@ -256,7 +263,7 @@ describe('projection d’abonnement (e2e)', () => {
 
   it('résilie sans supprimer la ligne', async () => {
     await post({
-      id: 'evt_abo_fin',
+      id: perRun('evt_abo_fin'),
       type: 'customer.subscription.deleted',
       created: T0 + 300,
       object: abonnement({
@@ -283,7 +290,7 @@ describe('projection d’abonnement (e2e)', () => {
     // faire relâcher la réservation : un abonnement sans client ne se projette
     // pas, mais son événement est écrit comme les autres.
     await post({
-      id: 'evt_abo_sans_client',
+      id: perRun('evt_abo_sans_client'),
       created: T0 + 400,
       object: abonnement({ id: 'sub_orphelin', customer: null }),
     }).expect(200);

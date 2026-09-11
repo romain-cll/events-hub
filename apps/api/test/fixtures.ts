@@ -58,6 +58,32 @@ export async function organizationId(db: DrizzleDatabase): Promise<string> {
  */
 export const TEST_ORIGIN = 'http://localhost:3002';
 
+/** Ce qui distingue cette exécution de la précédente. */
+const RUN = randomBytes(4).toString('hex');
+
+/**
+ * Rend un identifiant propre à cette exécution.
+ *
+ * Réservé aux identifiants que **Postgres arbitre globalement** — aujourd'hui
+ * `stripe_webhook_events.event_id`, clé primaire non cloisonnée par projet. Le
+ * service y réserve en `onConflictDoNothing` : un identifiant déjà présent est
+ * lu comme « déjà rejoué », et **rien n'est écrit**. C'est le comportement qu'on
+ * veut en production, et un piège en test.
+ *
+ * Avec des identifiants en dur, il suffisait qu'un run s'arrête au mauvais
+ * moment — Ctrl-C, worker tué, échec dans un `beforeAll` — pour laisser la ligne
+ * derrière lui. Tous les runs suivants échouaient alors **de façon déterministe
+ * et définitive**, sur une assertion qui constate un événement manquant sans
+ * rien dire de la raison. Le nettoyage de fin de suite ne protège de rien : il
+ * ne s'exécute pas quand la suite meurt, et c'est précisément le cas qui empoisonne.
+ *
+ * L'unicité par exécution rend le résidu inoffensif. Les nettoyages restent —
+ * ils empêchent la table de croître, ils n'ont jamais empêché ça.
+ */
+export function perRun(id: string): string {
+  return `${id}_${RUN}`;
+}
+
 /** Un projet de test, avec les deux clés qui permettent d'y écrire. */
 export interface TestProject extends Project {
   /** Clé publique `eh_pk_` : chemin navigateur, `Origin` vérifiée. */
