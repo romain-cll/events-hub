@@ -7,6 +7,7 @@ import {
   customerOf,
   occurredAtOf,
   propertiesOf,
+  replayOf,
   typeOf,
 } from './event-mapping';
 
@@ -254,5 +255,71 @@ describe('attributionOf', () => {
           .object,
       ),
     ).toBeUndefined();
+  });
+});
+
+describe('replayOf — une facture lue dans l’historique', () => {
+  const facture = (overrides: Record<string, unknown> = {}) =>
+    ({
+      id: 'in_1',
+      object: 'invoice',
+      status: 'paid',
+      amount_paid: 4900,
+      currency: 'eur',
+      billing_reason: 'subscription_cycle',
+      customer: 'cus_1',
+      livemode: true,
+      created: 1_788_000_000,
+      status_transitions: { paid_at: 1_788_000_600 },
+      metadata: {},
+      ...overrides,
+    }) as unknown as Stripe.Invoice;
+
+  it('affine le type comme le ferait un webhook', () => {
+    // Le rejeu doit produire le **même** type qu'un webhook vivant : deux
+    // vocabulaires selon le chemin d'écriture rendraient toute lecture de
+    // revenu dépendante de la date d'installation.
+    expect(replayOf(facture())?.type).toBe('stripe.subscription.renewed');
+    expect(replayOf(facture({ billing_reason: 'manual' }))?.type).toBe(
+      'stripe.invoice.paid',
+    );
+  });
+
+  it('date le revenu du paiement, pas de l’émission', () => {
+    // Une facture émise le 1er et payée le 8 est du revenu du 8. Prendre
+    // `created` avancerait tout l'historique.
+    expect(replayOf(facture())?.occurredAt).toEqual(
+      new Date(1_788_000_600 * 1000),
+    );
+  });
+
+  it('retombe sur la création quand Stripe ne détaille plus la transition', () => {
+    const ancienne = facture({ status_transitions: { paid_at: null } });
+
+    expect(replayOf(ancienne)?.occurredAt).toEqual(
+      new Date(1_788_000_000 * 1000),
+    );
+  });
+
+  it('recopie le montant et dit qu’il vient d’un rejeu', () => {
+    // `stripe.replayed` n'est pas décoratif : le rejeu ne produit qu'un
+    // événement là où un checkout vivant en produit quatre, et une lecture qui
+    // vise le checkout ne verra rien du passé. Mieux vaut que la différence se
+    // constate que de la supposer.
+    expect(replayOf(facture())?.properties).toEqual({
+      'stripe.object.id': 'in_1',
+      'stripe.customer.id': 'cus_1',
+      'stripe.billing_reason': 'subscription_cycle',
+      'stripe.livemode': true,
+      'stripe.replayed': true,
+      'payment.amount': 4900,
+      'payment.currency': 'eur',
+    });
+  });
+
+  it('ignore une facture qui n’a pas été payée', () => {
+    // Une facture émise n'est pas du revenu, et une impayée encore moins.
+    expect(replayOf(facture({ status: 'open' }))).toBeNull();
+    expect(replayOf(facture({ status: 'void' }))).toBeNull();
   });
 });

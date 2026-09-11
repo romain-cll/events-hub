@@ -1,5 +1,9 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
+import {
+  Test,
+  type TestingModule,
+  type TestingModuleBuilder,
+} from '@nestjs/testing';
 import type { App } from 'supertest/types';
 
 import { AppModule } from '../src/app.module';
@@ -54,11 +58,23 @@ import { configureApp } from '../src/app.setup';
  * `127.0.0.1` et non toutes les interfaces : c'est la seule adresse que
  * supertest appelle, et écouter au-delà exposerait l'application de test au
  * réseau local — sur macOS, ça se voit, le pare-feu demande l'autorisation.
+ *
+ * ## `customize`, pour les suites qui doivent doubler un fournisseur
+ *
+ * Une seule en a besoin aujourd'hui : celle du rattrapage Stripe, qui remplace
+ * le client sortant. Le paramètre existe pour qu'elle passe **par ici** plutôt
+ * qu'à côté — une suite qui recopierait ces lignes pour glisser un
+ * `overrideProvider` perdrait le `listen`, et ramènerait l'instabilité que ce
+ * fichier existe pour supprimer.
  */
-export async function createTestApp(): Promise<INestApplication<App>> {
-  const moduleFixture: TestingModule = await Test.createTestingModule({
-    imports: [AppModule],
-  }).compile();
+export async function createTestApp(
+  customize: (builder: TestingModuleBuilder) => TestingModuleBuilder = (
+    builder,
+  ) => builder,
+): Promise<INestApplication<App>> {
+  const moduleFixture: TestingModule = await customize(
+    Test.createTestingModule({ imports: [AppModule] }),
+  ).compile();
 
   // `bodyParser: false` puis `configureApp` : exactement ce que fait `main.ts`,
   // et pour la même raison — Better Auth a besoin du flux brut, et sans le

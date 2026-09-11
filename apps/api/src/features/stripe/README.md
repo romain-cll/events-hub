@@ -150,8 +150,37 @@ Les montants sortent **en centimes, par devise**, tels que Stripe les écrit.
 Deux devises font deux lignes : les additionner demanderait un taux de change,
 donc une date de taux, donc une décision qui n'appartient pas à ce module.
 
-## Pas encore fait
+## Le rattrapage : `POST /v1/projects/:id/revenue/sync`
 
-Le **rattrapage d'historique à la connexion** : brancher un compte n'importe rien
-du passé, seuls les événements postérieurs arrivent. Il devra passer par le même
-chemin que les webhooks pour rester idempotent par construction.
+Brancher un compte n'importe rien du passé. Cette route le rattrape, et sert
+aussi de bouton « resynchroniser ». Elle vit ici et pas dans le callback OAuth
+parce qu'`integrations.controller.ts` est du socle, et que le socle n'importe
+rien de `features/`.
+
+Trois passes, et leur ordre est le sujet :
+
+1. **Les clients**, pour relire les paires `eh_visitor_id` déjà posées — y
+   compris sur des clients antérieurs à l'installation. Chaque paire nouvelle
+   déclenche l'attribution rétroactive de ce qui est déjà en base, et permet aux
+   deux passes suivantes d'attribuer au moment où elles écrivent.
+2. **Les abonnements** (`status: 'all'` — un résilié est ce que le churn
+   cherche), items repaginés quand la liste dit `has_more` : une réponse de liste
+   n'en rend que dix.
+3. **Les factures payées**, bornées à `created < connectedAt`. Au-delà, les
+   webhooks ont déjà écrit ; la réservation l'empêcherait, mais s'en remettre à
+   elle logerait une règle métier dans un mécanisme de secours.
+
+Réservation sous l'**identifiant d'objet** (`in_…`) faute d'`evt_…` : une facture
+historique n'a jamais eu d'événement. Les deux espaces de noms ne se croisent
+pas.
+
+Entièrement **idempotent** : le rapport rend `skipped`, qui compte les factures
+déjà rejouées. Relancer ne double rien.
+
+⚠️ **Fidélité moindre que le direct.** Un checkout vivant produit quatre
+événements Stripe, le rejeu n'en produit qu'un par facture — sans quoi le revenu
+historique serait quadruplé. Une lecture qui vise `checkout.session.completed` ne
+verra donc rien du passé, et `stripe.replayed` le dit sur chaque ligne.
+
+Ce qu'il ne réparera pas : un client dont la metadata n'a **jamais** été posée
+reste non attribué. Le rejeu écrit son revenu, il ne lui invente pas une origine.

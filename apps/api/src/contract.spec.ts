@@ -1,6 +1,7 @@
 import type {
   AnalyticsSummary as WireAnalyticsSummary,
   CampaignRevenuePage as WireCampaignRevenuePage,
+  SyncReport as WireSyncReport,
   EventsPage as WireEventsPage,
   Integration as WireIntegration,
   Invitation as WireInvitation,
@@ -28,6 +29,7 @@ import type {
 import type { TechnologyPage } from './features/analytics/analytics.service';
 import type { EventsPage } from './features/events/events.service';
 import type { CampaignRevenuePage } from './features/stripe/revenue.service';
+import type { SyncReport } from './features/stripe/stripe.service';
 import type { OrganizationRow } from './organizations/organizations.service';
 import type { ProjectIngestion, ProjectRow } from './projects/projects.service';
 
@@ -157,6 +159,7 @@ export type TechnologyPageConforms = Assert<
 export type CampaignRevenuePageConforms = Assert<
   Conforms<Wire<CampaignRevenuePage>, WireCampaignRevenuePage>
 >;
+export type SyncReportConforms = Assert<Conforms<Wire<SyncReport>, WireSyncReport>>;
 
 /**
  * Les deux formes qui ne viennent pas de nos services.

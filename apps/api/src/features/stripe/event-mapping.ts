@@ -313,3 +313,57 @@ export function customerIdOf(
 export function occurredAtOf(event: Stripe.Event): Date {
   return new Date(event.created * 1000);
 }
+
+/**
+ * Une facture **rejouée**, c'est-à-dire lue dans l'historique plutôt que reçue.
+ *
+ * ## Pourquoi une fonction à part
+ *
+ * Parce qu'il n'y a pas d'événement autour. `typeOf` et `propertiesOf` lisent
+ * `event.id`, `event.type` et `event.created` ; une facture listée par l'API
+ * n'en a aucun. Les faire accepter un objet nu les aurait remplis de `??`, et
+ * chaque lecture aurait eu à deviner lequel des deux chemins l'avait écrite.
+ *
+ * ## Ce que le rejeu ne reproduit pas, et il faut le savoir
+ *
+ * Un checkout vivant produit **quatre** événements Stripe ; le rejeu n'en
+ * produit **qu'un** par facture. C'est voulu — le contraire quadruplerait le
+ * revenu historique — mais une lecture qui vise `checkout.session.completed` ne
+ * verra rien du passé. `stripe.replayed` le dit sur chaque ligne, pour que la
+ * différence se constate au lieu de se supposer.
+ *
+ * Rend `null` pour une facture qui n'a pas été payée : une facture émise n'est
+ * pas du revenu.
+ */
+export function replayOf(invoice: Stripe.Invoice): {
+  type: string;
+  occurredAt: Date;
+  properties: Record<string, unknown>;
+} | null {
+  if (invoice.status !== 'paid') return null;
+
+  const refined = invoice.billing_reason
+    ? BY_BILLING_REASON[invoice.billing_reason]
+    : undefined;
+
+  return {
+    type: refined ?? `${PREFIX}.invoice.paid`,
+    // L'instant du **paiement**, pas celui de l'émission : c'est la date que le
+    // revenu porte. `created` en dernier recours, pour une facture ancienne dont
+    // Stripe ne détaille plus les transitions.
+    occurredAt: new Date(
+      (invoice.status_transitions.paid_at ?? invoice.created) * 1000,
+    ),
+    properties: {
+      // Pas d'`event.id` : il n'y en a pas. L'identifiant de l'objet tient le
+      // rôle, et c'est aussi sous lui que la réservation est prise.
+      'stripe.object.id': invoice.id,
+      'stripe.customer.id': customerOf(invoice),
+      'stripe.billing_reason': invoice.billing_reason,
+      'stripe.livemode': invoice.livemode,
+      'stripe.replayed': true,
+      [AMOUNT_KEY]: invoice.amount_paid,
+      [CURRENCY_KEY]: invoice.currency,
+    },
+  };
+}

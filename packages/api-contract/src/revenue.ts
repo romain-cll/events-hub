@@ -115,3 +115,23 @@ export const campaignRevenuePageSchema = z.object({
 });
 
 export type CampaignRevenuePage = z.infer<typeof campaignRevenuePageSchema>;
+
+/**
+ * `POST /v1/projects/:projectId/revenue/sync` — ce que le rattrapage a fait.
+ *
+ * Quatre nombres, et le dernier n'est pas un échec : `skipped` compte les
+ * factures déjà rejouées lors d'une resynchronisation précédente. Sa présence
+ * est la preuve que l'opération est idempotente — relancer ne double rien.
+ *
+ * `customers` compte les paires client ↔ visiteur **nouvelles**. Chacune a
+ * déclenché l'attribution rétroactive de ce que ce client avait déjà produit :
+ * c'est le chiffre qui dit combien de revenu vient de retrouver une origine.
+ */
+export const syncReportSchema = z.object({
+  customers: z.number(),
+  subscriptions: z.number(),
+  invoices: z.number(),
+  skipped: z.number(),
+});
+
+export type SyncReport = z.infer<typeof syncReportSchema>;

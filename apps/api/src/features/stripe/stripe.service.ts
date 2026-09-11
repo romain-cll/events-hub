@@ -1,20 +1,16 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
-import { and, eq, isNotNull, lt } from 'drizzle-orm';
+import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import type Stripe from 'stripe';
 
 import { CoreService } from '../../core/core.service';
 import { DRIZZLE, type DrizzleDatabase } from '../../database/database.module';
-import {
-  stripeCustomers,
-  stripeSubscriptionItems,
-  stripeSubscriptions,
-  stripeWebhookEvents,
-} from '../../database/schema';
+import { stripeCustomers, stripeWebhookEvents } from '../../database/schema';
 import { IntegrationsService } from '../../integrations/integrations.service';
 import { StripeConnectService } from '../../integrations/stripe-connect.service';
 import {
   customerLinkOf,
   customerOf,
+  replayOf,
   occurredAtOf,
   propertiesOf,
   sessionIdOf,
@@ -22,12 +18,32 @@ import {
   visitorIdOf,
   VISITOR_METADATA_KEY,
 } from './event-mapping';
-import { projectionOf } from './subscription-projection';
+import { projectionOf, rowsOf } from './subscription-projection';
+import { SubscriptionStore } from './subscription-store.service';
 
 /** Une paire client ↔ visiteur, telle qu'un site l'affirme. */
 interface CustomerLink {
   customerId: string;
   visitorId: string;
+}
+
+/**
+ * Ce qu'une resynchronisation a fait, en quatre nombres.
+ *
+ * Rendu à l'appelant plutôt que journalisé seul : un bouton
+ * « resynchroniser » qui ne dit rien laisse croire qu'il n'a rien fait. Et
+ * `skipped` n'est pas un échec — c'est le compte des factures déjà rejouées,
+ * donc la preuve que l'opération est idempotente.
+ */
+export interface SyncReport {
+  /** Paires client ↔ visiteur **nouvelles**, chacune ayant déclenché un rattrapage. */
+  customers: number;
+  /** Abonnements dont l'état a été écrit. */
+  subscriptions: number;
+  /** Factures historiques rejouées, une par facture. */
+  invoices: number;
+  /** Factures déjà rejouées, laissées telles quelles. */
+  skipped: number;
 }
 
 /**
@@ -65,6 +81,7 @@ export class StripeService {
     private readonly connect: StripeConnectService,
     private readonly integrations: IntegrationsService,
     private readonly core: CoreService,
+    private readonly subscriptions: SubscriptionStore,
   ) {}
 
   /**
@@ -188,6 +205,242 @@ export class StripeService {
   }
 
   /**
+   * Rattrape ce que le branchement n'a pas vu passer.
+   *
+   * ## Pourquoi c'est indispensable, et pas un confort
+   *
+   * Brancher un compte n'importe rien du passé : un client abonné depuis deux
+   * ans n'a produit aucun événement chez nous, et aucune lecture de cohorte ou
+   * de rétention ne tient sans lui. Le flux seul ne peut pas répondre — il ne
+   * contient rien d'antérieur à la connexion, par construction.
+   *
+   * ## Trois passes, et leur ordre compte
+   *
+   * **Les clients d'abord.** On y lit les paires client ↔ visiteur déjà posées
+   * dans la metadata, y compris sur des clients antérieurs à l'installation. Les
+   * apprendre en premier, c'est permettre aux deux passes suivantes d'attribuer
+   * au moment où elles écrivent, au lieu de laisser du revenu muet derrière
+   * elles. Chaque paire nouvelle déclenche l'attribution rétroactive de ce qui
+   * est déjà en base.
+   *
+   * **Les abonnements ensuite**, pour l'état courant. Rejouable à volonté :
+   * l'upsert est idempotent, et le garde-fou d'ordre protège de tout.
+   *
+   * **Les factures enfin**, pour l'histoire, bornées à ce qui précède la
+   * connexion. Au-delà, les webhooks ont déjà écrit, et rejouer ferait
+   * doublon — la réservation l'en empêcherait, mais s'en remettre à elle
+   * reviendrait à écrire une règle dans un mécanisme de secours.
+   *
+   * ## Ce que ça ne réparera pas
+   *
+   * Un client dont la metadata n'a jamais été posée **restera non attribué**. Le
+   * rejeu écrit son revenu, il ne lui invente pas une origine. La seule
+   * réparation passe par le chemin déjà construit : le site pose l'identifiant,
+   * et la prochaine resynchronisation — ou le prochain webhook — le retient.
+   *
+   * Et le rejeu n'a pas la fidélité du direct : un checkout vivant produit
+   * quatre événements Stripe, le rejeu n'en produit qu'un par facture. C'est
+   * voulu, et `stripe.replayed` le dit sur chaque ligne.
+   */
+  async resync(projectId: string): Promise<SyncReport> {
+    const integration = await this.integrations.find(projectId, 'stripe');
+
+    if (!integration) {
+      throw new NotFoundException(
+        'Aucun compte Stripe n’est branché sur ce projet.',
+      );
+    }
+
+    const account = integration.externalAccountId;
+
+    const customers = await this.relearn(projectId, account);
+    const subscriptions = await this.resyncSubscriptions(projectId, account);
+    const invoices = await this.replayInvoices(
+      projectId,
+      account,
+      integration.connectedAt,
+    );
+
+    this.logger.log(
+      `Resynchronisation Stripe du projet ${projectId} : ${String(customers)} paire(s) apprise(s), ${String(subscriptions)} abonnement(s), ${String(invoices.invoices)} facture(s) rejouée(s).`,
+    );
+
+    return { customers, subscriptions, ...invoices };
+  }
+
+  /**
+   * Relit les paires client ↔ visiteur posées chez Stripe.
+   *
+   * C'est la passe qui répare l'historique : un site qui pose `eh_visitor_id`
+   * sur ses clients après coup rend d'un seul coup attribuable tout ce qu'ils
+   * ont produit. Sans elle, il faudrait attendre qu'un webhook mentionne chaque
+   * client, donc qu'il repaie.
+   */
+  private async relearn(projectId: string, account: string): Promise<number> {
+    let learned = 0;
+
+    await this.connect.api.customers
+      .list({ limit: 100 }, { stripeAccount: account })
+      .autoPagingEach(async (customer) => {
+        const visitorId = visitorIdOf(customer);
+
+        if (!visitorId) return;
+
+        const link = await this.remember(projectId, {
+          customerId: customer.id,
+          visitorId,
+        });
+
+        if (!link) return;
+
+        learned += 1;
+        await this.backfill(projectId, link);
+      });
+
+    return learned;
+  }
+
+  /**
+   * Relit l'état de tous les abonnements, actifs comme résiliés.
+   *
+   * `status: 'all'` et pas `active` : un abonnement résilié est exactement ce
+   * qu'une lecture de churn cherche, et il ne reviendra jamais par le flux.
+   *
+   * Une seule date d'observation pour toute la passe — celle du début. Deux
+   * abonnements lus à deux secondes d'écart décrivent le même instant logique,
+   * et leur donner deux dates ferait dépendre le départage d'un ordre de
+   * pagination.
+   */
+  private async resyncSubscriptions(
+    projectId: string,
+    account: string,
+  ): Promise<number> {
+    const observedAt = new Date();
+    let applied = 0;
+
+    await this.connect.api.subscriptions
+      .list({ status: 'all', limit: 100 }, { stripeAccount: account })
+      .autoPagingEach(async (subscription) => {
+        const complete = await this.withAllItems(subscription, account);
+        const projection = rowsOf(complete, observedAt);
+
+        if (!projection) return;
+
+        if (await this.subscriptions.save(projectId, projection)) applied += 1;
+      });
+
+    return applied;
+  }
+
+  /**
+   * Complète les lignes d'un abonnement que la liste a tronquées.
+   *
+   * Une réponse de liste ne rend que **dix** items, et rien ne le signale sinon
+   * ce `has_more`. Un abonnement à douze produits serait donc rangé amputé de
+   * deux, avec un total plausible et faux — exactement la panne que la seconde
+   * table existe pour éviter.
+   */
+  private async withAllItems(
+    subscription: Stripe.Subscription,
+    account: string,
+  ): Promise<Stripe.Subscription> {
+    if (!subscription.items.has_more) return subscription;
+
+    const data: Stripe.SubscriptionItem[] = [];
+
+    await this.connect.api.subscriptionItems
+      .list(
+        { subscription: subscription.id, limit: 100 },
+        { stripeAccount: account },
+      )
+      .autoPagingEach((item) => {
+        data.push(item);
+      });
+
+    return {
+      ...subscription,
+      items: { ...subscription.items, data, has_more: false },
+    };
+  }
+
+  /**
+   * Rejoue les factures payées **antérieures** à la connexion.
+   *
+   * La borne n'est pas une optimisation : au-delà, les webhooks ont déjà écrit
+   * ces paiements, et les rejouer doublerait le revenu. La réservation
+   * l'empêcherait — un `in_…` déjà pris ne repasse pas — mais compter sur elle
+   * reviendrait à loger une règle métier dans un mécanisme de secours.
+   *
+   * La réservation est prise sous l'**identifiant de la facture**, faute
+   * d'`evt_…` : une facture historique n'a jamais eu d'événement. Les deux
+   * espaces de noms ne se croisent pas, `in_…` et `evt_…` étant distincts par
+   * construction.
+   */
+  private async replayInvoices(
+    projectId: string,
+    account: string,
+    before: Date,
+  ): Promise<{ invoices: number; skipped: number }> {
+    let invoices = 0;
+    let skipped = 0;
+
+    await this.connect.api.invoices
+      .list(
+        {
+          status: 'paid',
+          created: { lt: Math.floor(before.getTime() / 1000) },
+          limit: 100,
+        },
+        { stripeAccount: account },
+      )
+      .autoPagingEach(async (invoice) => {
+        const replay = replayOf(invoice);
+
+        if (!replay || !invoice.id) return;
+
+        const customerId = customerOf(invoice);
+
+        // Déjà rejouée lors d'une resynchronisation précédente : c'est le cas
+        // normal du bouton « resynchroniser », pas une anomalie.
+        if (!(await this.claim(invoice.id, projectId, customerId))) {
+          skipped += 1;
+
+          return;
+        }
+
+        try {
+          const visitorId =
+            visitorIdOf(invoice) ??
+            (customerId
+              ? await this.knownVisitorId(projectId, customerId)
+              : undefined);
+
+          const written = await this.core.ingest({
+            projectId,
+            type: replay.type,
+            occurredAt: replay.occurredAt,
+            attributes: {},
+            properties: replay.properties,
+            source: 'server',
+            visitorId,
+          });
+
+          await this.link(invoice.id, written.id);
+          invoices += 1;
+        } catch (error) {
+          // Même règle que pour un webhook : tant que rien n'est écrit, la
+          // réservation doit être relâchée, sinon la facture serait perdue et
+          // comptée comme traitée.
+          await this.release(invoice.id);
+
+          throw error;
+        }
+      });
+
+    return { invoices, skipped };
+  }
+
+  /**
    * Réserve l'identifiant de l'événement, ou dit qu'il était déjà pris.
    *
    * `onConflictDoNothing` + `returning` : c'est Postgres qui arbitre, donc deux
@@ -229,64 +482,17 @@ export class StripeService {
   /**
    * Range l'état courant de l'abonnement que cet événement décrit.
    *
-   * ## Le garde-fou d'ordre, et ce qu'il empêche
-   *
-   * Stripe ne garantit pas l'ordre de livraison, et `Subscription` ne porte
-   * aucun numéro de version. Un `.updated` livré après un `.deleted`
-   * ressusciterait donc un abonnement résilié — la ligne redeviendrait
-   * `active`, et rien ne le signalerait.
-   *
-   * `setWhere` ferme ça en une ligne : l'upsert ne s'applique que si
-   * l'observation est plus récente que celle déjà en base. Une observation
-   * périmée ne rend aucune ligne, donc les items ne sont pas remplacés non
-   * plus — c'est ce qui rend le `returning` significatif plutôt que décoratif.
-   *
-   * ## Les items sont remplacés, pas fusionnés
-   *
-   * Un client qui retire un produit de son abonnement fait **disparaître** une
-   * ligne. Une fusion la laisserait en place, avec son montant, et le total de
-   * l'abonnement resterait celui d'avant sans que rien n'échoue. La suppression
-   * puis la réécriture, dans la même transaction, est la seule forme qui ne
-   * puisse pas mentir.
-   *
-   * ## `deleted` ne supprime rien
-   *
-   * Stripe envoie l'abonnement avec `status: 'canceled'` et son `ended_at` : la
-   * recopie suffit. Supprimer la ligne effacerait le départ en même temps que
-   * l'abonnement, et c'est précisément ce qu'une lecture de churn cherche.
+   * L'écriture elle-même vit dans `SubscriptionStore`, partagée avec le
+   * rattrapage d'historique : deux chemins qui écriraient chacun de leur côté
+   * finiraient par diverger sur le garde-fou d'ordre, et l'écart ne se verrait
+   * que dans les chiffres.
    */
   private async project(projectId: string, event: Stripe.Event): Promise<void> {
     const projection = projectionOf(event);
 
     if (!projection) return;
 
-    const { subscription, items } = projection;
-
-    await this.db.transaction(async (tx) => {
-      const [row] = await tx
-        .insert(stripeSubscriptions)
-        .values({ projectId, ...subscription })
-        .onConflictDoUpdate({
-          target: [stripeSubscriptions.projectId, stripeSubscriptions.stripeId],
-          set: { ...subscription, projectedAt: new Date() },
-          setWhere: lt(stripeSubscriptions.observedAt, subscription.observedAt),
-        })
-        .returning({ id: stripeSubscriptions.id });
-
-      // Observation périmée : la ligne en base décrit un état postérieur, on la
-      // laisse tranquille.
-      if (!row) return;
-
-      await tx
-        .delete(stripeSubscriptionItems)
-        .where(eq(stripeSubscriptionItems.subscriptionId, row.id));
-
-      if (items.length === 0) return;
-
-      await tx
-        .insert(stripeSubscriptionItems)
-        .values(items.map((item) => ({ subscriptionId: row.id, ...item })));
-    });
+    await this.subscriptions.save(projectId, projection);
   }
 
   /**
@@ -308,6 +514,21 @@ export class StripeService {
 
     if (!link) return undefined;
 
+    return await this.remember(projectId, link);
+  }
+
+  /**
+   * Retient une paire, et ne rend rien si elle était déjà celle-là.
+   *
+   * Séparée de `learn` pour le rattrapage, qui lit les paires dans les clients
+   * de Stripe plutôt que dans un événement. Les deux chemins doivent écrire
+   * pareil — et surtout décider pareil de ce qui est « nouveau », puisque c'est
+   * ce qui déclenche l'attribution rétroactive.
+   */
+  private async remember(
+    projectId: string,
+    link: CustomerLink,
+  ): Promise<CustomerLink | undefined> {
     const known = await this.knownVisitorId(projectId, link.customerId);
 
     if (known === link.visitorId) return undefined;

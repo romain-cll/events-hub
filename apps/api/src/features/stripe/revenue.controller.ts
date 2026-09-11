@@ -1,4 +1,13 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { z } from 'zod';
 
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
@@ -8,6 +17,7 @@ import {
   type RevenueCampaignsDto,
 } from './dto/revenue-query.dto';
 import { RevenueService, type CampaignRevenuePage } from './revenue.service';
+import { StripeService, type SyncReport } from './stripe.service';
 
 /**
  * `GET /v1/projects/:projectId/revenue/…` — la lecture du revenu.
@@ -25,7 +35,10 @@ import { RevenueService, type CampaignRevenuePage } from './revenue.service';
 @UseGuards(ProjectMemberGuard)
 @Controller({ path: 'projects/:projectId/revenue', version: '1' })
 export class RevenueController {
-  constructor(private readonly revenue: RevenueService) {}
+  constructor(
+    private readonly revenue: RevenueService,
+    private readonly stripe: StripeService,
+  ) {}
 
   /**
    * Le revenu par campagne d'acquisition, sur une fenêtre.
@@ -41,5 +54,33 @@ export class RevenueController {
     query: RevenueCampaignsDto,
   ): Promise<CampaignRevenuePage> {
     return this.revenue.campaigns(projectId, query);
+  }
+
+  /**
+   * `POST /v1/projects/:projectId/revenue/sync` — rattraper ce que le
+   * branchement n'a pas vu passer.
+   *
+   * ## Pourquoi une route, et pas un appel dans le callback OAuth
+   *
+   * Parce que `integrations.controller.ts` appartient au socle, et que le socle
+   * n'importe rien de `features/`. C'est la même frontière que partout ailleurs,
+   * et elle a ici un effet heureux : la même route sert de bouton
+   * « resynchroniser », que le client peut actionner le jour où il pose enfin
+   * ses identifiants de visiteur sur ses clients Stripe.
+   *
+   * ## `POST`, et il est long
+   *
+   * Il écrit, donc `POST`. Et il parcourt trois listes paginées chez Stripe :
+   * sur un compte chargé, la réponse se fait attendre. C'est assumé pour un
+   * geste explicite et rare — le rendre asynchrone demanderait une file, donc
+   * un état à suivre, pour une opération entièrement **idempotente** qu'il
+   * suffit de relancer.
+   */
+  @Post('sync')
+  @HttpCode(HttpStatus.OK)
+  sync(
+    @Param('projectId', new ZodValidationPipe(z.uuid())) projectId: string,
+  ): Promise<SyncReport> {
+    return this.stripe.resync(projectId);
   }
 }

@@ -8,6 +8,7 @@ import { RevenueController } from './revenue.controller';
 import { RevenueService } from './revenue.service';
 import { StripeController } from './stripe.controller';
 import { StripeService } from './stripe.service';
+import { SubscriptionStore } from './subscription-store.service';
 
 /**
  * Le revenu, en tant que source d'événements comme une autre.
@@ -27,6 +28,6 @@ import { StripeService } from './stripe.service';
 @Module({
   imports: [CoreModule, EventsModule, IntegrationsModule, ProjectsModule],
   controllers: [StripeController, RevenueController],
-  providers: [StripeService, RevenueService],
+  providers: [StripeService, RevenueService, SubscriptionStore],
 })
 export class StripeModule {}

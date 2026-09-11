@@ -5,6 +5,7 @@ import type { DrizzleDatabase } from '../../database/database.module';
 import type { IntegrationsService } from '../../integrations/integrations.service';
 import type { StripeConnectService } from '../../integrations/stripe-connect.service';
 import { StripeService } from './stripe.service';
+import type { SubscriptionStore } from './subscription-store.service';
 
 /**
  * Ce qui arrive quand quelque chose échoue **après** que l'événement est écrit.
@@ -94,6 +95,10 @@ function serviceAvec({
       findByAccount: () => Promise.resolve({ projectId: PROJECT_ID }),
     } as unknown as IntegrationsService,
     { ingest } as unknown as CoreService,
+    // La projection d'abonnement n'a rien à voir avec la réservation : un double
+    // inerte suffit, et le rendre bavard ferait passer ce test pour un test de
+    // la projection.
+    { save: () => Promise.resolve(true) } as unknown as SubscriptionStore,
   );
 
   return { service, del, ingest };

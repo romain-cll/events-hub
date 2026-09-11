@@ -103,7 +103,28 @@ export function projectionOf(event: Stripe.Event): Projection | null {
 
   if (!('object' in object) || object.object !== 'subscription') return null;
 
-  const subscription = object;
+  // L'instant de l'observation, pas celui de l'écriture : c'est lui qui
+  // reconnaît un webhook livré en retard.
+  return rowsOf(object, new Date(event.created * 1000));
+}
+
+/**
+ * La même projection, à partir de l'objet seul.
+ *
+ * C'est la porte du **rattrapage** : `subscriptions.list` rend des abonnements
+ * sans événement autour, et il n'y a alors pas d'`event.created` à prendre pour
+ * date d'observation. L'appelant passe l'instant de sa lecture, qui est
+ * exactement ce que `observedAt` veut dire.
+ *
+ * Conséquence assumée : un rattrapage rend l'état plus « récent » que tout
+ * webhook antérieur, donc un webhook resté en file pendant la resynchronisation
+ * sera écarté. C'est le bon arbitrage — la lecture directe chez Stripe est plus
+ * fraîche que n'importe quelle notification déjà en route.
+ */
+export function rowsOf(
+  subscription: Stripe.Subscription,
+  observedAt: Date,
+): Projection | null {
   const customerId = idOf(subscription.customer);
 
   // Un abonnement sans client ne se rattache à personne, et toute lecture de
@@ -127,9 +148,7 @@ export function projectionOf(event: Stripe.Event): Projection | null {
       trialEnd: instant(subscription.trial_end),
       collectionMethod: subscription.collection_method,
       livemode: subscription.livemode,
-      // L'instant de l'observation, pas celui de l'écriture : c'est ce qui
-      // permet de reconnaître un webhook livré en retard.
-      observedAt: new Date(event.created * 1000),
+      observedAt,
     },
     items: subscription.items.data.map(itemOf),
   };
