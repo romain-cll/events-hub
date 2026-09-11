@@ -236,6 +236,99 @@ export interface SessionCampaign {
   name: string | null;
 }
 
+/**
+ * Où lire un montant, et dans quelle devise il est libellé.
+ *
+ * Deux clés plutôt qu'une, et la seconde n'est pas un ornement : sans devise, un
+ * total additionne des euros et des yens en silence. Le Core ne convertit rien —
+ * il **sépare**, ce qui est la seule chose qu'une base de données puisse faire
+ * honnêtement sans taux de change ni date de taux.
+ *
+ * Comme pour `ValueSelector`, le Core ne sait pas ce que ces clés désignent : il
+ * additionne ce qu'il trouve à l'endroit qu'on lui nomme, dans l'unité où
+ * l'émetteur l'a écrit.
+ */
+export interface AmountSelector {
+  source: 'attributes' | 'properties';
+  /** La clé du montant. Seules les valeurs entières sont additionnées. */
+  amount: string;
+  /** La clé de la devise. Elle sépare les totaux, elle ne les convertit pas. */
+  currency: string;
+  /** Nombre de campagnes classées. Défaut : 10. */
+  limit?: number;
+}
+
+/** Ce qu'un groupe de paiements pèse, et ce qui l'a amené. */
+export interface EntryCampaignTotals {
+  /** La campagne de la première visite du visiteur, ou `null`. */
+  campaign: SessionCampaign | null;
+  /**
+   * A-t-on retrouvé une première visite pour ce visiteur ?
+   *
+   * `false` veut dire qu'aucun parcours ne porte ce paiement — pas de
+   * consentement, pas d'identifiant, ou un client antérieur à l'installation.
+   * `true` avec `campaign` à `null` est tout autre chose : on connaît la visite,
+   * elle n'est simplement venue d'aucune campagne. Confondre les deux ferait
+   * passer un trou de mesure pour du trafic direct.
+   */
+  known: boolean;
+  /** La devise telle que l'émetteur l'a écrite, ou `null` s'il n'en donne pas. */
+  currency: string | null;
+  /** Somme des montants entiers trouvés, dans leur unité d'origine. */
+  amount: number;
+  /** Nombre d'événements du groupe, montant ou pas. */
+  events: number;
+  /** Visiteurs distincts derrière ces événements. */
+  visitors: number;
+}
+
+/**
+ * Le classement, et ce qu'il ne montre pas.
+ *
+ * `others` n'est pas un reste décoratif : c'est la part de revenu qu'aucune
+ * campagne ne revendique, et elle doit rester visible à côté du classement.
+ * L'annoncer séparément est ce qui empêche de lire « 12 k€ venus de Google »
+ * comme « 12 k€ sur 12 k€ ».
+ */
+export interface EntryCampaignRanking {
+  /** Les campagnes, du plus gros total au plus petit, coupées à `limit`. */
+  rows: EntryCampaignTotals[];
+  /** Tout ce qui n'a pas de campagne, jamais coupé. */
+  others: EntryCampaignTotals[];
+}
+
+/**
+ * Recompose le triplet à partir des trois colonnes plates du groupement.
+ *
+ * Les trois à `null` valent « pas de campagne », pas « campagne aux champs
+ * vides » — la distinction disparaîtrait si on rendait l'objet dans tous les
+ * cas, et c'est elle qui sépare une visite directe d'une visite sourcée.
+ */
+function toTotals(row: {
+  campaignSource: string | null;
+  campaignMedium: string | null;
+  campaignName: string | null;
+  known: boolean;
+  currency: string | null;
+  amount: number;
+  events: number;
+  visitors: number;
+}): EntryCampaignTotals {
+  const { campaignSource, campaignMedium, campaignName, ...totals } = row;
+
+  return {
+    ...totals,
+    campaign:
+      (campaignSource ?? campaignMedium ?? campaignName)
+        ? {
+            source: campaignSource,
+            medium: campaignMedium,
+            name: campaignName,
+          }
+        : null,
+  };
+}
+
 export interface EventRow {
   /**
    * La session à laquelle l'événement appartient.
@@ -918,6 +1011,168 @@ export class EventStore {
     ]);
 
     return { rows, unresolved: missing.count };
+  }
+
+  /**
+   * Ce que chaque paiement doit à la **première visite** de son visiteur.
+   *
+   * ## Pourquoi le Core, et pas un module
+   *
+   * Parce que la jointure porte sur la clé visiteur, et qu'aucun module n'a le
+   * droit de la nommer. C'est la même frontière que partout ailleurs : un module
+   * dit « ces types-là, cette fenêtre-là, ce montant-là », le Core sait seul par
+   * quelle colonne on relie un paiement à un parcours.
+   *
+   * ## La première visite est **lue**, jamais figée
+   *
+   * On aurait pu recopier la campagne sur l'événement de paiement au moment de
+   * l'écrire. Ç'aurait été faux : `CoreService.attribute` rattache des paiements
+   * **rétroactivement**, des mois après, quand un site pose enfin l'identifiant
+   * sur ses clients. « La première visite de ce visiteur » devient donc
+   * légitimement connaissable après coup, et une valeur gelée serait restée
+   * vide pour toujours.
+   *
+   * Le `left join lateral` prend la session la plus ancienne du visiteur —
+   * `sessions_project_visitor_idx` le sert — sans borne de fenêtre : la fenêtre
+   * choisit les *paiements* comptés, pas l'ancienneté de l'acquisition qu'on
+   * leur reconnaît.
+   *
+   * ## Ce que le Core additionne, et ce qu'il ignore
+   *
+   * Une clé fournie par l'appelant, dont il ne sait rien : ni l'unité, ni ce
+   * qu'elle mesure. Seules les valeurs **entières** entrent dans la somme — un
+   * `::numeric` sur une chaîne quelconque ferait échouer la requête entière, et
+   * un total qui tombe est pire qu'un total incomplet.
+   *
+   * La devise **sépare** les totaux, elle ne les convertit pas. Additionner deux
+   * devises demanderait un taux de change, donc une date de taux, donc une
+   * décision qui n'appartient pas à une base de données.
+   *
+   * ## Deux ensembles, et le `limit` ne porte que sur le premier
+   *
+   * `rows` est un classement, donc coupé. `others` ne l'est pas : il porte ce
+   * qui n'a pas de campagne — visiteur connu venu sans, ou paiement rattaché à
+   * personne — et c'est précisément ce qu'un classement tronqué ferait
+   * disparaître. Une part d'attribution qu'on ne peut pas voir est une part
+   * d'attribution qu'on croit nulle.
+   */
+  async entryCampaigns(
+    scope: EventScope,
+    { source, amount, currency, limit = DEFAULT_TOP_LIMIT }: AmountSelector,
+  ): Promise<EntryCampaignRanking> {
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new RangeError(
+        `[EventStore] limit doit être un entier positif, reçu ${String(limit)}.`,
+      );
+    }
+
+    const column =
+      source === 'attributes' ? events.attributes : events.properties;
+
+    // La plus ancienne visite du visiteur, quelle que soit sa date. `marker`
+    // n'est là que pour distinguer « aucune visite » de « une visite sans
+    // campagne » : sans lui, les deux rendraient trois colonnes nulles.
+    const entry = this.db
+      .select({
+        source: sessions.campaignSource,
+        medium: sessions.campaignMedium,
+        name: sessions.campaignName,
+        marker: sql<number>`1`.as('marker'),
+      })
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.projectId, events.projectId),
+          eq(sessions.visitorKey, events.visitorKey),
+        ),
+      )
+      .orderBy(asc(sessions.startedAt), asc(sessions.id))
+      .limit(1)
+      .as('entry');
+
+    // Même raison que dans `topValues` : l'extraction est isolée pour que le
+    // groupement porte sur des colonnes ordinaires, et non sur des expressions
+    // que Drizzle qualifie différemment selon la clause.
+    const extracted = this.db
+      .select({
+        campaignSource: entry.source,
+        campaignMedium: entry.medium,
+        campaignName: entry.name,
+        known: sql<boolean>`${entry.marker} is not null`.as('known'),
+        currency: sql<string | null>`${column} ->> ${currency}::text`.as(
+          'currency',
+        ),
+        amount: sql<
+          string | null
+        >`case when ${column} ->> ${amount}::text ~ '^-?[0-9]+$' then (${column} ->> ${amount}::text)::bigint end`.as(
+          'amount',
+        ),
+        visitorKey: events.visitorKey,
+      })
+      .from(events)
+      .leftJoinLateral(entry, sql`true`)
+      .where(this.where(scope))
+      .as('extracted');
+
+    // `coalesce` parce qu'une somme sans aucune valeur rend `null` : un groupe
+    // dont aucun événement ne porte de montant existe, et il vaut zéro.
+    const total = sql<number>`coalesce(sum(${extracted.amount}), 0)`.mapWith(
+      Number,
+    );
+    const payments = sql<number>`count(*)`.mapWith(Number);
+
+    const columns = {
+      campaignSource: extracted.campaignSource,
+      campaignMedium: extracted.campaignMedium,
+      campaignName: extracted.campaignName,
+      known: extracted.known,
+      currency: extracted.currency,
+      amount: total,
+      events: payments,
+      visitors: countDistinct(extracted.visitorKey),
+    };
+
+    const grouped = [
+      extracted.campaignSource,
+      extracted.campaignMedium,
+      extracted.campaignName,
+      extracted.known,
+      extracted.currency,
+    ];
+
+    const hasCampaign = or(
+      isNotNull(extracted.campaignSource),
+      isNotNull(extracted.campaignMedium),
+      isNotNull(extracted.campaignName),
+    );
+
+    // Écrit en positif plutôt qu'en `not(hasCampaign)` : les deux requêtes se
+    // relisent alors côte à côte, et leur complémentarité se vérifie à l'œil.
+    const noCampaign = and(
+      isNull(extracted.campaignSource),
+      isNull(extracted.campaignMedium),
+      isNull(extracted.campaignName),
+    );
+
+    const [ranked, rest] = await Promise.all([
+      this.db
+        .select(columns)
+        .from(extracted)
+        .where(hasCampaign)
+        .groupBy(...grouped)
+        // Le second critère départage à égalité : sans lui, la coupe du `limit`
+        // serait non déterministe, comme pour les autres classements.
+        .orderBy(desc(total), asc(extracted.campaignSource))
+        .limit(limit),
+      this.db
+        .select(columns)
+        .from(extracted)
+        .where(noCampaign)
+        .groupBy(...grouped)
+        .orderBy(desc(total)),
+    ]);
+
+    return { rows: ranked.map(toTotals), others: rest.map(toTotals) };
   }
 
   /**

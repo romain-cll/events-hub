@@ -91,6 +91,36 @@ deux livraisons concurrentes ne peuvent pas gagner toutes les deux. Un échec
 d'écriture relâche la réservation, sans quoi le rejeu de Stripe, seul filet
 restant, serait pris pour un doublon.
 
+## La lecture : `GET /v1/projects/:id/revenue/campaigns`
+
+Le revenu croisé à l'acquisition, et **une seule question à la fois**. `kind`
+choisit le type additionné — `new`, `recurring`, `change`, `one_time` — et la
+réponse rend le type retenu dans `eventType` : un chiffre dont on ne peut pas
+nommer l'origine ne vaut pas mieux qu'un chiffre faux.
+
+La campagne rendue est celle de la **première visite** du visiteur, pas de celle
+où il a payé. C'est un modèle d'attribution assumé — *first touch* — et il
+répond à « quelle campagne m'amène des clients », pas à « quelle page a conclu ».
+Elle est **lue** à chaque appel, jamais gelée sur l'événement : `attribute()`
+rattache des paiements rétroactivement, donc la première visite d'un visiteur
+devient légitimement connaissable après coup.
+
+Trois listes, et les deux dernières ne sont pas un reste :
+
+| Liste | Ce qu'elle porte |
+|---|---|
+| `campaigns` | le classement, coupé à `limit` |
+| `direct` | des visiteurs **connus**, venus sans campagne |
+| `unattributed` | des paiements qu'aucun parcours ne réclame |
+
+Les afficher ensemble est la condition pour que le classement soit lisible :
+annoncer « 12 k€ venus de Google » sans dire que 30 k€ ne sont rattachés à rien
+fait lire une part comme un total.
+
+Les montants sortent **en centimes, par devise**, tels que Stripe les écrit.
+Deux devises font deux lignes : les additionner demanderait un taux de change,
+donc une date de taux, donc une décision qui n'appartient pas à ce module.
+
 ## Pas encore fait
 
 Le **rattrapage d'historique à la connexion** : brancher un compte n'importe rien

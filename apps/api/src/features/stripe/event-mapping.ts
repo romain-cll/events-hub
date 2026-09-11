@@ -47,6 +47,36 @@ const BY_BILLING_REASON: Partial<
 };
 
 /**
+ * Les deux clés sous lesquelles le montant d'un paiement est rangé.
+ *
+ * Nommées ici parce que c'est ici qu'elles sont écrites : une lecture qui les
+ * recopierait chez elle divergerait le jour où `propertiesOf` change d'avis, et
+ * rendrait alors des totaux à zéro sans que rien n'échoue.
+ */
+export const AMOUNT_KEY = 'payment.amount';
+export const CURRENCY_KEY = 'payment.currency';
+
+/**
+ * Quel type d'événement répond à quelle question de revenu.
+ *
+ * **Un paiement produit plusieurs événements Stripe**, tous porteurs du même
+ * montant : additionner « ce qui porte un montant » compterait le même euro
+ * quatre fois. Une lecture de revenu vise donc un type, et ce tableau est le
+ * seul endroit où le choix est écrit.
+ *
+ * `one_time` vise le checkout parce que Stripe ne dit rien d'autre d'un
+ * paiement ponctuel — il n'a pas de `billing_reason`. Les quatre ne
+ * s'additionnent pas : un abonnement pris au checkout produit à la fois un
+ * `started` et un `checkout.session.completed`.
+ */
+export const TYPE_BY_REVENUE_KIND = {
+  new: `${PREFIX}.subscription.started`,
+  recurring: `${PREFIX}.subscription.renewed`,
+  change: `${PREFIX}.subscription.changed`,
+  one_time: `${PREFIX}.checkout.session.completed`,
+} as const;
+
+/**
  * Le type d'événement du hub pour un webhook Stripe donné.
  *
  * `event.type` de Stripe est déjà pointé (`invoice.paid`), donc le préfixe
@@ -100,8 +130,8 @@ export function propertiesOf(event: Stripe.Event): Record<string, unknown> {
           // En **centimes**, comme Stripe les donne. Convertir ici ferait entrer
           // des flottants dans une donnée comptable, et chaque devise n'a pas le
           // même nombre de décimales — c'est à l'affichage de trancher.
-          'payment.amount': amount,
-          'payment.currency': currencyOf(object),
+          [AMOUNT_KEY]: amount,
+          [CURRENCY_KEY]: currencyOf(object),
         }),
   };
 }
