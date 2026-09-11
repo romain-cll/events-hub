@@ -299,6 +299,21 @@ export interface EntryCampaignRanking {
 }
 
 /**
+ * La **première visite** d'un visiteur, telle que la lecture la rend.
+ *
+ * Ce qu'une cohorte demande, et rien de plus : quand il est arrivé, et par où.
+ * Le reste de son parcours ne la regarde pas — c'est un axe d'acquisition, pas
+ * un profil.
+ */
+export interface EntryVisit {
+  /** Le début de sa toute première session, sans borne de fenêtre. */
+  startedAt: Date;
+  campaign: SessionCampaign | null;
+  /** Le pays de cette première visite, `null` si la base GeoIP n'a rien dit. */
+  countryCode: string | null;
+}
+
+/**
  * Recompose le triplet à partir des trois colonnes plates du groupement.
  *
  * Les trois à `null` valent « pas de campagne », pas « campagne aux champs
@@ -1197,6 +1212,84 @@ export class EventStore {
     ]);
 
     return { rows: ranked.map(toTotals), others: rest.map(toTotals) };
+  }
+
+  /**
+   * La première visite de chacun de ces visiteurs, quand on en a une.
+   *
+   * ## Pourquoi le Core, encore
+   *
+   * Parce que la table `sessions` porte la clé, et qu'aucun module n'a le droit
+   * de la nommer. L'appelant arrive avec des clés qu'il n'a pas fabriquées — le
+   * Core les a dérivées pour lui — et repart avec des dates et des libellés.
+   *
+   * ## Sans fenêtre, délibérément
+   *
+   * Une cohorte d'acquisition demande **quand quelqu'un est arrivé**, pas s'il
+   * est arrivé pendant la période qu'on regarde. Borner ici ferait entrer dans
+   * la cohorte de mars un visiteur de janvier, au motif que la lecture commence
+   * en mars — et la rétention mesurée serait celle d'une population qui n'existe
+   * pas.
+   *
+   * ## Ce que `distinct on` garantit
+   *
+   * Une ligne par visiteur, la plus ancienne, départagée par `id` quand deux
+   * sessions partagent l'instant. C'est le même ordre total que partout
+   * ailleurs : deux appels rendent la même première visite.
+   *
+   * Les visiteurs sans aucune visite ne sont **pas** dans la carte rendue.
+   * L'absence est une réponse — un client qui n'a jamais été vu par le
+   * navigateur n'a pas de cohorte, et lui en inventer une fausserait toutes
+   * celles qui l'entourent.
+   */
+  async entryVisits(
+    projectId: string,
+    visitorKeys: string[],
+  ): Promise<Map<string, EntryVisit>> {
+    if (visitorKeys.length === 0) return new Map();
+
+    const rows = await this.db
+      .selectDistinctOn([sessions.visitorKey], {
+        visitorKey: sessions.visitorKey,
+        startedAt: sessions.startedAt,
+        countryCode: sessions.countryCode,
+        campaignSource: sessions.campaignSource,
+        campaignMedium: sessions.campaignMedium,
+        campaignName: sessions.campaignName,
+      })
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.projectId, projectId),
+          inArray(sessions.visitorKey, visitorKeys),
+          // Un robot n'a pas de cohorte. Le filtre des lectures d'événements ne
+          // s'applique pas ici — on ne lit pas `events` — donc il est réécrit.
+          eq(sessions.isBot, false),
+        ),
+      )
+      .orderBy(
+        asc(sessions.visitorKey),
+        asc(sessions.startedAt),
+        asc(sessions.id),
+      );
+
+    return new Map(
+      rows.map((row) => [
+        row.visitorKey,
+        {
+          startedAt: row.startedAt,
+          countryCode: row.countryCode,
+          campaign:
+            row.campaignSource ?? row.campaignMedium ?? row.campaignName
+              ? {
+                  source: row.campaignSource,
+                  medium: row.campaignMedium,
+                  name: row.campaignName,
+                }
+              : null,
+        },
+      ]),
+    );
   }
 
   /**

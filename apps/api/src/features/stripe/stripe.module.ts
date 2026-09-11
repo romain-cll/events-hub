@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 
+import { CohortsService } from './cohorts.service';
+import { MovementsService } from './movements.service';
 import { CoreModule } from '../../core/core.module';
 import { EventsModule } from '../../events/events.module';
 import { IntegrationsModule } from '../../integrations/integrations.module';
@@ -28,6 +30,12 @@ import { SubscriptionStore } from './subscription-store.service';
 @Module({
   imports: [CoreModule, EventsModule, IntegrationsModule, ProjectsModule],
   controllers: [StripeController, RevenueController],
-  providers: [StripeService, RevenueService, SubscriptionStore],
+  providers: [
+    StripeService,
+    RevenueService,
+    CohortsService,
+    MovementsService,
+    SubscriptionStore,
+  ],
 })
 export class StripeModule {}

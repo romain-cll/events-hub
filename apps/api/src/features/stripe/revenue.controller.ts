@@ -12,10 +12,16 @@ import { z } from 'zod';
 
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import { ProjectMemberGuard } from '../../projects/project-member.guard';
+import { CohortsService, type CohortsPage } from './cohorts.service';
 import {
   revenueCampaignsSchema,
+  revenueCohortsSchema,
+  revenueMovementsSchema,
   type RevenueCampaignsDto,
+  type RevenueCohortsDto,
+  type RevenueMovementsDto,
 } from './dto/revenue-query.dto';
+import { MovementsService, type MovementsPage } from './movements.service';
 import { RevenueService, type CampaignRevenuePage } from './revenue.service';
 import { StripeService, type SyncReport } from './stripe.service';
 
@@ -37,6 +43,8 @@ import { StripeService, type SyncReport } from './stripe.service';
 export class RevenueController {
   constructor(
     private readonly revenue: RevenueService,
+    private readonly cohortsReading: CohortsService,
+    private readonly movementsReading: MovementsService,
     private readonly stripe: StripeService,
   ) {}
 
@@ -54,6 +62,38 @@ export class RevenueController {
     query: RevenueCampaignsDto,
   ): Promise<CampaignRevenuePage> {
     return this.revenue.campaigns(projectId, query);
+  }
+
+  /**
+   * `GET /v1/projects/:projectId/revenue/cohorts` — qui reste, et depuis quand.
+   *
+   * La fenêtre borne les **mois d'acquisition**, pas les paiements observés :
+   * une cohorte de mars suivie six mois regarde jusqu'en septembre, quelle que
+   * soit la borne haute demandée.
+   */
+  @Get('cohorts')
+  cohorts(
+    @Param('projectId', new ZodValidationPipe(z.uuid())) projectId: string,
+    @Query(new ZodValidationPipe(revenueCohortsSchema))
+    query: RevenueCohortsDto,
+  ): Promise<CohortsPage> {
+    return this.cohortsReading.cohorts(projectId, query);
+  }
+
+  /**
+   * `GET /v1/projects/:projectId/revenue/movements` — qui entre, qui sort.
+   *
+   * Trois nombres bruts par mois, et aucun taux : le churn se divise de
+   * plusieurs façons défendables, et en figer une ici priverait les autres de
+   * leurs termes.
+   */
+  @Get('movements')
+  movements(
+    @Param('projectId', new ZodValidationPipe(z.uuid())) projectId: string,
+    @Query(new ZodValidationPipe(revenueMovementsSchema))
+    query: RevenueMovementsDto,
+  ): Promise<MovementsPage> {
+    return this.movementsReading.movements(projectId, query);
   }
 
   /**

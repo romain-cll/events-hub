@@ -135,3 +135,94 @@ export const syncReportSchema = z.object({
 });
 
 export type SyncReport = z.infer<typeof syncReportSchema>;
+
+/**
+ * Une cohorte d'acquisition : ceux qui sont arrivés le même mois.
+ *
+ * ⚠️ **La courbe peut monter**, et ce n'est pas une anomalie. La cohorte est
+ * celle de l'**acquisition**, pas de l'abonnement : quelqu'un vu en mars qui
+ * s'abonne en juin entre dans la cohorte de mars et n'apparaît qu'en M+3. C'est
+ * exactement ce qu'on veut voir — le délai entre la découverte et l'achat — là
+ * où une cohorte d'abonnement part de cent pour cent par construction et le
+ * masque.
+ *
+ * ⚠️ **`null` n'est pas zéro** dans `active` : c'est un mois qui n'est pas
+ * écoulé, donc une cellule qu'aucune mesure ne couvre encore. Les confondre
+ * dessine une falaise au bord de la matrice.
+ *
+ * ⚠️ L'état d'abonnement est une **approximation connue** : Stripe n'expose
+ * aucun historique de statut, donc un abonnement suspendu puis repris compte
+ * comme actif tout du long. Le prédicat ne voit que le début et la fin réelle.
+ */
+export const cohortSchema = z.object({
+  /** Le mois de première visite, en UTC : `2026-03`. */
+  month: z.string(),
+  /** Clients dont la première visite tombe ce mois-là. */
+  customers: z.number(),
+  /** Ceux d'entre eux qui ont pris un abonnement, un jour, même résilié depuis. */
+  converted: z.number(),
+  /** Abonnés à la clôture de M+0, M+1, … M+`depth`. */
+  active: z.array(z.number().nullable()),
+});
+
+export type Cohort = z.infer<typeof cohortSchema>;
+
+/**
+ * `GET /v1/projects/:projectId/revenue/cohorts` — la matrice de rétention.
+ *
+ * `unmeasured` n'est pas un détail de bas de page : c'est le nombre de clients
+ * qu'aucune cohorte ne contient, faute de première visite connue — antérieurs à
+ * l'installation, ou sans consentement. Une matrice qui ne couvre qu'un tiers
+ * des clients ressemble, sans lui, à une matrice qui les couvre tous.
+ */
+export const cohortsPageSchema = z.object({
+  /** Borne incluse : le premier mois de cohorte rendu. */
+  from: z.iso.datetime({ offset: true }),
+  /** Borne incluse : le dernier. */
+  to: z.iso.datetime({ offset: true }),
+  depth: z.number(),
+  cohorts: z.array(cohortSchema),
+  unmeasured: z.number(),
+});
+
+export type CohortsPage = z.infer<typeof cohortsPageSchema>;
+
+/**
+ * Le mouvement d'un mois : qui entre, qui sort, qui reste.
+ *
+ * ⚠️ **Aucun taux.** Le churn se divise d'au moins trois façons défendables —
+ * par les actifs du début de mois, par leur moyenne, par la cohorte — et en
+ * figer une ici priverait les autres de leurs termes. Le lecteur divise ce qu'il
+ * veut par ce qu'il veut.
+ *
+ * ⚠️ `active` n'est pas `précédent + started − ended` : un abonnement commencé
+ * et résilié dans le même mois compte dans les deux mouvements et dans aucun
+ * solde. L'écart est réel, et le combler par un cumul en effacerait la cause.
+ *
+ * ⚠️ Une **pause** ne produit ni sortie ni entrée : Stripe n'expose aucun
+ * historique de statut, et ce qui est stocké est un début et une fin réelle.
+ */
+export const movementSchema = z.object({
+  /** Le mois UTC : `2026-03`. */
+  month: z.string(),
+  started: z.number(),
+  ended: z.number(),
+  active: z.number(),
+});
+
+export type Movement = z.infer<typeof movementSchema>;
+
+/**
+ * `GET /v1/projects/:projectId/revenue/movements` — le churn, mois par mois.
+ *
+ * Seuls les mois **clos** sont rendus : un mois en cours afficherait des
+ * départs sans les entrées qui n'ont pas encore eu lieu, ce qui ressemble à une
+ * hémorragie et n'en est pas une.
+ */
+export const movementsPageSchema = z.object({
+  from: z.iso.datetime({ offset: true }),
+  to: z.iso.datetime({ offset: true }),
+  movements: z.array(movementSchema),
+});
+
+export type MovementsPage = z.infer<typeof movementsPageSchema>;

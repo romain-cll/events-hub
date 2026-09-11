@@ -150,6 +150,35 @@ Les montants sortent **en centimes, par devise**, tels que Stripe les écrit.
 Deux devises font deux lignes : les additionner demanderait un taux de change,
 donc une date de taux, donc une décision qui n'appartient pas à ce module.
 
+## Les lectures de rétention
+
+`GET /revenue/cohorts` — la matrice triangulaire. Une ligne par mois de
+**première visite**, une colonne par mois écoulé depuis.
+
+Trois choses qui se lisent de travers si on ne les dit pas :
+
+- **la courbe peut monter.** La cohorte est celle de l'acquisition, pas de
+  l'abonnement : quelqu'un vu en mars qui s'abonne en juin n'apparaît qu'en M+3.
+  C'est le délai de conversion, et c'est ce qu'une cohorte d'abonnement masque en
+  partant de 100 % par construction ;
+- **`null` n'est pas zéro** — le mois n'est pas écoulé ;
+- **`unmeasured`** compte les clients sans première visite connue. Une matrice
+  qui couvre un tiers des clients ressemble, sans lui, à une matrice complète.
+
+`GET /revenue/movements` — entrées, sorties, solde, par mois. **Aucun taux** : le
+churn se divise d'au moins trois façons défendables, et en figer une priverait
+les autres de leurs termes. `active` n'est pas le cumul des mouvements — un
+abonnement pris et résilié dans le même mois compte dans les deux et dans aucun
+solde.
+
+La cohorte traverse le socle (`CoreService.firstVisits` : identifiants bruts en
+entrée, dates en sortie — la clé ne sort pas). Les mouvements, non : ils ne
+parlent que de dates d'abonnement, qui sont nos tables.
+
+⚠️ L'état d'abonnement est une **approximation connue** : Stripe n'expose aucun
+historique de statut, donc une pause ne produit ni sortie ni entrée, et un
+abonnement suspendu puis repris compte comme actif tout du long.
+
 ## Le rattrapage : `POST /v1/projects/:id/revenue/sync`
 
 Brancher un compte n'importe rien du passé. Cette route le rattrape, et sert

@@ -8,7 +8,11 @@ import { DRIZZLE, type DrizzleDatabase } from '../database/database.module';
 import { isForeignKeyViolation } from '../database/postgres-errors';
 import type { EventSource } from '../database/schema';
 import { EventTypeRegistry } from '../event-types/event-type-registry.service';
-import { EventStore, type PublicEvent } from '../events/event-store.service';
+import {
+  EventStore,
+  type EntryVisit,
+  type PublicEvent,
+} from '../events/event-store.service';
 import { GeoIpService } from '../geoip/geoip.service';
 import {
   VisitorKeyService,
@@ -270,6 +274,54 @@ export class CoreService {
     return await this.eventStore.attribute(
       eventIds,
       this.visitorKeys.computeStable(projectId, visitorId),
+    );
+  }
+
+  /**
+   * La première visite de chacun de ces visiteurs, pour qui sait déjà qui ils
+   * sont.
+   *
+   * ## Le pendant en lecture d'`attribute`
+   *
+   * Même signature morale : un module arrive avec des identifiants durables
+   * **opaques** — ceux que le site lui a donnés — et repart avec des faits. La
+   * dérivation de la clé se fait ici, comme à l'ingestion et comme au
+   * rattachement, parce que trois chemins qui dériveraient différemment
+   * seraient pires que pas de corrélation du tout.
+   *
+   * C'est ce qui permet à un module de bâtir des cohortes d'acquisition sans
+   * jamais nommer, ni pouvoir fabriquer, une clé visiteur.
+   *
+   * ## Ce que l'absence veut dire
+   *
+   * Un identifiant qui ne ressort pas de la carte n'a **aucune visite connue** :
+   * client antérieur à l'installation, ou consentement refusé jusqu'au jour du
+   * paiement. Ce n'est pas un trou à combler — c'est un fait, et c'est à
+   * l'appelant de le montrer plutôt que de le répartir.
+   */
+  async firstVisits(
+    projectId: string,
+    visitorIds: string[],
+  ): Promise<Map<string, EntryVisit>> {
+    // La clé ne quitte pas cette méthode : elle sert d'index le temps de la
+    // requête, et la carte rendue est réindexée sur ce que l'appelant connaît.
+    const byKey = new Map(
+      visitorIds.map((visitorId) => [
+        this.visitorKeys.computeStable(projectId, visitorId),
+        visitorId,
+      ]),
+    );
+
+    const visits = await this.eventStore.entryVisits(projectId, [
+      ...byKey.keys(),
+    ]);
+
+    return new Map(
+      [...visits].flatMap(([key, visit]) => {
+        const visitorId = byKey.get(key);
+
+        return visitorId ? [[visitorId, visit] as const] : [];
+      }),
     );
   }
 
