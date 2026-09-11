@@ -239,11 +239,6 @@ export async function listOrganizations(
   return response.body as Array<{ id: string; name: string; slug: string }>;
 }
 
-/** Remet le cache d'organisation à zéro — utile entre deux suites. */
-export function resetFixtures(): void {
-  sharedOrganizationId = null;
-}
-
 export { memberships, organizations };
 
 /**
