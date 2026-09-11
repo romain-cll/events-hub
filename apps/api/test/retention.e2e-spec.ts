@@ -30,23 +30,39 @@ import { createTestApp } from './harness';
  *
  * ## D'où le second passage de `test:e2e`
  *
- * Cette suite tourne **seule**, après les autres, et `package.json` l'écarte du
- * premier passage pour cette raison précise. Ce n'est pas une précaution
- * décorative : en parallèle des vingt-sept autres, elle faisait échouer une
- * suite au hasard environ un run sur cinq — jamais la même, et jamais avec un
- * message qui la désignait. Un test de rétention qui casse un test d'onboarding
- * est exactement le genre de rougeur qu'on finit par relancer sans lire.
+ * Cette suite tourne **seule**, après les autres, via
+ * `test/jest-e2e.retention.js`. Ce n'est pas une précaution décorative : en
+ * parallèle des autres, elle faisait échouer une suite au hasard environ un run
+ * sur cinq — jamais la même, et jamais avec un message qui la désignait.
  *
- * Une purge qui balaie la plateforme entière ne peut pas s'exécuter pendant que
- * d'autres suites écrivent dans les mêmes tables. La sérialiser est la
- * conséquence du choix de ne pas la cloisonner, pas un contournement de ce
- * choix.
+ * Ce qui l'impose n'est pas le périmètre de la purge, contrairement à ce qu'on
+ * pourrait croire. Aucune fixture n'a plus de vingt-cinq mois, donc `purge()`
+ * n'emporte aujourd'hui rien qui appartienne aux autres suites. Ce sont les
+ * **assertions** qui ne supportent aucune concurrence, et pour trois raisons
+ * distinctes :
+ *
+ * - `ran: true` dépend de `pg_try_advisory_lock`, pris au niveau du **cluster**.
+ *   Une autre purge en vol — un autre worker, ou l'instance de dev branchée sur
+ *   la même base — le rend faux ;
+ * - les trois zéros de la seconde passe affirment que la purge ne trouve plus
+ *   rien **nulle part**. C'est ce qui en fait un point fixe global, et ce qu'une
+ *   version bornée aux projets de la suite ne prouverait plus : un prédicat
+ *   disparu de l'anonymisation réécrirait indéfiniment des lignes situées hors
+ *   de ces projets, et resterait vert ;
+ * - `interrupted: false` dépend d'un budget consommé par le travail sur toute la
+ *   base.
+ *
+ * Les borner supprimerait la sérialisation et la garantie du même coup. C'est
+ * le prix du choix de ne pas cloisonner la purge, pas un contournement.
  *
  * ## Le cron ne tourne jamais ici
  *
- * `purge()` est appelée explicitement. Passer par `@Cron` demanderait de
- * falsifier l'horloge, et le planificateur ne dit rien de ce qu'on veut
- * éprouver — c'est le SQL qui est en jeu, pas la date de déclenchement.
+ * `purge()` est appelée explicitement, et `test/jest.setup.ts` éteint le
+ * planificateur dans toutes les suites — sans quoi une exécution qui traverse
+ * 03:15 UTC déclencherait une purge en parallèle et prendrait justement ce
+ * verrou. Passer par `@Cron` demanderait de falsifier l'horloge, et le
+ * planificateur ne dit rien de ce qu'on veut éprouver : c'est le SQL qui est en
+ * jeu, pas la date de déclenchement.
  */
 
 /**
