@@ -21,9 +21,22 @@ import { Public } from '../auth/auth.decorators';
 import { decideVisitorCookie } from './visitor-cookie';
 
 /**
- * L'événement écrit, plus l'identifiant durable du visiteur quand il en a un.
+ * L'événement écrit, sa visite, et l'identifiant durable du visiteur quand il
+ * en a un.
  *
- * ## Pourquoi il remonte
+ * ## Deux identifiants, et le site choisit lequel il joint à son paiement
+ *
+ * `visitorId` n'existe que sous consentement, et c'est le bon quand il existe :
+ * il traverse les visites, donc il attribue les renouvellements et la valeur
+ * vie. `sessionId` est toujours là, ne coûte aucun consentement puisque rien
+ * n'est inscrit sur le terminal, et n'attribue que l'achat conclu pendant la
+ * visite.
+ *
+ * L'ordre de préférence est donc : le durable s'il est là, la visite sinon.
+ * C'est au site de l'appliquer — nous rendons les deux, nous ne choisissons pas
+ * à sa place.
+ *
+ * ## Pourquoi le `visitorId` remonte
  *
  * Le SDK est le seul à ne **pas** pouvoir lire le cookie qui le porte : celui-ci
  * est posé sur notre domaine, la page tourne sur celui du site client. Sans ce

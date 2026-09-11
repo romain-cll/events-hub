@@ -36,6 +36,7 @@ const PROJET_INEXISTANT = '00000000-0000-4000-8000-000000000000';
 interface EventResponse {
   id: string;
   type: string;
+  sessionId: string | null;
   attributes: Record<string, unknown>;
   properties: Record<string, unknown>;
 }
@@ -117,6 +118,24 @@ describe('POST /v1/events (e2e)', () => {
 
       expect(asEvent(response)).not.toHaveProperty('visitorKey');
       expect(JSON.stringify(asEvent(response))).not.toContain('visitor');
+    });
+
+    it('rend la visite, la même pour deux événements qui se suivent', async () => {
+      const envoyer = () =>
+        request(app.getHttpServer())
+          .post('/v1/events')
+          .set('Origin', TEST_ORIGIN)
+          .send(payload())
+          .expect(201);
+
+      const premier = await envoyer();
+      const second = await envoyer();
+
+      expect(asEvent(premier).sessionId).toMatch(/^[0-9a-f-]{36}$/);
+      // C'est ce qui la rend utilisable pour rattacher un paiement : le site
+      // peut la lire à n'importe quel moment de la visite et obtenir la même
+      // valeur.
+      expect(asEvent(second).sessionId).toBe(asEvent(premier).sessionId);
     });
 
     it('accepte un événement sans attributes ni properties', async () => {

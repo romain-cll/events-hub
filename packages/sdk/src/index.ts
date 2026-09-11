@@ -130,6 +130,12 @@ export class Analytics {
   /** Le dernier identifiant rendu par le hub. Jamais forgé ici. */
   private visitorId: string | undefined;
   /**
+   * La visite en cours, telle que le hub l'a découpée. Jamais forgée ici non
+   * plus, et **jamais recopiée dans un cookie** : c'est ce qui lui permet
+   * d'exister sans consentement. Voir `getSessionId()`.
+   */
+  private sessionId: string | undefined;
+  /**
    * A-t-on déjà répercuté une réponse depuis le chargement de la page ?
    *
    * Sans ce drapeau, la première réponse *sans* identifiant serait confondue
@@ -176,6 +182,39 @@ export class Analytics {
    */
   getVisitorId(): string | undefined {
     return this.visitorId;
+  }
+
+  /**
+   * La visite en cours, à joindre au paiement quand il n'y a pas de
+   * consentement.
+   *
+   * ## Ce qu'elle permet, et ce qu'elle ne permet pas
+   *
+   * Elle rattache un paiement à la visite qui l'a produit, donc à la source
+   * d'où cette visite venait. Un achat conclu pendant la navigation est
+   * attribué ; un achat conclu trois jours plus tard s'attribue à la visite de
+   * ce jour-là, dont le referrer est le plus souvent vide — le trafic direct
+   * est donc sur-crédité, et le canal d'acquisition sous-crédité. Un
+   * renouvellement d'abonnement, lui, n'a aucune visite derrière lui et reste
+   * hors d'atteinte.
+   *
+   * Tout cela, `getVisitorId()` le résout — au prix d'un consentement. Préférez
+   * l'identifiant durable quand il existe, celui-ci quand il n'existe pas.
+   *
+   * ## Pourquoi il n'y a pas de cookie miroir
+   *
+   * Parce que ce serait renoncer à ce qui la rend intéressante. Le miroir de
+   * `visitorId` existe parce que sa source est un cookie de notre domaine, que
+   * le site ne peut pas lire ; ici il n'y a pas de source à recopier, et poser
+   * un cookie ferait rentrer par la fenêtre le consentement qu'on évite.
+   *
+   * Le site transmet donc cette valeur lui-même à son backend, au moment où il
+   * construit son paiement. C'est du travail pour lui, et c'est le prix.
+   *
+   * Synchrone, donc `undefined` tant qu'aucune réponse n'est revenue.
+   */
+  getSessionId(): string | undefined {
+    return this.sessionId;
   }
 
   /**
@@ -299,13 +338,14 @@ export class Analytics {
    * faire échouer un envoi qui, lui, a réussi.
    */
   private receive(body: unknown): void {
-    const visitorId =
-      typeof body === 'object' &&
-      body !== null &&
-      'visitorId' in body &&
-      typeof body.visitorId === 'string'
-        ? body.visitorId
-        : undefined;
+    // Avant la garde de recopie, et pas après : elle ne parle que du cookie
+    // miroir. Un visiteur sans consentement n'a jamais d'identifiant durable,
+    // donc la garde est vraie à chaque événement — y ranger la session
+    // reviendrait à ne l'enregistrer que pour les visiteurs consentants, c'est
+    // à dire exactement ceux qui n'en ont pas besoin.
+    this.sessionId = readString(body, 'sessionId');
+
+    const visitorId = readString(body, 'visitorId');
 
     if (this.mirrored && visitorId === this.visitorId) return;
 
@@ -334,4 +374,22 @@ export class Analytics {
       ...(campaign ? { campaign } : {}),
     };
   }
+}
+
+/**
+ * Lit une chaîne dans un corps de réponse.
+ *
+ * Défensive parce que le transport rend `unknown` : un corps vide (une origine
+ * refusée répond 204) ou une forme inattendue ne doit pas faire échouer un envoi
+ * qui, lui, a réussi. Une clé absente et une clé d'un autre type mènent au même
+ * endroit, et c'est voulu — il n'y a rien à distinguer entre les deux.
+ */
+function readString(body: unknown, key: string): string | undefined {
+  if (typeof body !== 'object' || body === null || !(key in body)) {
+    return undefined;
+  }
+
+  const value = (body as Record<string, unknown>)[key];
+
+  return typeof value === 'string' ? value : undefined;
 }

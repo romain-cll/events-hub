@@ -22,6 +22,9 @@ const ENDPOINT = 'https://hub.test/v1/events';
  * par `fetch`, mais du point de vue du produit c'est un seul flux. Deux
  * journaux séparés ne diraient rien de la séquence.
  */
+/** La visite que le hub rend à chaque réponse, avec ou sans consentement. */
+const SESSION_ID = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
+
 function createHub({
   ok = true,
   visitorId,
@@ -55,7 +58,9 @@ function createHub({
       statusText: ok ? 'Created' : 'Unprocessable Entity',
       json: () =>
         Promise.resolve(
-          identifiant ? { id: 'evt_1', visitorId: identifiant } : { id: 'evt_1' },
+          identifiant
+            ? { id: 'evt_1', sessionId: SESSION_ID, visitorId: identifiant }
+            : { id: 'evt_1', sessionId: SESSION_ID },
         ),
       text: () => Promise.resolve('{"message":"projet inconnu"}'),
     });
@@ -332,6 +337,30 @@ describe('Analytics', () => {
       await expect(analytics.track('nimporte_quoi')).rejects.toThrow(
         /422.*projet inconnu/s,
       );
+    });
+  });
+
+  describe('la visite en cours', () => {
+    it('est tenue à disposition sans consentement, et sans cookie', async () => {
+      // Le hub ne rend aucun identifiant durable ici : c'est exactement le cas
+      // d'un visiteur qui n'a rien accepté, et c'est là que la session sert.
+      await analytics.track('checkout_started');
+
+      expect(analytics.getSessionId()).toBe(SESSION_ID);
+      // Rien n'est inscrit sur le terminal, et c'est toute la propriété qui
+      // rend ce chemin utilisable sans consentement. La recopier « par
+      // symétrie » avec le visitorId la détruirait.
+      expect(document.cookie).not.toContain(SESSION_ID);
+    });
+
+    it('reste disponible après le premier événement', async () => {
+      // Le miroir du visitorId court-circuite quand rien n'a changé — sans
+      // consentement, c'est à *chaque* événement. La session ne doit pas être
+      // emportée par cette garde.
+      await analytics.track('premier');
+      await analytics.track('second');
+
+      expect(analytics.getSessionId()).toBe(SESSION_ID);
     });
   });
 

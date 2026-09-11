@@ -212,8 +212,11 @@ describe('événements sans visiteur (e2e)', () => {
     it('écrit une ligne sans session, marquée « server »', async () => {
       const projetDuCas = await nouveauProjet('sans-session');
 
-      await depuisLeServeur('deploiement', '10:00', projetDuCas.secretKey)
-        .expect(201);
+      const reponse = await depuisLeServeur(
+        'deploiement',
+        '10:00',
+        projetDuCas.secretKey,
+      ).expect(201);
 
       const [ligne] = await db
         .select({ sessionId: events.sessionId, source: events.source })
@@ -223,6 +226,9 @@ describe('événements sans visiteur (e2e)', () => {
       // `null` n'est pas une valeur manquante : il n'y avait rien à rattacher.
       expect(ligne.sessionId).toBeNull();
       expect(ligne.source).toBe('server');
+      // Et la réponse le dit aussi : la clé est présente, sa valeur est `null`.
+      // Une source serveur qui lirait une session l'aurait inventée.
+      expect((reponse.body as { sessionId: string | null }).sessionId).toBeNull();
     });
 
     it('n’ouvre aucune session, même en émettant plusieurs fois', async () => {

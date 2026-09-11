@@ -433,17 +433,32 @@ function isOlder({ occurredAt, id }: { occurredAt: Date; id: string }): SQL {
 }
 
 /**
- * Événement tel qu'il est rendu au client : tout sauf ce qui identifie.
+ * Ce que l'Event Store rend d'une ligne qu'il vient d'écrire.
  *
- * `sessionId` et `visitorKey` restent dedans. Ce sont des infrastructures
- * serveur, pas des données du site appelant, et les renvoyer donnerait à
- * n'importe quelle page un identifiant stable pour son visiteur — exactement ce
- * qu'on prend soin de ne rendre que sous consentement, et sous une autre forme.
+ * ## `visitorKey` est hors de ce type, et le restera
  *
- * `insert` liste ses colonnes une à une plutôt que de rendre la ligne entière :
- * ce type décrit ce que cette liste contient, et les deux doivent rester
- * d'accord. C'est pour ça qu'une colonne ajoutée au schéma ne s'expose pas
- * toute seule.
+ * C'est une infrastructure serveur, pas une donnée du site appelant. La rendre
+ * donnerait à n'importe quelle page un identifiant stable pour son visiteur —
+ * exactement ce qu'on prend soin de ne concéder que sous consentement, et sous
+ * une autre forme.
+ *
+ * ## `sessionId` est hors de ce type pour une autre raison, bien plus faible
+ *
+ * Parce que `insert` ne le relit pas de Postgres : l'appelant vient de le lui
+ * passer, le redemander serait payer une colonne qu'on tient déjà. Ce n'est pas
+ * une règle de confidentialité, et il ne faut pas lire l'exclusion des deux
+ * colonnes comme un seul argument — elles ne sont pas de la même nature.
+ *
+ * La session **est** rendue au site, une ligne plus haut dans la chaîne :
+ * `CoreService.ingest` la recompose depuis la valeur qu'il détient. Voir
+ * `IngestedEvent` là-bas pour ce qui l'autorise — une visite n'est pas un
+ * visiteur.
+ *
+ * ## Les colonnes sont listées une à une
+ *
+ * `insert` ne rend pas la ligne entière : ce type décrit ce que cette liste
+ * contient, et les deux doivent rester d'accord. C'est pour ça qu'une colonne
+ * ajoutée au schéma ne s'expose pas toute seule.
  */
 export type PublicEvent = Omit<Event, 'sessionId' | 'visitorKey'>;
 
