@@ -14,6 +14,7 @@ import {
   VisitorKeyService,
   type VisitorIdentity,
 } from '../privacy/visitor-key.service';
+import { UserAgentService } from '../user-agent/user-agent.service';
 import {
   SESSION_GAP_MS,
   SessionAssigner,
@@ -115,6 +116,7 @@ export class CoreService {
     @Inject(DRIZZLE) private readonly db: DrizzleDatabase,
     private readonly visitorKeys: VisitorKeyService,
     private readonly geoIp: GeoIpService,
+    private readonly userAgents: UserAgentService,
     private readonly sessionAssigner: SessionAssigner,
     private readonly eventTypes: EventTypeRegistry,
     private readonly eventStore: EventStore,
@@ -215,9 +217,15 @@ export class CoreService {
    * l'emprunter par distraction.
    *
    * L'IP et le User-Agent s'arrêtent ici : ils ne sont ni écrits, ni
-   * journalisés, ni renvoyés. Seuls en sortent la clé visiteur et trois libellés
-   * géographiques grossiers, tous non réversibles, et tous sur la ligne
-   * `sessions`. `network` sort de portée avec la requête.
+   * journalisés, ni renvoyés. Seuls en sortent la clé visiteur, trois libellés
+   * géographiques grossiers et trois libellés de client — tous non réversibles,
+   * et tous sur la ligne `sessions`. `network` sort de portée avec la requête.
+   *
+   * Les deux dérivations sont symétriques et volontairement voisines : une
+   * donnée identifiante entre, des libellés d'audience sortent, l'entrée ne
+   * survit pas. Ce n'est ni `GeoIpService` ni `UserAgentService` qui protègent
+   * quoi que ce soit — c'est cette ligne-ci, et le fait que rien en aval ne
+   * reçoive `network`.
    *
    * Les deux modes d'identification se rejoignent ici, et nulle part ailleurs.
    * En sortie il n'y a qu'une clé opaque : `SessionAssigner`, `EventStore` et
@@ -247,6 +255,7 @@ export class CoreService {
       // mémoire et synchrone : le tester ici demanderait de savoir si une
       // session existe déjà, donc de dupliquer sa décision.
       location: this.geoIp.locate(network.ip),
+      client: this.userAgents.describe(network.userAgent),
     });
   }
 

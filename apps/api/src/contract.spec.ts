@@ -12,6 +12,7 @@ import type {
   EventType as WireEventType,
   ProjectKey as WireProjectKey,
   SessionsPage as WireSessionsPage,
+  TechnologyPage as WireTechnologyPage,
 } from '@events-hub/api-contract';
 
 import type { Auth } from './auth/auth';
@@ -23,6 +24,7 @@ import type {
   LocationsPage,
   SessionsPage,
 } from './features/analytics/analytics.service';
+import type { TechnologyPage } from './features/analytics/analytics.service';
 import type { EventsPage } from './features/events/events.service';
 import type { OrganizationRow } from './organizations/organizations.service';
 import type { ProjectIngestion, ProjectRow } from './projects/projects.service';
@@ -146,6 +148,9 @@ export type IntegrationConforms = Assert<
 >;
 export type LocationsPageConforms = Assert<
   Conforms<Wire<LocationsPage>, WireLocationsPage>
+>;
+export type TechnologyPageConforms = Assert<
+  Conforms<Wire<TechnologyPage>, WireTechnologyPage>
 >;
 
 /**

@@ -77,6 +77,17 @@ export const analyticsSummarySchema = z.object({
   pageViews: z.number(),
   uniqueVisitors: z.number(),
   /**
+   * Sessions de robots **retirées** de tous les autres compteurs de ce résumé.
+   *
+   * Rendu pour que le retrait ne soit pas muet : sans lui, une vague de robots
+   * et une baisse de trafic se ressemblent exactement.
+   *
+   * ⚠️ Rupture de série : il ne monte qu'à partir de la mise en service de la
+   * détection. Les sessions antérieures sont toutes comptées comme humaines —
+   * le User-Agent qui aurait permis de les juger n'a jamais été stocké.
+   */
+  botSessions: z.number(),
+  /**
    * Sessions **terminées** n'ayant vu qu'une seule page — le numérateur du
    * taux de rebond.
    *
@@ -355,3 +366,57 @@ export const locationsPageSchema = z.object({
 });
 
 export type LocationsPage = z.infer<typeof locationsPageSchema>;
+
+/**
+ * Le grain d'un classement par technologie.
+ *
+ * `device` et non `deviceType` : c'est du vocabulaire de produit dans une URL
+ * publique, pas un nom de colonne.
+ */
+export const technologyGrainSchema = z.enum(['browser', 'os', 'device']);
+
+export type TechnologyGrain = z.infer<typeof technologyGrainSchema>;
+
+/**
+ * Une ligne de classement par technologie.
+ *
+ * Pas de qualificateur, contrairement à la géographie : deux villes homonymes
+ * ont besoin de leur pays pour ne pas fusionner, deux navigateurs du même nom
+ * *sont* le même navigateur.
+ *
+ * Aucune version n'est rendue, et il n'y en a pas en base : la version mineure
+ * est du bruit qui multiplie l'unicité d'une ligne, et celle du système est
+ * fausse — Windows 11 se déclare « Windows NT 10.0 ».
+ */
+export const technologyRowSchema = z.object({
+  value: z.string(),
+  visitors: z.number(),
+  sessions: z.number(),
+});
+
+export type TechnologyRow = z.infer<typeof technologyRowSchema>;
+
+/**
+ * Un classement par technologie et sa couverture.
+ *
+ * `unresolved` compte les visiteurs dont la valeur du grain est inconnue : la
+ * longue traîne des navigateurs qu'on ne nomme pas. Un classement qui la
+ * tairait se lirait comme s'il couvrait tout le trafic.
+ *
+ * ⚠️ **Au grain `device`, les tablettes sont sous-comptées.** Depuis iPadOS 13,
+ * Safari envoie par défaut l'en-tête d'un Mac : la majorité des iPad est rangée
+ * en `desktop`. L'information n'est pas dans la chaîne, c'est une limite du
+ * mécanisme et pas de la mesure — au même titre que la ville, qui est une
+ * estimation.
+ */
+export const technologyPageSchema = z.object({
+  from: z.iso.datetime({ offset: true }),
+  to: z.iso.datetime({ offset: true }),
+  grain: technologyGrainSchema,
+  rows: z.array(technologyRowSchema),
+  /** Le dénominateur des parts. Rendu, jamais reconstitué par somme. */
+  visitors: z.number(),
+  unresolved: z.number(),
+});
+
+export type TechnologyPage = z.infer<typeof technologyPageSchema>;

@@ -5,12 +5,13 @@ import { EventsModule } from '../events/events.module';
 import { GeoIpModule } from '../geoip/geoip.module';
 import { PrivacyModule } from '../privacy/privacy.module';
 import { SessionsModule } from '../sessions/sessions.module';
+import { UserAgentModule } from '../user-agent/user-agent.module';
 import { CoreService } from './core.service';
 
 /**
  * Le socle d'ingestion, assemblé.
  *
- * Il importe ses cinq collaborateurs et n'expose qu'`CoreService` : c'est la
+ * Il importe ses six collaborateurs et n'expose qu'`CoreService` : c'est la
  * seule façon d'écrire un événement dans le hub. Aucun controller ici — brancher
  * l'ingestion sur HTTP est le travail d'`IngestionModule`, et l'y laisser rend
  * possible un second point d'entrée (lot, file) sans toucher à ce fichier.
@@ -21,6 +22,7 @@ import { CoreService } from './core.service';
   imports: [
     PrivacyModule,
     GeoIpModule,
+    UserAgentModule,
     SessionsModule,
     EventTypesModule,
     EventsModule,

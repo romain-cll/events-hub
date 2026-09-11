@@ -400,3 +400,60 @@ Trois décisions :
 1. **quelles moyennes affiche-t-on ?** Le §7 pose les conditions — médiane plutôt que moyenne, dénominateur explicite, `sessionsWithOpenPresence` toujours à côté. Il reste à choisir.
 2. **que fait-on voir des sessions non classées ?** Les trois nombres — classées, tronquées, sans vue — ne se lisent qu'ensemble. La question est de savoir si l'UI montre la ventilation ou seulement une alerte quand « sans vue » grimpe : c'est le signal « instrumentation cassée », et le seul des trois sur lequel on peut agir.
 3. **où plafonne-t-on le nombre de lignes ?** `/analytics/sessions` n'est borné que par la fenêtre. Une pagination ou un plafond explicite devra arriver avant que le volume ne le décide à notre place — dans la même route, et en le disant dans la réponse plutôt qu'en tronquant en silence.
+
+## Technologie — navigateur, système, appareil
+
+`GET /v1/projects/:id/analytics/technology?grain=browser|os|device`. Même forme
+que `locations` : une route, trois grains, `unresolved` rendu plutôt que tu.
+
+**Ce qui est mesuré.** Trois libellés dérivés du User-Agent **à l'ouverture de la
+session**, comme la géographie l'est de l'IP. Le User-Agent lui-même n'est stocké
+nulle part — il entre dans `CoreService`, sert à dériver la clé visiteur et ces
+libellés, et meurt avec la requête.
+
+**Aucune version.** Ni celle du navigateur — la mineure est du bruit qui
+multiplie l'unicité d'une ligne de session, la majeure sert une matrice de
+compatibilité qui est un autre produit — ni celle du système, qui est **fausse** :
+Windows 11 se déclare « Windows NT 10.0 », macOS « 10_15_7 » depuis des années.
+
+**`unresolved` n'est pas une anomalie.** C'est la longue traîne des navigateurs
+qu'on ne nomme pas. La table ne reconnaît que ce qu'elle nomme, et rend `null`
+plutôt qu'un libellé faux. Un classement qui tairait ces visiteurs se lirait
+comme s'il couvrait tout le trafic.
+
+**`visitors` ne s'additionne pas** entre les lignes, pour la même raison qu'au
+classement géographique : le classement est tronqué par `limit`, et un même
+visiteur peut apparaître sous deux valeurs s'il a changé d'appareil. Le
+dénominateur est rendu à part.
+
+### ⚠️ Les tablettes sont sous-comptées
+
+Depuis iPadOS 13, Safari envoie par défaut l'en-tête d'un Mac — littéralement
+celui d'un ordinateur de bureau. La majorité des iPad est donc rangée en
+`desktop`. Aucune correction n'est possible : l'information n'est pas dans la
+chaîne. C'est du même ordre que la ville, qui est une estimation, et ça se dit à
+qui lit le chiffre.
+
+### `botSessions` — et pourquoi il est publié
+
+Les sessions de robots sont écartées **structurellement** : la condition vit dans
+`EventStore.where()`, que les neuf lectures traversent, donc aucun module ne peut
+l'oublier. Un événement sans session — un déploiement, un paiement, une sonde —
+passe sans qu'on ait à l'écrire, le `NOT EXISTS` étant vrai quand il n'y a rien à
+trouver.
+
+Mais un chiffre retiré en silence est un chiffre que personne ne sait manquant :
+sans ce compteur, une vague de robots et une baisse de trafic se ressembleraient
+exactement. Le résumé le rend donc, et c'est la seule place des robots dans le
+produit.
+
+**La détection est volontairement conservatrice.** Uniquement des robots qui se
+déclarent ; jamais une déduction par l'absence. Un faux positif ne dégrade pas une
+statistique, il **supprime** du trafic réel de tous les compteurs — et un
+User-Agent vide ou inhabituel n'est pas un robot, c'est un visiteur qu'on ne sait
+pas nommer.
+
+**⚠️ Rupture de série.** `botSessions` ne monte qu'à partir de la mise en service
+de la détection. Toutes les sessions antérieures sont comptées comme humaines, et
+le resteront : le User-Agent qui aurait permis de les juger n'a jamais été
+stocké. Ce n'est pas une invasion soudaine, c'est une mesure qui commence.

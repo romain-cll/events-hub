@@ -77,6 +77,15 @@ export type AnalyticsWindowDto = z.output<typeof analyticsWindowSchema>;
 export const LOCATION_GRAINS = ['country', 'region', 'city'] as const;
 
 /**
+ * Les trois grains de technologie, et la même double fermeture.
+ *
+ * `device` côté requête, `deviceType` côté colonne : le premier est du
+ * vocabulaire de produit, le second de schéma, et `TECHNOLOGY_COLUMNS` traduit.
+ * Les confondre ferait entrer un nom de colonne dans une URL publique.
+ */
+export const TECHNOLOGY_GRAINS = ['browser', 'os', 'device'] as const;
+
+/**
  * Le plafond du nombre de lignes rendues.
  *
  * Deux cent cinquante, parce que c'est assez pour **tous** les pays du monde —
@@ -125,3 +134,32 @@ export const analyticsLocationsSchema = z
 
 /** Requête de classement géographique, validée et résolue. */
 export type AnalyticsLocationsDto = z.output<typeof analyticsLocationsSchema>;
+
+/**
+ * Le classement par technologie, même forme et même plafond.
+ *
+ * Le défaut est `browser` parce que c'est la question qu'on pose en premier
+ * d'un navigateur. Le plafond de `limit` est celui des autres classements : il
+ * n'existe pas deux cent cinquante navigateurs, mais un plafond partagé se
+ * change à un seul endroit.
+ */
+export const analyticsTechnologySchema = z
+  .strictObject({
+    from: instant.optional(),
+    to: instant.optional(),
+    grain: z.enum(TECHNOLOGY_GRAINS).default('browser'),
+    limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(10),
+  })
+  .transform(({ grain, limit, ...window }) => ({
+    ...resolve(window),
+    grain,
+    limit,
+  }))
+  .refine(({ from, to }) => from <= to, {
+    message: '`from` doit être antérieur ou égal à `to`.',
+  });
+
+/** Requête de classement par technologie, validée et résolue. */
+export type AnalyticsTechnologyDto = z.output<
+  typeof analyticsTechnologySchema
+>;

@@ -4,6 +4,7 @@ import { and, asc, desc, eq, gt, inArray, lte, sql } from 'drizzle-orm';
 import type { DrizzleTransaction } from '../database/database.module';
 import { events, sessions } from '../database/schema';
 import type { Location } from '../geoip/geoip.service';
+import type { Client } from '../user-agent/user-agent.service';
 
 /**
  * L'inactivité maximale à l'intérieur d'une session.
@@ -47,6 +48,20 @@ export interface SessionCandidate {
    * à la troisième page ».
    */
   location?: Location;
+  /**
+   * Avec quoi il navigue, dérivé de son User-Agent par `UserAgentService`.
+   *
+   * **Utilisée à l'ouverture seulement**, comme `location` et pour la même
+   * raison : c'est un attribut de la visite. La réécrire à chaque événement la
+   * ferait osciller au fil d'une mise à jour de navigateur, pour un gain nul —
+   * aucune lecture ne demande « avec quoi naviguait-il à la troisième page ».
+   *
+   * Le cas ne se présente d'ailleurs presque jamais : en mode dérivé, le
+   * User-Agent entre dans la clé visiteur, donc deux en-têtes différents
+   * ouvrent deux sessions. Seul un visiteur consenti peut changer de navigateur
+   * en cours de visite — le premier gagne.
+   */
+  client?: Client;
 }
 
 /** Un voisin : son instant et la session à laquelle il appartient. */
@@ -141,6 +156,7 @@ export class SessionAssigner {
       fallbackKey,
       occurredAt,
       location,
+      client,
     }: SessionCandidate,
   ): Promise<string> {
     // Triées, et c'est la seule chose qui compte : deux requêtes du même
@@ -177,7 +193,7 @@ export class SessionAssigner {
     if (joinsPrevious) return this.extend(tx, previous.sessionId, occurredAt);
     if (joinsNext) return this.extend(tx, next.sessionId, occurredAt);
 
-    return this.open(tx, projectId, visitorKey, occurredAt, location);
+    return this.open(tx, projectId, visitorKey, occurredAt, location, client);
   }
 
   /** L'écart entre un voisin et l'événement tient-il dans une session ? */
@@ -256,6 +272,7 @@ export class SessionAssigner {
     visitorKey: string,
     occurredAt: Date,
     location?: Location,
+    client?: Client,
   ): Promise<string> {
     const [session] = await tx
       .insert(sessions)
@@ -266,6 +283,10 @@ export class SessionAssigner {
         countryCode: location?.countryCode,
         region: location?.region,
         city: location?.city,
+        browser: client?.browser,
+        os: client?.os,
+        deviceType: client?.deviceType,
+        isBot: client?.isBot,
       })
       .returning({ id: sessions.id });
 

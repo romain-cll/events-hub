@@ -5,6 +5,7 @@ import type { EventTypeRegistry } from '../event-types/event-type-registry.servi
 import type { EventStore } from '../events/event-store.service';
 import type { GeoIpService, Location } from '../geoip/geoip.service';
 import { VisitorKeyService } from '../privacy/visitor-key.service';
+import type { Client } from '../user-agent/user-agent.service';
 import type {
   SessionAssigner,
   SessionCandidate,
@@ -48,6 +49,13 @@ const TRENTE_MINUTES = 30 * 60 * 1000;
 
 const UNKNOWN: Location = { countryCode: null, region: null, city: null };
 
+const UNKNOWN_CLIENT: Client = {
+  browser: null,
+  os: null,
+  deviceType: null,
+  isBot: false,
+};
+
 /** Un `CoreService` dont seuls la clé visiteur et l'assigneur sont réels. */
 function coreAvec(
   visitorKeys: VisitorKeyService,
@@ -65,6 +73,9 @@ function coreAvec(
     // ne sait rien suffit, et évite de faire dépendre un test de décision d'un
     // fichier de 124 Mo.
     { locate: () => UNKNOWN } as unknown as GeoIpService,
+    // La dérivation du client ne joue aucun rôle dans ce que ce fichier
+    // éprouve : un service qui ne reconnaît rien suffit.
+    { describe: () => UNKNOWN_CLIENT },
     { assign } as unknown as SessionAssigner,
     // Le registre des types est appelé sur les deux chemins, mais ce fichier
     // n'éprouve pas ce qu'il inscrit : un double muet suffit.

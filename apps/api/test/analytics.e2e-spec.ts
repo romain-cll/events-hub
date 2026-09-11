@@ -219,11 +219,14 @@ describe('GET /v1/projects/:projectId/analytics — topPages (e2e)', () => {
       expect(second).toEqual(premier);
     });
 
-    it('rend exactement les huit champs promis, et pas de série', async () => {
+    it('rend exactement les neuf champs promis, et pas de série', async () => {
       // `interval` et `timeseries` ont existé jusqu'à l'étape 33. Le découpage
       // dans le temps appartient au lecteur, qui reçoit des sessions datées par
       // la route voisine — cette route-ci ne rend que des agrégats de période.
       expect(Object.keys(await summarize(FENETRE)).sort()).toEqual([
+        // Les sessions de robots, retirées de tous les autres compteurs par
+        // `EventStore.where()`. Rendu pour que le retrait ne soit pas muet.
+        'botSessions',
         'bounces',
         'from',
         'pageViews',

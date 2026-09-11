@@ -133,20 +133,28 @@ export const SESSION_COLUMNS = {
   countryCode: sessions.countryCode,
   region: sessions.region,
   city: sessions.city,
+  browser: sessions.browser,
+  os: sessions.os,
+  deviceType: sessions.deviceType,
 } as const;
 
 export type SessionColumn = keyof typeof SESSION_COLUMNS;
 
-/** Une ligne de classement géographique. */
+/** Une ligne de classement par attribut de session. */
 export interface SessionValueCount {
   /**
-   * Toujours rendu, quel que soit le grain.
+   * La seconde colonne qui départage, quand l'appelant en demande une.
    *
-   * Sans lui, deux villes homonymes dans deux pays fusionneraient en une ligne
-   * — et le planisphère n'aurait rien sur quoi se joindre.
+   * Elle existe pour la géographie : sans elle, deux villes homonymes dans deux
+   * pays fusionneraient en une ligne, et le planisphère n'aurait rien sur quoi
+   * se joindre. Un classement par navigateur n'a rien à départager — l'appelant
+   * n'en demande pas, et le champ vaut `null`.
+   *
+   * Le nom est neutre exprès : c'est le socle, et rien ici ne sait ce qu'est un
+   * pays.
    */
-  countryCode: string | null;
-  /** La valeur du grain demandé. Égale à `countryCode` au grain pays. */
+  qualifier: string | null;
+  /** La valeur du grain demandé. */
   value: string;
   visitors: number;
   sessions: number;
@@ -169,6 +177,15 @@ export interface SessionValueRanking {
 /** Sur quelle colonne de session porte le classement, et jusqu'où. */
 export interface SessionValueSelector {
   column: SessionColumn;
+  /**
+   * La colonne qui départage les homonymes, quand il y en a.
+   *
+   * Absente, le classement ne groupe que sur `column` et `qualifier` vaut
+   * `null`. C'est le cas par défaut : la plupart des grains n'ont rien à
+   * départager, et rendre un champ qui ne veut rien dire obligerait chaque
+   * lecture à l'expliquer.
+   */
+  qualifier?: SessionColumn;
   /** Nombre de lignes rendues. Défaut : 10. */
   limit?: number;
 }
@@ -797,7 +814,7 @@ export class EventStore {
    */
   async topSessionValues(
     scope: EventScope,
-    { column, limit = DEFAULT_TOP_LIMIT }: SessionValueSelector,
+    { column, qualifier, limit = DEFAULT_TOP_LIMIT }: SessionValueSelector,
   ): Promise<SessionValueRanking> {
     if (!Number.isInteger(limit) || limit < 1) {
       throw new RangeError(
@@ -812,9 +829,16 @@ export class EventStore {
     // Même sous-requête que `topValues`, et pour la même raison : le groupement
     // porte ensuite sur des colonnes ordinaires, au lieu de dépendre de la façon
     // dont Drizzle qualifie une référence selon la clause.
+    // Un `null` constant quand personne ne demande de départage : le groupement
+    // porte alors sur une seule valeur, ce qui ne change rien au résultat et
+    // évite une seconde requête presque identique.
+    const secondary = qualifier
+      ? sql<string | null>`${SESSION_COLUMNS[qualifier]}`
+      : sql<string | null>`null`;
+
     const extracted = this.db
       .select({
-        countryCode: sessions.countryCode,
+        qualifier: secondary.as('qualifier'),
         value: sql<string | null>`${value}`.as('value'),
         visitorKey: sessions.visitorKey,
         sessionId: events.sessionId,
@@ -829,14 +853,14 @@ export class EventStore {
     const [rows, [missing]] = await Promise.all([
       this.db
         .select({
-          countryCode: extracted.countryCode,
+          qualifier: extracted.qualifier,
           value: sql<string>`${extracted.value}`,
           visitors,
           sessions: countDistinct(extracted.sessionId),
         })
         .from(extracted)
         .where(isNotNull(extracted.value))
-        .groupBy(extracted.countryCode, extracted.value)
+        .groupBy(extracted.qualifier, extracted.value)
         // Le second critère départage à égalité : sans lui, la coupe du `limit`
         // serait non déterministe et deux appels identiques ne rendraient pas
         // le même classement.
@@ -1119,13 +1143,77 @@ export class EventStore {
    * retrouver le total du mois.
    */
   private where(scope: EventScope): SQL | undefined {
-    return and(
+    return and(...this.scoped(scope), this.excludesBots());
+  }
+
+  /**
+   * Le périmètre sans le filtre des robots — extrait parce qu'une lecture,
+   * **une seule**, doit pouvoir regarder de l'autre côté.
+   *
+   * Elle n'existe pas pour rendre le filtre optionnel : il n'y a pas de drapeau
+   * `includeBots` sur `EventScope`, et il ne faut pas en ajouter. Un
+   * interrupteur invite à être basculé ; une méthode nommée se lit dans un diff.
+   */
+  private scoped(scope: EventScope): (SQL | undefined)[] {
+    return [
       eq(events.projectId, scope.projectId),
       gte(events.occurredAt, scope.from),
       lt(events.occurredAt, scope.to),
       scope.types ? inArray(events.type, scope.types) : undefined,
       this.honoursServerOnly(),
+    ];
+  }
+
+  /**
+   * Écarte ce qu'une session de robot a produit.
+   *
+   * ## Pourquoi ici, et pas dans les lectures
+   *
+   * Exactement l'argument de `honoursServerOnly` : les neuf lectures passent par
+   * `where`, et la table n'est lue que d'ici. Poser la règle dans chaque module
+   * demanderait à chacun de s'en souvenir, et le premier qui l'oublierait
+   * publierait des robots parmi ses visiteurs sans que rien ne le signale.
+   *
+   * ## Ce que ça ne jette pas
+   *
+   * Un `NOT EXISTS` est vrai quand il n'y a rien à trouver : un événement **sans
+   * session** — un déploiement, un paiement, une sonde — passe donc sans qu'on
+   * ait à l'écrire. C'est la même propriété que celle dont `sessionId` nullable
+   * bénéficie déjà partout ailleurs.
+   *
+   * ## Ce que ça ne doit pas faire : se taire
+   *
+   * Un chiffre retiré en silence est un chiffre que personne ne sait manquant.
+   * `countBotSessions` existe pour le publier, et le résumé le rend — sans quoi
+   * ce filtre serait indistinguable d'une baisse de trafic.
+   */
+  private excludesBots(): SQL | undefined {
+    return not(
+      exists(
+        this.db
+          .select({ one: sql`1` })
+          .from(sessions)
+          .where(and(eq(sessions.id, events.sessionId), eq(sessions.isBot, true))),
+      ),
     );
+  }
+
+  /**
+   * Ce que le filtre a retiré : le nombre de sessions de robots de la fenêtre.
+   *
+   * La seule lecture de ce fichier qui regarde délibérément de l'autre côté de
+   * `where`. Elle ne rend pas les événements, seulement leur compte de
+   * sessions : ce qu'on veut savoir d'un robot tient dans un nombre, et le
+   * reste n'intéresse personne.
+   */
+  async countBotSessions(scope: EventScope): Promise<number> {
+    const [row] = await this.db
+      .select({ sessions: countDistinct(events.sessionId) })
+      .from(events)
+      .innerJoin(sessions, eq(events.sessionId, sessions.id))
+      .where(and(...this.scoped(scope), eq(sessions.isBot, true)));
+
+    return row.sessions;
   }
 
   /**

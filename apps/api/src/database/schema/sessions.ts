@@ -1,4 +1,5 @@
 import {
+  boolean,
   char,
   index,
   pgTable,
@@ -7,6 +8,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
+import type { DeviceType } from '../../user-agent/user-agent.service';
 import { projects } from './projects';
 
 /**
@@ -94,6 +96,43 @@ export const sessions = pgTable(
      */
     region: text(),
     city: text(),
+    /**
+     * ## Avec quoi il navigue — trois libellés et un drapeau
+     *
+     * Dérivés du User-Agent à l'ouverture de la session, exactement comme les
+     * trois colonnes géographiques le sont de l'IP, et pour les mêmes raisons :
+     * c'est un attribut de la visite, pas de chacun de ses gestes.
+     *
+     * ⚠️ **Le User-Agent, lui, n'est nulle part.** Il entre dans `CoreService`,
+     * sert à dériver ces libellés et la clé visiteur, et meurt avec la requête.
+     * Aucune version n'est conservée : la mineure est du bruit qui multiplie
+     * l'unicité, et celle du système est carrément fausse — Windows 11 se
+     * déclare « Windows NT 10.0 », macOS « 10_15_7 » depuis des années. Voir
+     * `UserAgentService` pour le détail de ce qui est écarté et pourquoi.
+     *
+     * `null` est le cas normal de la longue traîne : un navigateur qu'on ne sait
+     * pas nommer. Les lectures le comptent plutôt que de le taire.
+     *
+     * ⚠️ **Les tablettes sont sous-comptées, et c'est irrécupérable.** Depuis
+     * iPadOS 13, Safari envoie par défaut l'en-tête d'un Mac : la majorité des
+     * iPad est rangée en `desktop`. L'information n'est pas dans la chaîne.
+     */
+    browser: text(),
+    os: text(),
+    deviceType: text().$type<DeviceType>(),
+    /**
+     * Un robot **qui s'est déclaré**, jamais un visiteur qu'on a jugé suspect.
+     *
+     * `NOT NULL DEFAULT false`, et le défaut est permanent plutôt qu'un
+     * échafaudage de migration : une session dont le client n'est pas
+     * identifiable n'est pas un robot, aujourd'hui comme demain.
+     *
+     * Les lectures l'écartent structurellement — la condition vit dans
+     * `EventStore.where()`, que toutes traversent — mais jamais en silence : le
+     * résumé publie le nombre de sessions ainsi retirées. Un chiffre jeté sans
+     * le dire est un chiffre que personne ne sait manquant.
+     */
+    isBot: boolean().notNull().default(false),
   },
   (table) => [
     // La recherche de voisins part toujours d'un projet et d'une clé visiteur :

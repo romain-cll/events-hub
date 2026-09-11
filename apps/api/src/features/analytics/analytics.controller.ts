@@ -4,14 +4,17 @@ import { z } from 'zod';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import {
   analyticsLocationsSchema,
+  analyticsTechnologySchema,
   analyticsWindowSchema,
   type AnalyticsLocationsDto,
+  type AnalyticsTechnologyDto,
   type AnalyticsWindowDto,
 } from './dto/analytics-query.dto';
 import {
   AnalyticsService,
   type AnalyticsSummary,
   type LocationsPage,
+  type TechnologyPage,
   type SessionsPage,
 } from './analytics.service';
 import { ProjectMemberGuard } from '../../projects/project-member.guard';
@@ -135,5 +138,20 @@ export class AnalyticsController {
     query: AnalyticsLocationsDto,
   ): Promise<LocationsPage> {
     return this.analytics.locations(projectId, query);
+  }
+
+  /**
+   * `GET /v1/projects/:projectId/analytics/technology`.
+   *
+   * Jumelle de `locations` : une route, trois grains. Trois routes rendraient la
+   * même requête sous trois noms, et il faudrait les garder d'accord.
+   */
+  @Get('technology')
+  technology(
+    @Param('projectId', new ZodValidationPipe(z.uuid())) projectId: string,
+    @Query(new ZodValidationPipe(analyticsTechnologySchema))
+    query: AnalyticsTechnologyDto,
+  ): Promise<TechnologyPage> {
+    return this.analytics.technology(projectId, query);
   }
 }
