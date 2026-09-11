@@ -63,7 +63,7 @@ describe('organisations (e2e)', () => {
       expect(orgs).toHaveLength(1);
       expect(orgs[0].name).toBe("Romain's org");
       // Le slug est généré et unique, mais il n'apparaît dans aucune URL.
-      expect(orgs[0].slug).toMatch(/^romain-[0-9a-f]{6}$/);
+      expect(orgs[0].slug).toMatch(/^romain-[0-9a-f]{12}$/);
 
       const rows = await db
         .select({ role: memberships.role })
