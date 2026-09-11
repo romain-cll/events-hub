@@ -1,15 +1,13 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
 import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import { events, projects, sessions } from '../src/database/schema';
 import { EventStore, type EventScope } from '../src/events/event-store.service';
 import { createProject, TEST_ORIGIN } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * `EventStore.topValues()`, éprouvée contre un vrai Postgres.
@@ -60,13 +58,7 @@ describe('EventStore.topValues (e2e)', () => {
     ingest(visiteur, 'page_view', { 'page.path': path }, {}, occurredAt);
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
 
     db = app.get<DrizzleDatabase>(DRIZZLE);
     store = app.get(EventStore);

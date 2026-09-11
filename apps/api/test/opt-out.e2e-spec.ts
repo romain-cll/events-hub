@@ -1,11 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
 import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import { events, projects, sessions } from '../src/database/schema';
 import {
@@ -14,6 +11,7 @@ import {
   TEST_ORIGIN,
   type TestProject,
 } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * L'opposition, éprouvée par la route.
@@ -35,13 +33,7 @@ describe('opposition au traitement (e2e)', () => {
   const created: string[] = [];
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
     db = app.get<DrizzleDatabase>(DRIZZLE);
   });
 

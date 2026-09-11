@@ -1,15 +1,13 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
 import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import { events, projects, sessions } from '../src/database/schema';
 import { EventStore } from '../src/events/event-store.service';
 import { createProject, TEST_ORIGIN } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * La promesse d'Event Stream générique, éprouvée par le comportement.
@@ -140,13 +138,7 @@ describe("contrat générique de l'Event Stream (e2e)", () => {
       });
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
 
     db = app.get<DrizzleDatabase>(DRIZZLE);
     // `EventStore` est exporté par `EventsModule` : c'est la surface de lecture

@@ -1,10 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import {
   events,
@@ -18,6 +15,7 @@ import {
   SESSION_BATCH,
 } from '../src/retention/retention.service';
 import { createProject, type TestProject } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * La purge à vingt-cinq mois, contre un vrai Postgres.
@@ -178,13 +176,7 @@ describe('purge à 25 mois (e2e)', () => {
   };
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
 
     db = app.get<DrizzleDatabase>(DRIZZLE);
     retention = app.get(RetentionService);

@@ -44,6 +44,14 @@ les deux sens** avec son schéma de `packages/api-contract`. Ajouter un champ à
 réponse sans toucher le contrat ne compile pas, exprès : le contrat a dérivé quatre
 fois avant d'exister, et c'est ce qui l'empêche.
 
+`apps/api/test/harness.e2e-spec.ts` exige qu'une suite e2e démarre son application
+par `createTestApp()` (`test/harness.ts`) et jamais elle-même. La raison est dans
+ce fichier : supertest lie et ferme un port éphémère à **chaque requête** tant que
+le serveur n'écoute pas déjà, et ce cycle échoue de lui-même une fois sur
+~66 000 — en `Parse Error: Expected HTTP/`, sur une suite au hasard, jamais celle
+qui l'a causé. Une suite qui rebâtit le démarrage à la main déstabilise donc les
+autres, pas la sienne.
+
 ## La frontière socle / métier
 
 Le **socle** — `core/`, `events/`, `event-types/`, `sessions/`, `privacy/`,

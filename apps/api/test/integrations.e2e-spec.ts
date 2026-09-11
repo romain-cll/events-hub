@@ -1,12 +1,9 @@
 import { integrationsSchema } from '@events-hub/api-contract';
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
 import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import { integrations, projects, users } from '../src/database/schema';
 import {
@@ -14,6 +11,7 @@ import {
   joinOrganization,
   signUp,
 } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * Les routes de branchement, par le fil.
@@ -43,13 +41,7 @@ describe('intégrations (e2e)', () => {
     // `read_write` pour débloquer sa connexion locale.
     process.env.STRIPE_CONNECT_SCOPE = 'read_only';
 
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
     db = app.get<DrizzleDatabase>(DRIZZLE);
   });
 

@@ -1,12 +1,9 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
 import { eq } from 'drizzle-orm';
 import Stripe from 'stripe';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import {
   events,
@@ -18,6 +15,7 @@ import {
 } from '../src/database/schema';
 import { VisitorKeyService } from '../src/privacy/visitor-key.service';
 import { createProject, type TestProject } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * Les webhooks Stripe, du corps signé jusqu'à l'événement écrit.
@@ -90,13 +88,7 @@ describe('webhooks Stripe (e2e)', () => {
     process.env.STRIPE_CONNECT_CLIENT_ID = 'ca_e2e';
     process.env.STRIPE_WEBHOOK_SECRET = WEBHOOK_SECRET;
 
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
     db = app.get<DrizzleDatabase>(DRIZZLE);
     visitorKeys = app.get(VisitorKeyService);
 
@@ -271,13 +263,7 @@ describe('attribution rétroactive (e2e)', () => {
     process.env.STRIPE_CONNECT_CLIENT_ID = 'ca_e2e';
     process.env.STRIPE_WEBHOOK_SECRET = WEBHOOK_SECRET;
 
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
     db = app.get<DrizzleDatabase>(DRIZZLE);
     visitorKeys = app.get(VisitorKeyService);
 

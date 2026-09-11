@@ -1,15 +1,13 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
 import { eq, like } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import { events, projects, sessions, users } from '../src/database/schema';
 import { createProject, TEST_ORIGIN } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * Le cycle de vie d'un compte, de bout en bout : HTTP réel, Nest réel,
@@ -52,14 +50,8 @@ describe('authentification (e2e)', () => {
   const name = 'Romain';
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
+    app = await createTestApp();
     db = app.get<DrizzleDatabase>(DRIZZLE);
-    configureApp(app);
-    await app.init();
   });
 
   afterAll(async () => {

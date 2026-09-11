@@ -1,14 +1,12 @@
-import { Test, type TestingModule } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import { events, projects, sessions } from '../src/database/schema';
 import { createProject, TEST_ORIGIN } from './fixtures';
+import { createTestApp } from './harness';
 
 /** Un UUID de projet qui n'existe pas : le corps n'a plus le droit d'en porter. */
 const PROJET_INEXISTANT = '00000000-0000-4000-8000-000000000000';
@@ -63,14 +61,7 @@ describe('POST /v1/events (e2e)', () => {
   });
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    // La même configuration que `main.ts`, sinon `/v1` n'existe pas.
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
 
     db = app.get<DrizzleDatabase>(DRIZZLE);
 

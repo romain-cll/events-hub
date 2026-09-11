@@ -1,11 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
 import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import { projects, users } from '../src/database/schema';
 import { projectKeySchema } from '@events-hub/api-contract';
@@ -16,6 +13,7 @@ import {
   signUp,
   TEST_ORIGIN,
 } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * La gestion des clés depuis le dashboard.
@@ -47,13 +45,7 @@ describe('gestion des clés de projet (e2e)', () => {
   const createdProjects: string[] = [];
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
     db = app.get<DrizzleDatabase>(DRIZZLE);
   });
 
