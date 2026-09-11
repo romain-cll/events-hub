@@ -162,9 +162,24 @@ const URL_ATTRIBUTE = 'page.url';
  * Une ligne rendue par `EventStore.events()` satisfait cette forme telle quelle,
  * elle en porte simplement davantage.
  */
+/**
+ * La campagne d'une visite, telle que le Core la rend.
+ *
+ * Redéclarée ici plutôt qu'importée, comme `ActivityEvent` l'est de `EventRow` :
+ * ce fichier ne connaît ni le Core, ni Nest, ni HTTP, et c'est ce qui le rend
+ * testable sans rien brancher.
+ */
+export interface SessionCampaign {
+  source: string | null;
+  medium: string | null;
+  name: string | null;
+}
+
 export interface ActivityEvent {
   type: string;
   sessionId: string;
+  /** Figée à l'ouverture de la session : identique sur tous ses événements. */
+  campaign: SessionCampaign | null;
   /**
    * Le début **réel** de la session, tel que le Core le porte en colonne.
    *
@@ -286,6 +301,19 @@ export interface Session {
    * lignes seraient deux visiteurs.
    */
   visitorAlias: string;
+  /**
+   * La campagne qui a amené la visite, quand il y en a une.
+   *
+   * Recopiée du premier événement vu, comme `startedAt` et pour la même raison :
+   * le Core la fige à l'ouverture de la session, donc tous ses événements la
+   * portent identique.
+   *
+   * `null` est le cas ordinaire — la plupart des visites n'arrivent par aucune
+   * campagne. C'est au lecteur de regrouper : un classement par campagne se fait
+   * sur ces lignes, sans route supplémentaire, comme les sources et les pages
+   * d'entrée.
+   */
+  campaign: SessionCampaign | null;
   /**
    * Le début **réel** de la session — le premier de ses événements, y compris
    * hors fenêtre.
@@ -461,6 +489,9 @@ export function sessionsOf(events: readonly ActivityEvent[]): Session[] {
           // Même raison que `startedAt` juste en dessous : identique sur tous
           // les événements de la session, donc le premier vu fait foi.
           visitorAlias: event.visitorAlias,
+          // Figée à l'ouverture par le Core : identique sur tous les événements
+          // de la session, donc le premier vu fait foi.
+          campaign: event.campaign,
           // Lu, pas déduit : c'est la colonne du Core, identique sur tous les
           // événements de la session. La prendre sur le premier vu suffit donc,
           // et prendre un minimum reviendrait à se protéger d'une incohérence

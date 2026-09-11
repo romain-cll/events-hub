@@ -1,3 +1,4 @@
+import type { Campaign } from '../browser/campaign.ts';
 import type { EventAttributes, EventProperties } from '../types.ts';
 
 /** L'événement tel qu'il part sur le fil, dans la forme qu'attend le hub. */
@@ -21,6 +22,17 @@ export interface EventEnvelope {
    * un site sans plateforme de consentement de ne rien câbler du tout.
    */
   consent?: boolean;
+  /**
+   * Les paramètres de campagne lus dans l'URL, s'il y en a.
+   *
+   * Champ de premier niveau, jamais une clé d'`attributes` : les deux sacs sont
+   * opaques pour le hub, et il ne peut pas y chercher ce qu'il doit exploiter.
+   * Même statut que `consent`.
+   *
+   * Absent la plupart du temps : la plupart des visites n'arrivent par aucune
+   * campagne, et la plupart des sites n'en posent jamais.
+   */
+  campaign?: Campaign;
 }
 
 /**

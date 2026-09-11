@@ -5,6 +5,7 @@ import type { DrizzleTransaction } from '../database/database.module';
 import { events, sessions } from '../database/schema';
 import type { Location } from '../geoip/geoip.service';
 import type { Client } from '../user-agent/user-agent.service';
+import type { Campaign } from './campaign';
 
 /**
  * L'inactivité maximale à l'intérieur d'une session.
@@ -62,6 +63,23 @@ export interface SessionCandidate {
    * en cours de visite — le premier gagne.
    */
   client?: Client;
+  /**
+   * D'où vient la visite, quand une campagne l'a amenée.
+   *
+   * **Utilisée à l'ouverture seulement**, comme `location` et `client`, et c'est
+   * ici que ça compte le plus. Par événement, une visite de trois pages dirait
+   * trois arrivées de la même campagne : les UTM restent dans l'URL après le
+   * premier chargement, et sur une application monopage ils y restent tant que
+   * personne n'a réécrit l'historique. L'erreur serait exactement
+   * proportionnelle à la profondeur des visites — invisible, et d'autant plus
+   * grosse que le site est bon.
+   *
+   * Ce que ça coûte : un visiteur déjà présent qui clique une publicité dans un
+   * second onglet moins de trente minutes plus tard ne change pas la campagne de
+   * sa session. C'est le prix exact de « posé à l'ouverture », le même que pour
+   * la position géographique.
+   */
+  campaign?: Campaign | null;
 }
 
 /** Un voisin : son instant et la session à laquelle il appartient. */
@@ -157,6 +175,7 @@ export class SessionAssigner {
       occurredAt,
       location,
       client,
+      campaign,
     }: SessionCandidate,
   ): Promise<string> {
     // Triées, et c'est la seule chose qui compte : deux requêtes du même
@@ -193,7 +212,15 @@ export class SessionAssigner {
     if (joinsPrevious) return this.extend(tx, previous.sessionId, occurredAt);
     if (joinsNext) return this.extend(tx, next.sessionId, occurredAt);
 
-    return this.open(tx, projectId, visitorKey, occurredAt, location, client);
+    return this.open(
+      tx,
+      projectId,
+      visitorKey,
+      occurredAt,
+      location,
+      client,
+      campaign,
+    );
   }
 
   /** L'écart entre un voisin et l'événement tient-il dans une session ? */
@@ -273,6 +300,7 @@ export class SessionAssigner {
     occurredAt: Date,
     location?: Location,
     client?: Client,
+    campaign?: Campaign | null,
   ): Promise<string> {
     const [session] = await tx
       .insert(sessions)
@@ -287,6 +315,9 @@ export class SessionAssigner {
         os: client?.os,
         deviceType: client?.deviceType,
         isBot: client?.isBot,
+        campaignSource: campaign?.source,
+        campaignMedium: campaign?.medium,
+        campaignName: campaign?.name,
       })
       .returning({ id: sessions.id });
 

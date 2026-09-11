@@ -383,6 +383,7 @@ describe('EventStore.events (e2e)', () => {
       for (const row of rows) {
         expect(Object.keys(row).sort()).toEqual([
           'attributes',
+          'campaign',
           'occurredAt',
           'properties',
           'sessionId',

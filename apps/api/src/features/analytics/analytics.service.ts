@@ -13,7 +13,11 @@ import type {
   AnalyticsWindowDto,
 } from './dto/analytics-query.dto';
 import { sourceOf, type Source } from './entry-source';
-import { sessionsOf, type SessionExit } from './sessions';
+import {
+  sessionsOf,
+  type SessionCampaign,
+  type SessionExit,
+} from './sessions';
 
 /**
  * Le seul endroit du backend qui sait ce qu'est une page vue.
@@ -374,6 +378,24 @@ export interface SessionRow {
    * bruit qui n'a rien à voir avec l'acquisition. Voir `sourceOf`.
    */
   source: Source | null;
+  /**
+   * La campagne qui a amené la visite, ou `null`.
+   *
+   * Les trois UTM tels que le navigateur les portait, normalisés par le serveur
+   * et **figés à l'ouverture** : une session ne change pas de campagne parce que
+   * le visiteur a rechargé une page avec d'autres paramètres.
+   *
+   * À côté de `source` et non à sa place : `source` dit d'où le clic vient
+   * (`google`, un referrer, direct), la campagne dit ce qu'on a acheté. Les deux
+   * se contredisent régulièrement — une annonce ouverte depuis un signet arrive
+   * en direct avec ses UTM — et c'est cette contradiction qui rend un classement
+   * par campagne différent d'un classement par provenance.
+   *
+   * Chaque champ est nullable séparément : une campagne peut porter un `source`
+   * sans `medium`, et exiger les trois écarterait des visites réelles d'un
+   * classement.
+   */
+  campaign: SessionCampaign | null;
 }
 
 /**
@@ -632,6 +654,7 @@ export class AnalyticsService {
       // deux lectures ne peuvent donc pas se contredire sur ce qui est clos.
       settled: session.endedAt < closedBefore,
       source: sourceOf(session),
+      campaign: session.campaign,
     }));
 
     // L'ordre est celui du journal, donc chronologique sur l'ouverture — hérité

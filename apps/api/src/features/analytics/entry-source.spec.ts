@@ -33,6 +33,9 @@ function event(
   return {
     sessionId: session,
     sessionStartedAt: occurredAt,
+    // Aucun de ces deux modules ne lit la campagne : `null` est le décor, et
+    // les cas qui l'exercent la posent eux-mêmes.
+    campaign: null,
     // Un visiteur par session : ce module ne lit pas l'alias, et lui donner une
     // valeur distincte par session évite de suggérer un lien qui ne joue aucun
     // rôle ici.
@@ -462,6 +465,7 @@ describe('l’ordre des sessions', () => {
     const meme = (session: string): ActivityEvent => ({
       sessionId: session,
       sessionStartedAt: instant,
+      campaign: null,
       visitorAlias: session,
       type: VIEW_TYPE,
       occurredAt: instant,

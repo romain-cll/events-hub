@@ -48,6 +48,7 @@
  * site ne doit pouvoir se faire passer pour du contexte collecté.
  */
 import { collectAttributes } from './browser/attributes.ts';
+import { collectCampaign } from './browser/campaign.ts';
 import { mirrorVisitorId } from './browser/visitor-mirror.ts';
 import { trackClicks } from './tracking/click.ts';
 import { trackOutboundClicks } from './tracking/outbound-click.ts';
@@ -314,6 +315,8 @@ export class Analytics {
   }
 
   private envelope(type: string, properties: EventProperties): EventEnvelope {
+    const campaign = collectCampaign();
+
     return {
       apiKey: this.apiKey,
       type,
@@ -324,6 +327,11 @@ export class Analytics {
       // inconnues, et une clé présente à `undefined` disparaît certes de la
       // sérialisation, mais laisse le type mentir sur ce qui part.
       ...(this.consent === undefined ? {} : { consent: this.consent }),
+      // Relue à **chaque** événement, comme les attributs : après une navigation
+      // interne l'URL a changé, et c'est celle du moment qui compte. Le hub, lui,
+      // n'en retient que celle de l'ouverture de session — décider quand figer
+      // est son travail, pas le nôtre.
+      ...(campaign ? { campaign } : {}),
     };
   }
 }

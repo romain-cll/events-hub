@@ -133,12 +133,48 @@ export const sessions = pgTable(
      * le dire est un chiffre que personne ne sait manquant.
      */
     isBot: boolean().notNull().default(false),
+    /**
+     * ## Quelle campagne a amené la visite — trois colonnes, toutes facultatives
+     *
+     * Extraites de l'URL par le SDK, normalisées par le serveur
+     * (`normalizeCampaign`), et posées **à l'ouverture de la session seulement**.
+     *
+     * Par événement, une visite de trois pages dirait trois arrivées de la même
+     * campagne : les UTM restent dans l'URL après le premier chargement. L'erreur
+     * serait proportionnelle à la profondeur des visites — invisible, et d'autant
+     * plus grosse que le site est bon.
+     *
+     * **Minuscules**, parce que `Newsletter` et `newsletter` sont la même
+     * campagne et que personne ne le dirait à un classement qui les sépare. Le
+     * prix est un libellé en minuscules à l'affichage.
+     *
+     * ⚠️ **Ce que le serveur garantit ici, et ce qu'il ne garantit pas.** Il
+     * garantit la normalisation, le moment où la valeur est figée, et sa
+     * joignabilité. Il ne garantit **pas** que ces paramètres étaient dans la
+     * barre d'adresse : le SDK pourrait les inventer, comme il pourrait déjà
+     * inventer l'URL entière. La promesse est de forme et de moment, pas de
+     * provenance.
+     *
+     * `utm_term` et `utm_content` ne sont pas ici : ils répondent à « quelle
+     * création », pas à « quelle campagne rapporte ». Ils restent entiers dans
+     * l'URL que le sac d'attributs transporte, et deux colonnes presque toujours
+     * nulles ne valent pas leur place.
+     */
+    campaignSource: text(),
+    campaignMedium: text(),
+    campaignName: text(),
   },
   (table) => [
     // La recherche de voisins part toujours d'un projet et d'une clé visiteur :
     // c'est l'index qui rend l'ingestion tenable, puisqu'elle interroge cette
     // table à chaque événement.
     index('sessions_project_visitor_idx').on(table.projectId, table.visitorKey),
+    // « Quelle campagne a amené quoi », la lecture qui porte l'acquisition
+    // payante. Cloisonnée par projet comme toutes les autres.
+    index('sessions_project_campaign_idx').on(
+      table.projectId,
+      table.campaignSource,
+    ),
   ],
 );
 

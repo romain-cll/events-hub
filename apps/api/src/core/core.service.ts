@@ -14,14 +14,37 @@ import {
   VisitorKeyService,
   type VisitorIdentity,
 } from '../privacy/visitor-key.service';
-import { UserAgentService } from '../user-agent/user-agent.service';
+import { normalizeCampaign, type RawCampaign } from '../sessions/campaign';
 import {
   SESSION_GAP_MS,
   SessionAssigner,
 } from '../sessions/session-assigner.service';
+import { UserAgentService } from '../user-agent/user-agent.service';
 
 /** Ce qu'une requête HTTP apporte du réseau, et qui ne sort jamais d'ici. */
 export type NetworkIdentity = Omit<VisitorIdentity, 'projectId'>;
+
+/**
+ * L'événement écrit, plus la visite à laquelle il appartient.
+ *
+ * ## Pourquoi la session ressort, alors que la clé visiteur ne ressort pas
+ *
+ * Parce que les deux ne disent pas la même chose. La clé visiteur désigne
+ * *quelqu'un* à travers ses visites ; la session désigne *une visite*. Elle
+ * s'éteint après trente minutes d'inactivité, et la clé dont elle est née tourne
+ * chaque nuit — un site qui la conserve ne tient donc rien qui traverse le
+ * lendemain.
+ *
+ * C'est ce qui la rend rendable, et c'est aussi tout ce qu'elle vaut : elle
+ * permet à un site de rattacher son paiement à la visite qui l'a produit, sans
+ * que rien n'ait été inscrit sur le terminal du visiteur. Là où le mode consenti
+ * achète l'attribution des renouvellements et de la valeur vie, celle-ci n'achète
+ * que l'achat immédiat — mais elle l'achète sans rien demander à personne.
+ *
+ * `null` sur le chemin serveur, qui n'a pas de visite. Ce n'est pas une valeur
+ * manquante, c'est la réponse.
+ */
+export type IngestedEvent = PublicEvent & { sessionId: string | null };
 
 /** Ce que tout événement porte, quelle que soit sa provenance. */
 interface IngestBase {
@@ -85,6 +108,17 @@ export type IngestCommand =
        * mais il a encore servi il y a quelques secondes.
        */
       retiredVisitorId?: string;
+      /**
+       * Les paramètres de campagne lus dans l'URL par le SDK, **bruts**.
+       *
+       * Sur la branche navigateur seulement : une campagne décrit d'où vient une
+       * visite, et une source serveur n'en a pas. L'union discriminée fait
+       * échouer la compilation si quelqu'un tente de lui en donner une.
+       *
+       * La normalisation est faite ici, à l'entrée du socle, et la valeur n'est
+       * écrite qu'à l'ouverture de la session — voir `SessionCandidate`.
+       */
+      campaign?: RawCampaign;
     })
   | (IngestBase & { source: 'server' });
 
@@ -138,7 +172,7 @@ export class CoreService {
    * Le chemin serveur n'a pas ce besoin, mais il partage la transaction pour que
    * l'inscription du type et l'écriture de l'événement restent solidaires.
    */
-  async ingest(command: IngestCommand): Promise<PublicEvent> {
+  async ingest(command: IngestCommand): Promise<IngestedEvent> {
     try {
       return await this.db.transaction(async (tx) => {
         // Résolue une fois, pour les deux usages qui suivent : l'identité de la
@@ -158,7 +192,7 @@ export class CoreService {
 
         await this.eventTypes.register(tx, command.projectId, command.type);
 
-        return await this.eventStore.insert(tx, {
+        const written = await this.eventStore.insert(tx, {
           projectId: command.projectId,
           type: command.type,
           occurredAt: command.occurredAt,
@@ -168,6 +202,10 @@ export class CoreService {
           sessionId,
           visitorKey,
         });
+
+        // Recomposée ici plutôt que relue : `EventStore.insert` ne la rend pas,
+        // et n'a pas à le faire — la valeur est celle qu'on vient de lui passer.
+        return { ...written, sessionId };
       });
     } catch (error) {
       if (isForeignKeyViolation(error)) {
@@ -256,6 +294,7 @@ export class CoreService {
       // session existe déjà, donc de dupliquer sa décision.
       location: this.geoIp.locate(network.ip),
       client: this.userAgents.describe(network.userAgent),
+      campaign: normalizeCampaign(command.campaign),
     });
   }
 

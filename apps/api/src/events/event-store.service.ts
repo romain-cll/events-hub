@@ -224,6 +224,18 @@ export interface ValueCount {
  * intéresse l'appelant ; lui en laisser choisir une reviendrait à lui demander
  * ce qu'il cherche, donc à commencer à le savoir.
  */
+/**
+ * La campagne d'une session, telle que la lecture la rend.
+ *
+ * Le socle ne sait pas ce qu'une campagne *signifie* — il rend trois libellés
+ * qu'il a lui-même normalisés et figés, et c'est tout ce qu'il en dit.
+ */
+export interface SessionCampaign {
+  source: string | null;
+  medium: string | null;
+  name: string | null;
+}
+
 export interface EventRow {
   /**
    * La session à laquelle l'événement appartient.
@@ -238,6 +250,16 @@ export interface EventRow {
    * sessions. La page brute, elle, les montre : voir `EventEntry`.
    */
   sessionId: string;
+  /**
+   * La campagne qui a amené la visite, quand il y en a une.
+   *
+   * Identique sur tous les événements d'une même session — elle est figée à son
+   * ouverture — donc le premier vu fait foi, comme pour `sessionStartedAt`.
+   *
+   * `null` est le cas courant : la plupart des visites n'arrivent par aucune
+   * campagne, et la plupart des sites n'en posent jamais.
+   */
+  campaign: SessionCampaign | null;
   /**
    * L'instant du **premier événement de la session**, tel que la table le porte.
    *
@@ -303,9 +325,14 @@ export interface EventRow {
  * un fil d'une page à l'autre. Il est persisté, donc stable, là où l'alias ne
  * l'est jamais.
  */
+/*
+ * `campaign` en est retiré aussi : le journal brut montre des événements, pas
+ * des visites. La campagne est un attribut de la session, et une ligne de
+ * journal en porte déjà l'identifiant pour qui veut la suivre.
+ */
 export type EventEntry = Omit<
   EventRow,
-  'visitorAlias' | 'sessionId' | 'sessionStartedAt'
+  'visitorAlias' | 'sessionId' | 'sessionStartedAt' | 'campaign'
 > & {
   /**
    * `null` quand l'événement n'a **pas de visiteur** — un deploy, un webhook de
@@ -959,6 +986,9 @@ export class EventStore {
       .select({
         sessionId: events.sessionId,
         sessionStartedAt: sessions.startedAt,
+        campaignSource: sessions.campaignSource,
+        campaignMedium: sessions.campaignMedium,
+        campaignName: sessions.campaignName,
         visitorKey: sessions.visitorKey,
         type: events.type,
         source: events.source,
@@ -983,20 +1013,48 @@ export class EventStore {
     // où `visitor_key` existe en mémoire.
     const aliases = new Map<string, string>();
 
-    return rows.map(({ visitorKey, sessionId, ...row }) => {
-      let alias = aliases.get(visitorKey);
+    return rows.map(
+      ({
+        visitorKey,
+        sessionId,
+        campaignSource,
+        campaignMedium,
+        campaignName,
+        ...row
+      }) => {
+        let alias = aliases.get(visitorKey);
 
-      if (alias === undefined) {
-        alias = randomBytes(ALIAS_BYTES).toString('base64url');
-        aliases.set(visitorKey, alias);
-      }
+        if (alias === undefined) {
+          alias = randomBytes(ALIAS_BYTES).toString('base64url');
+          aliases.set(visitorKey, alias);
+        }
 
-      // `sessionId` est déballé puis remis : Drizzle le type `string | null`
-      // parce que la colonne l'est, alors que la jointure interne juste au-dessus
-      // garantit qu'il ne l'est pas ici. Le rétablir explicitement dit où vit
-      // cette garantie, au lieu de la faire passer pour une inattention.
-      return { ...row, sessionId: sessionId as string, visitorAlias: alias };
-    });
+        // Regroupées en objet plutôt qu'en trois champs plats : une campagne est
+        // un triplet, et « source seule » n'en désigne pas une. Les trois
+        // colonnes à `null` valent « pas de campagne », pas « campagne aux
+        // champs vides » — la distinction disparaîtrait à plat.
+        const campaign =
+          campaignSource ?? campaignMedium ?? campaignName
+            ? {
+                source: campaignSource,
+                medium: campaignMedium,
+                name: campaignName,
+              }
+            : null;
+
+        // `sessionId` est déballé puis remis : Drizzle le type `string | null`
+        // parce que la colonne l'est, alors que la jointure interne juste
+        // au-dessus garantit qu'il ne l'est pas ici. Le rétablir explicitement
+        // dit où vit cette garantie, au lieu de la faire passer pour une
+        // inattention.
+        return {
+          ...row,
+          sessionId: sessionId as string,
+          campaign,
+          visitorAlias: alias,
+        };
+      },
+    );
   }
 
   /**

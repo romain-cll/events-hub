@@ -171,7 +171,7 @@ export type Source = z.infer<typeof sourceSchema>;
 /**
  * Une session, telle que `GET /analytics/sessions` la rend.
  *
- * Huit champs, et les absences sont aussi délibérées que les présences :
+ * Onze champs, et les absences sont aussi délibérées que les présences :
  * `durationMs` n'y est pas parce que les deux bornes y sont, `presences[]` non
  * plus parce que rien ne la demande encore, et `sessionId` est parti le jour
  * où `visitorAlias` est arrivé — stable d'un appel à l'autre, il aurait suffi à
@@ -270,6 +270,29 @@ export const sessionRowSchema = z.object({
    * l'acquisition.
    */
   source: sourceSchema.nullable(),
+  /**
+   * La campagne qui a amené la visite, ou `null` — le cas ordinaire.
+   *
+   * Les trois UTM (`utm_source`, `utm_medium`, `utm_campaign`) normalisés par le
+   * serveur — rognés, en minuscules — et **figés à l'ouverture de la session**.
+   * Recharger une page avec d'autres paramètres ne les change pas : la campagne
+   * décrit comment la visite a commencé, pas la dernière URL vue.
+   *
+   * ⚠️ À lire **à côté** de `source`, jamais à sa place. `source` dit d'où le
+   * clic vient, la campagne dit ce qui a été acheté, et les deux se contredisent
+   * régulièrement — une annonce rouverte depuis un signet arrive en `direct`
+   * avec ses UTM intacts.
+   *
+   * Les trois champs sont nullables séparément : exiger le triplet écarterait
+   * d'un classement les visites qui ne portent qu'un `utm_source`.
+   */
+  campaign: z
+    .object({
+      source: z.string().nullable(),
+      medium: z.string().nullable(),
+      name: z.string().nullable(),
+    })
+    .nullable(),
 });
 
 export type SessionRow = z.infer<typeof sessionRowSchema>;

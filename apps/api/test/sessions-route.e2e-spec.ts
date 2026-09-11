@@ -240,11 +240,12 @@ describe('GET /v1/projects/:projectId/analytics/sessions (e2e)', () => {
       expect(body.sessions).toHaveLength(3);
     });
 
-    it('une ligne porte exactement les dix champs promis', async () => {
+    it('une ligne porte exactement les onze champs promis', async () => {
       const [alice] = (await lire()).sessions;
 
       expect(Object.keys(alice).sort()).toEqual([
         'activeMs',
+        'campaign',
         'endedAt',
         'entryPath',
         'exit',

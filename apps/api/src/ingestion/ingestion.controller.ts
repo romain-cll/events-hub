@@ -12,9 +12,11 @@ import type { Response } from 'express';
 
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { createEventSchema, type CreateEventDto } from './dto/create-event.dto';
-import { CoreService } from '../core/core.service';
+import {
+  CoreService,
+  type IngestedEvent as CoreIngestedEvent,
+} from '../core/core.service';
 import { ProjectKeysService } from '../projects/project-keys.service';
-import type { PublicEvent } from '../events/event-store.service';
 import { Public } from '../auth/auth.decorators';
 import { decideVisitorCookie } from './visitor-cookie';
 
@@ -38,7 +40,7 @@ import { decideVisitorCookie } from './visitor-cookie';
  * qu'il tient sur le domaine du site. Sans consentement il n'y a pas
  * d'identifiant, donc il ne doit rien en rester nulle part.
  */
-export type IngestedEvent = PublicEvent & { visitorId?: string };
+export type IngestedEvent = CoreIngestedEvent & { visitorId?: string };
 
 /**
  * `version: '1'` + le versioning URI activé dans `main.ts` donnent le préfixe
@@ -117,7 +119,12 @@ export class IngestionController {
     // a le droit de servir depuis ce site. Tout est résolu ici, dans
     // l'adaptateur HTTP, parce qu'`Origin` est une notion HTTP — le socle reçoit
     // un `projectId` et une `source`, et n'a jamais à connaître d'en-tête.
-    const { apiKey, consent, ...event } = payload;
+    // `campaign` est extrait explicitement, et pas laissé filer dans `...event` :
+    // sans ça il partirait aussi sur la branche serveur, où une campagne n'a
+    // aucun sens — une source serveur n'a pas de visite d'où venir. Le
+    // détournement serait silencieux, les objets étalés n'étant pas soumis au
+    // contrôle des propriétés excédentaires.
+    const { apiKey, consent, campaign, ...event } = payload;
     const resolved = await this.projectKeys.resolve(apiKey, origin);
 
     // Origine refusée : rien n'est écrit, et on ne le dit pas.
@@ -149,6 +156,7 @@ export class IngestionController {
       ...visitor,
       projectId,
       source,
+      campaign,
       network: { ip, userAgent: userAgent ?? '' },
     });
 

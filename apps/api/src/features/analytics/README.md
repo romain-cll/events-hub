@@ -369,7 +369,7 @@ La première ne fait remonter aucune ligne, donc son coût ne dépend pas du vol
 
 **Ce que la ligne porte, et ce qu'elle écarte.**
 
-Huit champs : `visitorAlias`, `startedAt`, `endedAt`, `activeMs`, `pageViews`, `presencesStillOpen`, `entryPath`, `source`.
+Onze champs : `visitorAlias`, `startedAt`, `endedAt`, `activeMs`, `pageViews`, `presencesStillOpen`, `entryPath`, `exit`, `settled`, `source`, `campaign`.
 
 `durationMs` n'y est pas parce que les deux bornes y sont — la soustraction appartient au lecteur. La mise en garde du §6 reste entière : cette étendue part du début **réel** de la session, donc elle ne s'additionne pas entre fenêtres adjacentes. C'est désormais une note, plus une rétention, et `startedAt` est là pour que le lecteur le voie lui-même.
 
