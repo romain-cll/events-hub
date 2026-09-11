@@ -62,7 +62,7 @@ import {
 } from '#/lib/analytics-rollup';
 import { API_URL } from '#/lib/api';
 import { deploymentsQuery, type DayDeployments } from '#/lib/deployments';
-import { projectsQuery } from '#/lib/projects';
+import { ingestionQuery, projectsQuery } from '#/lib/projects';
 
 /**
  * La période vit dans l'URL plutôt que dans un `useState` : un dashboard se
@@ -286,6 +286,7 @@ function Analytics() {
   const beforeSummary = useQuery(previousSummaryQuery(projectId, days, offset));
   const deployments = useQuery(deploymentsQuery(projectId, days, offset));
   const projects = useQuery(projectsQuery());
+  const ingestion = useQuery(ingestionQuery(projectId));
 
   // Le résumé de la période précédente ne sert qu'aux évolutions des cartes du
   // haut, et il est traité comme tel : sa panne ne rejoint pas la bannière
@@ -310,8 +311,30 @@ function Analytics() {
   // un projet fraîchement installé, c'est l'état normal tant que rien n'a été
   // envoyé. On ne l'affiche qu'une fois les *deux* lectures faites — un résumé
   // à zéro pendant que le journal charge clignoterait.
-  const empty =
+  const emptyPeriod =
     summary.data?.pageViews === 0 && sessions.data?.sessions.length === 0;
+
+  // Mais « rien sur cette fenêtre » et « rien depuis toujours » sont deux états
+  // différents, et les confondre coûte la seule information qui compte : qu'un
+  // projet qui recevait ne reçoit plus. Renvoyer vers l'installation dans ce
+  // cas-là répondrait à côté, et cacherait la chute derrière un problème qui
+  // n'existe pas. Une fenêtre à zéro sur un projet vivant est une **mesure** :
+  // elle s'affiche comme telle, tableau complet, chiffres à zéro.
+  //
+  // La distinction ne se lit pas dans les analytics — une fenêtre ne sait rien
+  // de ce qui l'a précédée. Elle vient de la route d'ingestion, une existence
+  // sur tout l'historique du projet, déjà en cache pour qui arrive de l'écran
+  // d'attente.
+  //
+  // Trois états, et le troisième compte : tant que la réponse n'est pas là on
+  // ne trancherait que sur une hypothèse, et se tromper afficherait le tableau
+  // à zéro le temps d'un battement avant de le remplacer. Une panne de cette
+  // lecture penche en revanche vers le tableau : des zéros restent vrais, alors
+  // que l'écran d'installation affirmerait quelque chose qu'on ne sait pas.
+  const everIngested = ingestion.isError ? true : ingestion.data?.hasEvents;
+
+  const undecided = emptyPeriod && everIngested === undefined;
+  const neverIngested = emptyPeriod && everIngested === false;
 
   return (
     // Large, contrairement aux autres écrans. `setup` et `new` sont des
@@ -393,13 +416,13 @@ function Analytics() {
             {(summary.error ?? sessions.error)?.message}
           </EmptyDescription>
         </Empty>
-      ) : empty ? (
+      ) : undecided ? null : neverIngested ? (
         <Empty className="border">
           <EmptyHeader>
-            <EmptyTitle>Nothing over {periodLabel(days, offset)}</EmptyTitle>
+            <EmptyTitle>No event yet</EmptyTitle>
             <EmptyDescription>
-              No event reached this project over the period. If you have just
-              installed the snippet, open your site once — or widen the window.
+              Nothing has ever reached this project. If you have just installed
+              the snippet, open your site once.
             </EmptyDescription>
           </EmptyHeader>
 

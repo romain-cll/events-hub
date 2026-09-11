@@ -113,9 +113,18 @@ export class StripeService {
 
     if (!(await this.claim(event.id, projectId, customerId))) return;
 
+    let learned: CustomerLink | undefined;
+    let written: { id: string };
+
+    // ## Avant l'écriture : un échec doit relâcher la réservation
+    //
+    // Le registre est écrit avant l'ingestion pour que deux livraisons
+    // concurrentes ne puissent pas gagner toutes les deux. Tant que rien n'est
+    // écrit, un échec doit le relâcher — sinon le rejeu de Stripe, seul filet
+    // qui reste, serait pris pour un doublon et l'événement perdu en silence.
     try {
-      const learned = await this.learn(projectId, event);
-      const written = await this.core.ingest({
+      learned = await this.learn(projectId, event);
+      written = await this.core.ingest({
         projectId,
         type: typeOf(event),
         occurredAt: occurredAtOf(event),
@@ -129,18 +138,31 @@ export class StripeService {
         source: 'server',
         visitorId: await this.visitorId(projectId, event, customerId),
       });
+    } catch (error) {
+      await this.release(event.id);
 
+      throw error;
+    }
+
+    // ## Après l'écriture : plus rien ne doit lever
+    //
+    // L'événement existe désormais. Relâcher la réservation ici ferait rejouer
+    // Stripe, et le rejeu **écrirait le paiement une seconde fois** — le revenu
+    // du jour double, la donnée reste plausible, et rien ne le signale. C'est la
+    // pire panne que ce module puisse produire.
+    //
+    // Ce qui suit est donc réparable et non critique : sans le lien, cet
+    // événement échappe au rattrapage rétroactif de son client ; sans le
+    // rattrapage, les événements déjà écrits attendent la prochaine occasion. Un
+    // journal, et on continue.
+    try {
       await this.link(event.id, written.id);
 
       if (learned) await this.backfill(projectId, learned);
     } catch (error) {
-      // Le registre est écrit avant l'ingestion pour que deux livraisons
-      // concurrentes ne puissent pas gagner toutes les deux. En cas d'échec il
-      // faut le relâcher, sinon le rejeu de Stripe — le seul filet qui reste —
-      // serait pris pour un doublon et l'événement perdu en silence.
-      await this.release(event.id);
-
-      throw error;
+      this.logger.error(
+        `Webhook Stripe ${event.id} écrit, mais son rattachement a échoué : ${String(error)}. L'événement est en base ; l'attribution de ce client reste à rattraper.`,
+      );
     }
   }
 

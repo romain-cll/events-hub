@@ -165,6 +165,20 @@ describe('frontière des types d’événement', () => {
     // à lire dedans.
     const keys = [
       'page.path',
+      // `page.url` et `page.referrer` manquaient, alors que `page.path` y était
+      // depuis le début. Le test compare par `includes` : « page.url » ne
+      // contient pas « page.path », donc un service du socle qui aurait lu
+      // l'URL pour en extraire une campagne serait passé en vert. C'était un
+      // trou du garde-fou, pas une permission — l'intention est écrite juste
+      // au-dessus, les deux sacs sont opaques.
+      'page.url',
+      'page.referrer',
+      // Les paramètres de campagne vivent dans cette URL. Les nommer ici avant
+      // que quiconque ait la tentation de les y lire : ce qui les dérive est le
+      // SDK, et ce qui les range est une colonne posée par le serveur.
+      'utm_source',
+      'utm_medium',
+      'utm_campaign',
       'sdk.version',
       'navigation.type',
       'navigation.from',
