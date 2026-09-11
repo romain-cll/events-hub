@@ -38,8 +38,16 @@
  */
 const NAME = 'eh_visitor_id';
 
-/** 400 jours, comme la source — sans effet sur Safari, correct ailleurs. */
-const MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
+/**
+ * 13 mois, comme la source — sans effet sur Safari, correct ailleurs.
+ *
+ * La copie ne doit jamais survivre à ce qu'elle copie. Elle s'auto-nettoie déjà
+ * quand le hub cesse de rendre un identifiant (`mirrorVisitorId(undefined)`
+ * pose `Max-Age=0`), donc l'alignement n'est pas ce qui la borne — mais deux
+ * durées divergentes dans deux paquets sont une question qu'on poserait au
+ * prochain lecteur sans raison.
+ */
+const MAX_AGE_SECONDS = 395 * 24 * 60 * 60;
 
 /**
  * Écrit la copie, ou l'efface quand il n'y a plus d'identifiant.

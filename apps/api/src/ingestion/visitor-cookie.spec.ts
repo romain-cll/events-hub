@@ -53,19 +53,22 @@ describe('decideVisitorCookie — consentement accordé', () => {
     expect(setCookie).toContain('SameSite=None');
     expect(setCookie).toContain('Secure');
     expect(setCookie).toContain('Path=/');
-    // 400 jours : le plafond que les navigateurs appliquent de toute façon.
-    expect(setCookie).toContain(`Max-Age=${400 * 24 * 60 * 60}`);
+    // 13 mois : la durée recommandée pour un traceur, consentie ou non. Le
+    // plafond technique des navigateurs (400 jours) n'est pas le critère.
+    expect(setCookie).toContain(`Max-Age=${395 * 24 * 60 * 60}`);
   });
 
-  it('rafraîchit un identifiant déjà posé au lieu d’en forger un autre', () => {
+  it('n’écrit rien quand l’identifiant est déjà posé', () => {
     const decision = decideVisitorCookie(entete(ID), true);
 
     expect(decision.visitorId).toBe(ID);
-    // Réécrit à chaque événement : c'est ce qui fait la fenêtre glissante, et
-    // c'est là qu'est le vrai gain du consentement.
-    expect(decision.setCookie).toContain(ID);
+    // Le cœur des 13 mois : ne pas réécrire, sinon l'échéance se recharge à
+    // chaque événement et la durée ne décrit plus rien. Le cookie expire donc
+    // 13 mois après le jour de l'acceptation, pas 13 mois après la dernière
+    // visite.
+    expect(decision.setCookie).toBeUndefined();
     // Pas une bascule : le visiteur consentait déjà à l'événement précédent.
-    expect(decision.visitorIdJustGranted).toBe(false);
+    expect(decision.visitorIdJustGranted).toBeUndefined();
   });
 });
 

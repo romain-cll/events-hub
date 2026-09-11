@@ -166,7 +166,7 @@ describe('consentement et identité du visiteur (e2e)', () => {
     expect(entete).toContain('Partitioned');
     expect(entete).toContain('SameSite=None');
     expect(entete).toContain('Secure');
-    expect(entete).toContain(`Max-Age=${400 * 24 * 60 * 60}`);
+    expect(entete).toContain(`Max-Age=${395 * 24 * 60 * 60}`);
   });
 
   it('honore le cookie sans le réécrire quand le signal est absent', async () => {
@@ -190,6 +190,30 @@ describe('consentement et identité du visiteur (e2e)', () => {
     // un refus, et le cookie porte la trace du consentement antérieur.
     expect(await clesDesSessions(projet.id)).toContain(
       visitorKeys.computeStable(projet.id, identifiant),
+    );
+  });
+
+  it('ne prolonge pas l’échéance quand le consentement est réaffirmé', async () => {
+    const projet = await projetNeuf('e2e consentement — pas de glissement');
+
+    const accepte = await post(evenement(projet, { consent: true })).expect(
+      201,
+    );
+    const identifiant = identifiantPose(accepte);
+
+    // Le signal est le même qu'à la pose, et c'est tout l'intérêt du cas : un
+    // site qui câble sa plateforme de consentement renvoie `true` à *chaque*
+    // événement. Si cette réponse-là réécrivait le cookie, les 13 mois se
+    // rechargeraient indéfiniment et ne borneraient plus rien.
+    const reaffirme = await post(
+      evenement(projet, { consent: true, occurredAt: apres(60_000) }),
+      `${COOKIE}=${identifiant}`,
+    ).expect(201);
+
+    expect(poseParLaReponse(reaffirme)).toBeUndefined();
+    // L'identité, elle, ne bouge pas : ne rien réécrire n'est pas tout oublier.
+    expect((reaffirme.body as { visitorId?: string }).visitorId).toBe(
+      identifiant,
     );
   });
 

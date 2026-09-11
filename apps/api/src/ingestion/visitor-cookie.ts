@@ -37,16 +37,45 @@ import { randomUUID } from 'node:crypto';
  *   cookie ne partirait jamais.
  * - `Secure` : imposé par les deux précédents. Les navigateurs traitent
  *   `localhost` comme une origine sûre, le développement local n'en souffre pas.
- * - `Max-Age` de 400 jours : le plafond que Chrome et Firefox appliquent de
- *   toute façon, en demander plus est silencieusement tronqué. Il est réécrit à
- *   **chaque** événement, ce qui en fait une fenêtre glissante — un visiteur
- *   actif ne l'épuise jamais. C'est là qu'est le vrai gain du consentement,
- *   bien plus que dans la durée nominale.
+ * - `Max-Age` de 13 mois, **posé une seule fois**. Voir juste en dessous : la
+ *   durée et le refus de la prolonger sont la même décision.
  */
 const NAME = '__Host-eh_vid';
 
-/** 400 jours, en secondes. */
-const MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
+/**
+ * 13 mois, en secondes.
+ *
+ * ## Pourquoi 13 et pas les 400 jours que les navigateurs tolèrent
+ *
+ * Parce que le plafond technique n'est pas le plafond réglementaire. Chrome et
+ * Firefox tronquent à 400 jours ; la CNIL, elle, recommande 13 mois pour un
+ * traceur, consenti ou non. Viser le premier revenait à laisser la limite être
+ * fixée par ce que le navigateur laisse passer, ce qui n'est pas un critère.
+ *
+ * ## Et surtout : il n'est plus réécrit
+ *
+ * Il l'était à **chaque** événement, ce qui en faisait une fenêtre glissante.
+ * Un cookie « 13 mois » rechargé tous les jours ne dure pas 13 mois, il dure
+ * pour toujours — la durée nominale ne décrit alors plus rien. C'est
+ * précisément ce que la recommandation écarte : pas de prolongation automatique
+ * à chaque visite.
+ *
+ * D'où la règle, dans `decideVisitorCookie` : on n'émet un `Set-Cookie` qu'à la
+ * **pose**. Un cookie déjà présenté est honoré sans être touché, donc il expire
+ * 13 mois après le jour où le visiteur a accepté, quoi qu'il fasse ensuite.
+ *
+ * ## Ce que ça coûte, et ce n'est pas rien
+ *
+ * L'identité durable tombe à 13 mois pile. Un abonné plus ancien cesse d'être
+ * rattaché à sa visite d'acquisition : sa valeur vie se remet à courir sur une
+ * identité neuve, et l'attribution de son revenu d'origine est perdue. Aucun
+ * mécanisme ne la rattrape — c'est le prix, et il est assumé.
+ *
+ * Ce n'est pas à nous de le réduire : redemander le consentement avant
+ * l'échéance appartient à la plateforme de consentement du site, qui est le
+ * responsable de traitement. Nous, on constate la réponse.
+ */
+const MAX_AGE_SECONDS = 395 * 24 * 60 * 60;
 
 const ATTRIBUTES = 'Path=/; Secure; SameSite=None; Partitioned';
 
@@ -99,13 +128,18 @@ export function decideVisitorCookie(
   const presented = readVisitorId(cookieHeader);
 
   if (consent === true) {
-    const visitorId = presented ?? randomUUID();
+    // Déjà posé : on l'honore et on n'y touche pas. Répondre un `Set-Cookie`
+    // ici rechargerait l'échéance à chaque événement, et les 13 mois ne
+    // voudraient plus rien dire — voir `MAX_AGE_SECONDS`.
+    if (presented !== undefined) return { visitorId: presented };
+
+    const visitorId = randomUUID();
 
     return {
       visitorId,
       // Un identifiant qu'on vient de forger n'a pas de passé : c'est cet
       // événement-là, et lui seul, qui fait la bascule.
-      visitorIdJustGranted: presented === undefined,
+      visitorIdJustGranted: true,
       setCookie: `${NAME}=${visitorId}; ${ATTRIBUTES}; Max-Age=${MAX_AGE_SECONDS}`,
     };
   }

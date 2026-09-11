@@ -13,8 +13,8 @@ import { mirrorVisitorId } from './visitor-mirror.ts';
 
 const ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
-/** 400 jours, en secondes. Réécrit ici plutôt qu'importé, exprès. */
-const QUATRE_CENTS_JOURS = 34_560_000;
+/** 13 mois, en secondes. Réécrit ici plutôt qu'importé, exprès. */
+const TREIZE_MOIS = 34_128_000;
 
 const espionnerLeCookie = () => vi.spyOn(document, 'cookie', 'set');
 
@@ -32,7 +32,7 @@ describe('mirrorVisitorId', () => {
     // `SameSite=Lax` et non `None` : cette copie ne sert qu'aux requêtes du site
     // vers son propre backend.
     expect(cookie).toHaveBeenCalledWith(
-      `eh_visitor_id=${ID}; Path=/; SameSite=Lax; Secure; Max-Age=${QUATRE_CENTS_JOURS}`,
+      `eh_visitor_id=${ID}; Path=/; SameSite=Lax; Secure; Max-Age=${TREIZE_MOIS}`,
     );
   });
 
@@ -42,7 +42,7 @@ describe('mirrorVisitorId', () => {
     mirrorVisitorId(undefined);
 
     // Le cas qui compte vraiment : sans cet effacement, une copie posée avant un
-    // retrait de consentement survivrait 400 jours et continuerait de partir
+    // retrait de consentement survivrait 13 mois et continuerait de partir
     // dans les paiements du site.
     expect(cookie).toHaveBeenCalledWith(
       'eh_visitor_id=; Path=/; SameSite=Lax; Secure; Max-Age=0',
