@@ -35,6 +35,20 @@ import { createProject, type TestProject } from './fixtures';
  * toutes les dates en dur de `test/` et `src/` sont en 2026-2027). C'est une
  * contrainte permanente sur les suites à venir, pas une observation ponctuelle.
  *
+ * ## D'où le second passage de `test:e2e`
+ *
+ * Cette suite tourne **seule**, après les autres, et `package.json` l'écarte du
+ * premier passage pour cette raison précise. Ce n'est pas une précaution
+ * décorative : en parallèle des vingt-sept autres, elle faisait échouer une
+ * suite au hasard environ un run sur cinq — jamais la même, et jamais avec un
+ * message qui la désignait. Un test de rétention qui casse un test d'onboarding
+ * est exactement le genre de rougeur qu'on finit par relancer sans lire.
+ *
+ * Une purge qui balaie la plateforme entière ne peut pas s'exécuter pendant que
+ * d'autres suites écrivent dans les mêmes tables. La sérialiser est la
+ * conséquence du choix de ne pas la cloisonner, pas un contournement de ce
+ * choix.
+ *
  * ## Le cron ne tourne jamais ici
  *
  * `purge()` est appelée explicitement. Passer par `@Cron` demanderait de
