@@ -1,5 +1,4 @@
 import type { INestApplication } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
@@ -11,8 +10,7 @@ import {
 } from '@events-hub/api-contract';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { events, projects, sessions, users } from '../src/database/schema';
-import { expectMatchesContract, signUp } from './fixtures';
+import { cleanupFixtures, expectMatchesContract, signUp } from './fixtures';
 import { createTestApp } from './harness';
 
 /**
@@ -55,8 +53,6 @@ interface IngestionJson {
 describe('mise en route d’un projet (e2e)', () => {
   let app: INestApplication<App>;
   let db: DrizzleDatabase;
-  const createdUsers: string[] = [];
-  const createdProjects: string[] = [];
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -64,24 +60,9 @@ describe('mise en route d’un projet (e2e)', () => {
   });
 
   afterAll(async () => {
-    for (const id of createdProjects) {
-      await db.delete(events).where(eq(events.projectId, id));
-      await db.delete(sessions).where(eq(sessions.projectId, id));
-      await db.delete(projects).where(eq(projects.id, id));
-    }
-    // `memberships` et `organizations` partent en cascade avec l'utilisateur.
-    for (const id of createdUsers) {
-      await db.delete(users).where(eq(users.id, id));
-    }
+    await cleanupFixtures(db);
     await app.close();
   });
-
-  const register = async (name?: string) => {
-    const user = await signUp(app, name);
-    createdUsers.push(user.id);
-
-    return user;
-  };
 
   /** Les organisations du compte, telles que **notre** route les rend. */
   const myOrganizations = async (cookies: string[]) => {
@@ -104,7 +85,7 @@ describe('mise en route d’un projet (e2e)', () => {
 
   describe('GET /v1/organizations', () => {
     it('rend l’organisation née avec le compte, et le rôle qu’on y tient', async () => {
-      const user = await register('Fondatrice');
+      const user = await signUp(app, 'Fondatrice');
       const organizations = await myOrganizations(user.cookies);
 
       expect(organizations).toHaveLength(1);
@@ -113,8 +94,8 @@ describe('mise en route d’un projet (e2e)', () => {
     });
 
     it('ne montre pas les organisations des autres', async () => {
-      const premier = await register('Premiere');
-      const second = await register('Seconde');
+      const premier = await signUp(app, 'Premiere');
+      const second = await signUp(app, 'Seconde');
 
       const vues = await myOrganizations(second.cookies);
       const [sienne] = await myOrganizations(premier.cookies);
@@ -129,7 +110,7 @@ describe('mise en route d’un projet (e2e)', () => {
 
   describe('le parcours complet', () => {
     it('mène d’un compte neuf au premier événement reçu', async () => {
-      const user = await register('Nouvelle');
+      const user = await signUp(app, 'Nouvelle');
 
       // 1. L'organisation, que le dashboard doit pouvoir lire avant tout : sans
       //    elle, le champ obligatoire de la création reste vide.
@@ -143,7 +124,6 @@ describe('mise en route d’un projet (e2e)', () => {
         .expect(201);
 
       const project = expectMatchesContract(created.body, projectSchema);
-      createdProjects.push(project.id);
 
       expect(project.organizationName).toBe(organization.name);
 
@@ -187,8 +167,8 @@ describe('mise en route d’un projet (e2e)', () => {
 
   describe('GET /v1/projects/:projectId/ingestion', () => {
     it('répond 404 à un compte étranger, comme si le projet n’existait pas', async () => {
-      const proprietaire = await register('Proprio');
-      const etranger = await register('Tiers');
+      const proprietaire = await signUp(app, 'Proprio');
+      const etranger = await signUp(app, 'Tiers');
 
       const [organization] = await myOrganizations(proprietaire.cookies);
 
@@ -199,7 +179,6 @@ describe('mise en route d’un projet (e2e)', () => {
         .expect(201);
 
       const { id } = created.body as Identified;
-      createdProjects.push(id);
 
       // Le 404 est le point : distinguer « pas à vous » de « n'existe pas »
       // ferait de la route un oracle sur les identifiants qui existent.
@@ -210,7 +189,7 @@ describe('mise en route d’un projet (e2e)', () => {
     });
 
     it('répond 404 sur un identifiant qui n’est pas un UUID', async () => {
-      const user = await register('Curieuse');
+      const user = await signUp(app, 'Curieuse');
 
       // Le guard tourne avant les pipes : sans validation sur place, la valeur
       // atteindrait Postgres et sortirait en 500.
@@ -272,7 +251,7 @@ describe('mise en route d’un projet (e2e)', () => {
 
   describe('le contrat des clés', () => {
     it('refuse une clé sans origine déclarée', async () => {
-      const user = await register('Presse');
+      const user = await signUp(app, 'Presse');
       const [organization] = await myOrganizations(user.cookies);
 
       const created = await request(app.getHttpServer())
@@ -282,7 +261,6 @@ describe('mise en route d’un projet (e2e)', () => {
         .expect(201);
 
       const { id } = created.body as Identified;
-      createdProjects.push(id);
 
       // C'est ce refus qui impose au parcours de demander l'URL du site en même
       // temps que le nom : sans origine, il n'y a pas de clé à donner à l'étape
@@ -297,7 +275,7 @@ describe('mise en route d’un projet (e2e)', () => {
     });
 
     it('refuse une origine qui porte un chemin', async () => {
-      const user = await register('Colleuse');
+      const user = await signUp(app, 'Colleuse');
       const [organization] = await myOrganizations(user.cookies);
 
       const created = await request(app.getHttpServer())
@@ -307,7 +285,6 @@ describe('mise en route d’un projet (e2e)', () => {
         .expect(201);
 
       const { id } = created.body as Identified;
-      createdProjects.push(id);
 
       // Le cas exact que `parseOrigins` normalise côté dashboard : une URL
       // collée depuis la barre d'adresse. Non normalisée, elle est refusée.
@@ -320,8 +297,8 @@ describe('mise en route d’un projet (e2e)', () => {
   });
 
   it('ne rend pas la clé publique d’un projet à un étranger', async () => {
-    const proprietaire = await register('Gardienne');
-    const etranger = await register('Passant');
+    const proprietaire = await signUp(app, 'Gardienne');
+    const etranger = await signUp(app, 'Passant');
 
     const [organization] = await myOrganizations(proprietaire.cookies);
 
@@ -332,7 +309,6 @@ describe('mise en route d’un projet (e2e)', () => {
       .expect(201);
 
     const { id } = created.body as Identified;
-    createdProjects.push(id);
 
     await request(app.getHttpServer())
       .post(`/v1/projects/${id}/keys`)
@@ -354,7 +330,7 @@ describe('mise en route d’un projet (e2e)', () => {
   });
 
   it('l’ingestion reste muette pour une origine non déclarée', async () => {
-    const user = await register('Distraite');
+    const user = await signUp(app, 'Distraite');
     const [organization] = await myOrganizations(user.cookies);
 
     const created = await request(app.getHttpServer())
@@ -364,7 +340,6 @@ describe('mise en route d’un projet (e2e)', () => {
       .expect(201);
 
     const { id } = created.body as Identified;
-    createdProjects.push(id);
 
     const minted = await request(app.getHttpServer())
       .post(`/v1/projects/${id}/keys`)

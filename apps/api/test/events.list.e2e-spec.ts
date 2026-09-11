@@ -4,13 +4,13 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { events, projects, sessions } from '../src/database/schema';
+import { events } from '../src/database/schema';
 import {
   EventStore,
   type EventRow,
   type EventScope,
 } from '../src/events/event-store.service';
-import { createProject, TEST_ORIGIN } from './fixtures';
+import { TEST_ORIGIN, cleanupFixtures, createProject } from './fixtures';
 import { createTestApp } from './harness';
 
 /**
@@ -182,9 +182,7 @@ describe('EventStore.events (e2e)', () => {
   });
 
   afterAll(async () => {
-    await db.delete(events).where(eq(events.projectId, projectId));
-    await db.delete(sessions).where(eq(sessions.projectId, projectId));
-    await db.delete(projects).where(eq(projects.id, projectId));
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -411,10 +409,6 @@ describe('EventStore.events (e2e)', () => {
       });
       const chezNous = await lire(scope);
 
-      await db.delete(events).where(eq(events.projectId, voisin.id));
-      await db.delete(sessions).where(eq(sessions.projectId, voisin.id));
-      await db.delete(projects).where(eq(projects.id, voisin.id));
-
       expect(reperes(chezLeVoisin)).toEqual(['voisin']);
       expect(reperes(chezNous)).not.toContain('voisin');
     });
@@ -563,12 +557,6 @@ describe('EventStore.events (e2e)', () => {
           comportementKey,
         );
       }
-    });
-
-    afterAll(async () => {
-      await db.delete(events).where(eq(events.projectId, comportement));
-      await db.delete(sessions).where(eq(sessions.projectId, comportement));
-      await db.delete(projects).where(eq(projects.id, comportement));
     });
 
     it('rend le journal dans l’ordre où il a été vécu', async () => {

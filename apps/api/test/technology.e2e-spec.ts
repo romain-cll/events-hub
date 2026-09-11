@@ -1,13 +1,14 @@
 import { technologyPageSchema } from '@events-hub/api-contract';
 import type { INestApplication } from '@nestjs/common';
-import { eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { events, projects, sessions, users } from '../src/database/schema';
+import { events, sessions } from '../src/database/schema';
 import {
   TEST_ORIGIN,
+  cleanupFixtures,
   createProject,
   expectMatchesContract,
   joinOrganization,
@@ -51,14 +52,12 @@ describe('technologie (e2e)', () => {
   let db: DrizzleDatabase;
   let projet: TestProject;
   let lecteur: SignedUpUser;
-  const created: string[] = [];
 
   beforeAll(async () => {
     app = await createTestApp();
     db = app.get<DrizzleDatabase>(DRIZZLE);
 
     projet = await createProject(db, { name: 'e2e technologie' });
-    created.push(projet.id);
 
     // Les lectures analytiques sont derrière le guard : il faut un membre de
     // l'organisation du projet, pas seulement une session valide.
@@ -68,7 +67,12 @@ describe('technologie (e2e)', () => {
     // Trois visiteurs distincts et un robot. Le User-Agent entre dans la clé
     // visiteur : quatre en-têtes différents font quatre sessions, sans qu'on ait
     // à les fabriquer.
-    for (const ua of [CHROME_WINDOWS, SAFARI_IPHONE, FIREFOX_LINUX, GOOGLEBOT]) {
+    for (const ua of [
+      CHROME_WINDOWS,
+      SAFARI_IPHONE,
+      FIREFOX_LINUX,
+      GOOGLEBOT,
+    ]) {
       await request(app.getHttpServer())
         .post('/v1/events')
         .set('Origin', TEST_ORIGIN)
@@ -85,12 +89,7 @@ describe('technologie (e2e)', () => {
   });
 
   afterAll(async () => {
-    await db.delete(events).where(inArray(events.projectId, created));
-    await db.delete(sessions).where(inArray(sessions.projectId, created));
-    for (const id of created) {
-      await db.delete(projects).where(eq(projects.id, id));
-    }
-    await db.delete(users).where(eq(users.id, lecteur.id));
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -134,7 +133,9 @@ describe('technologie (e2e)', () => {
     const { rows } = await technology({ grain: 'browser' });
     const noms = rows.map((row) => row.value);
 
-    expect(noms).toEqual(expect.arrayContaining(['Chrome', 'Safari', 'Firefox']));
+    expect(noms).toEqual(
+      expect.arrayContaining(['Chrome', 'Safari', 'Firefox']),
+    );
     // Chrome se déclare aussi Safari, et Safari ne se déclare que lui-même :
     // trois en-têtes, trois navigateurs distincts.
     expect(rows).toHaveLength(3);

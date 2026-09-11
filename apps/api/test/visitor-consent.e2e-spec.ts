@@ -4,13 +4,14 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { events, projects, sessions } from '../src/database/schema';
+import { sessions } from '../src/database/schema';
 import { VisitorKeyService } from '../src/privacy/visitor-key.service';
 import { SESSION_GAP_MS } from '../src/sessions/session-assigner.service';
 import {
+  TEST_ORIGIN,
+  cleanupFixtures,
   cookiesOf,
   createProject,
-  TEST_ORIGIN,
   type TestProject,
 } from './fixtures';
 import { createTestApp } from './harness';
@@ -42,7 +43,6 @@ describe('consentement et identité du visiteur (e2e)', () => {
   let app: INestApplication<App>;
   let db: DrizzleDatabase;
   let visitorKeys: VisitorKeyService;
-  const created: string[] = [];
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -51,17 +51,12 @@ describe('consentement et identité du visiteur (e2e)', () => {
   });
 
   afterAll(async () => {
-    for (const id of created) {
-      await db.delete(events).where(eq(events.projectId, id));
-      await db.delete(sessions).where(eq(sessions.projectId, id));
-      await db.delete(projects).where(eq(projects.id, id));
-    }
+    await cleanupFixtures(db);
     await app.close();
   });
 
   const projetNeuf = async (name: string): Promise<TestProject> => {
     const projet = await createProject(db, { name });
-    created.push(projet.id);
 
     return projet;
   };

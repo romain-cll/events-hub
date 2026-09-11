@@ -15,7 +15,12 @@ import {
   stripeSubscriptions,
   stripeWebhookEvents,
 } from '../src/database/schema';
-import { createProject, perRun, type TestProject } from './fixtures';
+import {
+  cleanupFixtures,
+  createProject,
+  perRun,
+  type TestProject,
+} from './fixtures';
 import { createTestApp } from './harness';
 
 /**
@@ -163,6 +168,7 @@ describe('projection d’abonnement (e2e)', () => {
     await db.delete(events).where(eq(events.projectId, projet.id));
     await db.delete(sessions).where(eq(sessions.projectId, projet.id));
     await db.delete(projects).where(eq(projects.id, projet.id));
+    await cleanupFixtures(db);
     await app.close();
   });
 

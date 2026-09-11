@@ -14,7 +14,12 @@ import {
   stripeWebhookEvents,
 } from '../src/database/schema';
 import { VisitorKeyService } from '../src/privacy/visitor-key.service';
-import { createProject, perRun, type TestProject } from './fixtures';
+import {
+  cleanupFixtures,
+  createProject,
+  perRun,
+  type TestProject,
+} from './fixtures';
 import { createTestApp } from './harness';
 
 /**
@@ -123,6 +128,7 @@ describe('webhooks Stripe (e2e)', () => {
       await db.delete(sessions).where(eq(sessions.projectId, id));
       await db.delete(projects).where(eq(projects.id, id));
     }
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -291,6 +297,7 @@ describe('attribution rétroactive (e2e)', () => {
       await db.delete(sessions).where(eq(sessions.projectId, id));
       await db.delete(projects).where(eq(projects.id, id));
     }
+    await cleanupFixtures(db);
     await app.close();
   });
 

@@ -6,14 +6,15 @@ import type { App } from 'supertest/types';
 import { eventsPageSchema } from '@events-hub/api-contract';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { eventTypes, events, projects, sessions } from '../src/database/schema';
+import { eventTypes, events, sessions } from '../src/database/schema';
 import {
+  TEST_ORIGIN,
+  cleanupFixtures,
   createProject,
   expectMatchesContract,
   joinOrganization,
   organizationId,
   signUp,
-  TEST_ORIGIN,
   type TestProject,
 } from './fixtures';
 import { createTestApp } from './harness';
@@ -98,12 +99,10 @@ describe('événements sans visiteur (e2e)', () => {
 
   afterAll(async () => {
     if (created.length > 0) {
-      await db.delete(events).where(inArray(events.projectId, created));
-      await db.delete(sessions).where(inArray(sessions.projectId, created));
       await db.delete(eventTypes).where(inArray(eventTypes.projectId, created));
-      await db.delete(projects).where(inArray(projects.id, created));
     }
 
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -220,7 +219,9 @@ describe('événements sans visiteur (e2e)', () => {
       expect(ligne.source).toBe('server');
       // Et la réponse le dit aussi : la clé est présente, sa valeur est `null`.
       // Une source serveur qui lirait une session l'aurait inventée.
-      expect((reponse.body as { sessionId: string | null }).sessionId).toBeNull();
+      expect(
+        (reponse.body as { sessionId: string | null }).sessionId,
+      ).toBeNull();
     });
 
     it('n’ouvre aucune session, même en émettant plusieurs fois', async () => {
@@ -299,8 +300,11 @@ describe('événements sans visiteur (e2e)', () => {
     it('inscrit tout type au vocabulaire, sans jamais refuser', async () => {
       const projetDuCas = await nouveauProjet('vocabulaire');
 
-      await depuisLeServeur('encaissement', '10:00', projetDuCas.secretKey)
-        .expect(201);
+      await depuisLeServeur(
+        'encaissement',
+        '10:00',
+        projetDuCas.secretKey,
+      ).expect(201);
 
       const inscrit = await typeNomme(projetDuCas.id, 'encaissement');
 

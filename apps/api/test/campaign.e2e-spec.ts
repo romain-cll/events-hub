@@ -1,13 +1,14 @@
 import { sessionsPageSchema } from '@events-hub/api-contract';
 import type { INestApplication } from '@nestjs/common';
-import { eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { events, projects, sessions, users } from '../src/database/schema';
+import { sessions } from '../src/database/schema';
 import {
   TEST_ORIGIN,
+  cleanupFixtures,
   createProject,
   expectMatchesContract,
   joinOrganization,
@@ -51,7 +52,6 @@ describe('campagne (e2e)', () => {
   let db: DrizzleDatabase;
   let lecteur: SignedUpUser;
   let projet: TestProject;
-  const created: string[] = [];
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -62,10 +62,7 @@ describe('campagne (e2e)', () => {
   });
 
   afterAll(async () => {
-    await db.delete(events).where(inArray(events.projectId, created));
-    await db.delete(sessions).where(inArray(sessions.projectId, created));
-    await db.delete(projects).where(inArray(projects.id, created));
-    await db.delete(users).where(eq(users.id, lecteur.id));
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -76,7 +73,6 @@ describe('campagne (e2e)', () => {
     projet = await createProject(db, {
       name: `e2e campagne ${new Date().toISOString()}`,
     });
-    created.push(projet.id);
   });
 
   /** Émet une vue depuis le navigateur, avec ou sans campagne. */

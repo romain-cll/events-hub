@@ -3,14 +3,15 @@ import { resolve } from 'node:path';
 
 import { locationsPageSchema } from '@events-hub/api-contract';
 import type { INestApplication } from '@nestjs/common';
-import { eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { events, projects, sessions } from '../src/database/schema';
+import { sessions } from '../src/database/schema';
 import {
   TEST_ORIGIN,
+  cleanupFixtures,
   createProject,
   expectMatchesContract,
   joinOrganization,
@@ -83,7 +84,6 @@ describe('GET /v1/projects/:projectId/analytics/locations (e2e)', () => {
   let db: DrizzleDatabase;
   let projectId: string;
   let cookies: string[];
-  const created: string[] = [];
 
   /**
    * Ingère une vue de page en se déclarant à telle adresse.
@@ -136,7 +136,6 @@ describe('GET /v1/projects/:projectId/analytics/locations (e2e)', () => {
       name: `e2e locations ${new Date().toISOString()}`,
     });
     projectId = projet.id;
-    created.push(projet.id);
 
     // Deux visiteurs depuis Paris, un depuis Sydney, un depuis Mountain View :
     // de quoi éprouver l'ordre du classement et les trois grains.
@@ -157,13 +156,10 @@ describe('GET /v1/projects/:projectId/analytics/locations (e2e)', () => {
         properties: {},
       })
       .expect(201);
-
   });
 
   afterAll(async () => {
-    await db.delete(events).where(inArray(events.projectId, created));
-    await db.delete(sessions).where(inArray(sessions.projectId, created));
-    await db.delete(projects).where(inArray(projects.id, created));
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -190,14 +186,17 @@ describe('GET /v1/projects/:projectId/analytics/locations (e2e)', () => {
       expect(Object.keys(sessions)).not.toContain('ip');
     });
 
-    avecGeo('laisse la session sans pays quand l’adresse est locale', async () => {
-      const total = await db
-        .select({ countryCode: sessions.countryCode })
-        .from(sessions)
-        .where(eq(sessions.projectId, projectId));
+    avecGeo(
+      'laisse la session sans pays quand l’adresse est locale',
+      async () => {
+        const total = await db
+          .select({ countryCode: sessions.countryCode })
+          .from(sessions)
+          .where(eq(sessions.projectId, projectId));
 
-      expect(total.some((ligne) => ligne.countryCode === null)).toBe(true);
-    });
+        expect(total.some((ligne) => ligne.countryCode === null)).toBe(true);
+      },
+    );
   });
 
   describe('le classement', () => {

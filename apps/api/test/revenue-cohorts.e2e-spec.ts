@@ -3,21 +3,15 @@ import {
   movementsPageSchema,
 } from '@events-hub/api-contract';
 import type { INestApplication } from '@nestjs/common';
-import { eq, inArray } from 'drizzle-orm';
+import { inArray } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import {
-  events,
-  projects,
-  sessions,
-  stripeCustomers,
-  stripeSubscriptions,
-  users,
-} from '../src/database/schema';
+import { stripeCustomers, stripeSubscriptions } from '../src/database/schema';
 import {
   TEST_ORIGIN,
+  cleanupFixtures,
   createProject,
   expectMatchesContract,
   joinOrganization,
@@ -133,10 +127,7 @@ describe('cohortes de revenu (e2e)', () => {
     await db
       .delete(stripeCustomers)
       .where(inArray(stripeCustomers.projectId, created));
-    await db.delete(events).where(inArray(events.projectId, created));
-    await db.delete(sessions).where(inArray(sessions.projectId, created));
-    await db.delete(projects).where(inArray(projects.id, created));
-    await db.delete(users).where(eq(users.id, lecteur.id));
+    await cleanupFixtures(db);
     await app.close();
   });
 

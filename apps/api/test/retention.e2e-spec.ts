@@ -3,18 +3,13 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { App } from 'supertest/types';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import {
-  events,
-  projects,
-  sessions,
-  stripeWebhookEvents,
-} from '../src/database/schema';
+import { events, sessions, stripeWebhookEvents } from '../src/database/schema';
 import { EventStore } from '../src/events/event-store.service';
 import {
   RetentionService,
   SESSION_BATCH,
 } from '../src/retention/retention.service';
-import { createProject, type TestProject } from './fixtures';
+import { cleanupFixtures, createProject, type TestProject } from './fixtures';
 import { createTestApp } from './harness';
 
 /**
@@ -226,11 +221,9 @@ describe('purge à 25 mois (e2e)', () => {
       await db
         .delete(stripeWebhookEvents)
         .where(inArray(stripeWebhookEvents.projectId, crees));
-      await db.delete(events).where(inArray(events.projectId, crees));
-      await db.delete(sessions).where(inArray(sessions.projectId, crees));
-      await db.delete(projects).where(inArray(projects.id, crees));
     }
 
+    await cleanupFixtures(db);
     await app.close();
   });
 

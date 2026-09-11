@@ -1,12 +1,12 @@
 import { integrationsSchema } from '@events-hub/api-contract';
 import type { INestApplication } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { integrations, projects, users } from '../src/database/schema';
+import { integrations } from '../src/database/schema';
 import {
+  cleanupFixtures,
   expectMatchesContract,
   joinOrganization,
   signUp,
@@ -30,8 +30,6 @@ const ACCOUNT = 'acct_e2e_integrations';
 describe('intégrations (e2e)', () => {
   let app: INestApplication<App>;
   let db: DrizzleDatabase;
-  const createdProjects: string[] = [];
-  const createdUsers: string[] = [];
 
   beforeAll(async () => {
     process.env.STRIPE_SECRET_KEY = 'sk_test_e2e';
@@ -46,19 +44,13 @@ describe('intégrations (e2e)', () => {
   });
 
   afterAll(async () => {
-    for (const id of createdProjects) {
-      await db.delete(projects).where(eq(projects.id, id));
-    }
-    for (const id of createdUsers) {
-      await db.delete(users).where(eq(users.id, id));
-    }
+    await cleanupFixtures(db);
     await app.close();
   });
 
   /** Un propriétaire, son organisation personnelle et un projet dedans. */
   const setup = async () => {
     const user = await signUp(app, 'Proprietaire');
-    createdUsers.push(user.id);
 
     const [organization] = (
       await request(app.getHttpServer())
@@ -75,8 +67,6 @@ describe('intégrations (e2e)', () => {
         .expect(201)
     ).body as { id: string };
 
-    createdProjects.push(project.id);
-
     return { user, organizationId: organization.id, project };
   };
 
@@ -88,7 +78,9 @@ describe('intégrations (e2e)', () => {
       .set('Cookie', user.cookies)
       .expect(200);
 
-    expect(expectMatchesContract(response.body, integrationsSchema)).toEqual([]);
+    expect(expectMatchesContract(response.body, integrationsSchema)).toEqual(
+      [],
+    );
   });
 
   it('rend la connexion telle que le contrat la décrit', async () => {
@@ -142,7 +134,6 @@ describe('intégrations (e2e)', () => {
       // ordinaire.
       const { organizationId, project } = await setup();
       const membre = await signUp(app, 'Membre');
-      createdUsers.push(membre.id);
       await joinOrganization(db, organizationId, membre.id, 'member');
 
       await request(app.getHttpServer())
@@ -156,7 +147,6 @@ describe('intégrations (e2e)', () => {
       // entière.
       const { organizationId, project } = await setup();
       const membre = await signUp(app, 'Membre');
-      createdUsers.push(membre.id);
       await joinOrganization(db, organizationId, membre.id, 'member');
 
       await request(app.getHttpServer())
@@ -168,7 +158,6 @@ describe('intégrations (e2e)', () => {
     it('reste muet pour qui n’est pas du projet', async () => {
       const { project } = await setup();
       const etranger = await signUp(app, 'Etranger');
-      createdUsers.push(etranger.id);
 
       await request(app.getHttpServer())
         .get(`/v1/projects/${project.id}/integrations`)

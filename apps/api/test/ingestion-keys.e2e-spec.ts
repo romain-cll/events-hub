@@ -5,13 +5,13 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
+import { events, projectKeys } from '../src/database/schema';
 import {
-  events,
-  projectKeys,
-  projects,
-  sessions,
-} from '../src/database/schema';
-import { createProject, TEST_ORIGIN, type TestProject } from './fixtures';
+  TEST_ORIGIN,
+  cleanupFixtures,
+  createProject,
+  type TestProject,
+} from './fixtures';
 import { createTestApp } from './harness';
 
 /**
@@ -42,22 +42,16 @@ describe("clés d'ingestion (e2e)", () => {
   let app: INestApplication<App>;
   let db: DrizzleDatabase;
   let projet: TestProject;
-  const createdProjects: string[] = [];
 
   beforeAll(async () => {
     app = await createTestApp();
     db = app.get<DrizzleDatabase>(DRIZZLE);
 
     projet = await createProject(db, { name: 'e2e clés' });
-    createdProjects.push(projet.id);
   });
 
   afterAll(async () => {
-    for (const id of createdProjects) {
-      await db.delete(events).where(eq(events.projectId, id));
-      await db.delete(sessions).where(eq(sessions.projectId, id));
-      await db.delete(projects).where(eq(projects.id, id));
-    }
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -82,7 +76,6 @@ describe("clés d'ingestion (e2e)", () => {
       // `strictObject` fait qu'en glisser un est un 400 — pas une redirection
       // silencieuse vers le projet de quelqu'un d'autre.
       const autre = await createProject(db, { name: 'e2e clés — voisin' });
-      createdProjects.push(autre.id);
 
       await post(eventBody(autre.apiKey, 'chez_le_voisin')).expect(201);
 
@@ -121,7 +114,6 @@ describe("clés d'ingestion (e2e)", () => {
 
     it('401 sur une clé révoquée, avec un message qui le dit', async () => {
       const jetable = await createProject(db, { name: 'e2e clés — révoquée' });
-      createdProjects.push(jetable.id);
 
       await post(eventBody(jetable.apiKey)).expect(201);
 
@@ -140,7 +132,6 @@ describe("clés d'ingestion (e2e)", () => {
       // pouvoir en créer une seconde d'abord obligerait à casser tous les
       // sites déployés d'un coup.
       const rotation = await createProject(db, { name: 'e2e clés — rotation' });
-      createdProjects.push(rotation.id);
 
       const [nouvelle] = await db
         .insert(projectKeys)

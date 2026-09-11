@@ -1,19 +1,18 @@
 import type { INestApplication } from '@nestjs/common';
-import { eq, inArray } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { eventsPageSchema } from '@events-hub/api-contract';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { events, projects, sessions } from '../src/database/schema';
 import {
+  TEST_ORIGIN,
+  cleanupFixtures,
   createProject,
   expectMatchesContract,
   joinOrganization,
   organizationId,
   signUp,
-  TEST_ORIGIN,
 } from './fixtures';
 import { createTestApp } from './harness';
 
@@ -75,14 +74,12 @@ describe('GET /v1/projects/:projectId/events (e2e)', () => {
   let projectId: string;
   let apiKey: string;
   let cookies: string[];
-  const created: string[] = [];
 
   const newProject = async (label: string) => {
     const project = await createProject(db, {
       name: `e2e events route ${label} ${new Date().toISOString()}`,
     });
 
-    created.push(project.id);
     return project;
   };
 
@@ -178,9 +175,7 @@ describe('GET /v1/projects/:projectId/events (e2e)', () => {
   });
 
   afterAll(async () => {
-    await db.delete(events).where(inArray(events.projectId, created));
-    await db.delete(sessions).where(inArray(sessions.projectId, created));
-    await db.delete(projects).where(inArray(projects.id, created));
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -384,9 +379,6 @@ describe('GET /v1/projects/:projectId/events (e2e)', () => {
 
       expect((await lire(FENETRE, voisin.id)).events).toHaveLength(1);
       expect((await parcourir()).flatMap(horodatages)).toHaveLength(25);
-
-      await db.delete(events).where(eq(events.projectId, voisin.id));
-      await db.delete(sessions).where(eq(sessions.projectId, voisin.id));
     });
 
     it('applique la fenêtre par défaut quand elle est absente', async () => {

@@ -8,7 +8,7 @@ import {
   SESSION_GAP_MS,
   SessionAssigner,
 } from '../src/sessions/session-assigner.service';
-import { createProject } from './fixtures';
+import { cleanupFixtures, createProject } from './fixtures';
 import { createTestApp } from './harness';
 
 /**
@@ -69,7 +69,7 @@ describe('SessionAssigner (e2e)', () => {
       await tx.insert(events).values({
         projectId,
         type: 'alpha',
-              source: 'browser',
+        source: 'browser',
         occurredAt,
         sessionId,
         attributes: { repere },
@@ -109,6 +109,7 @@ describe('SessionAssigner (e2e)', () => {
   });
 
   afterAll(async () => {
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -207,7 +208,7 @@ describe('SessionAssigner (e2e)', () => {
       await db.insert(events).values({
         projectId: autre.id,
         type: 'alpha',
-              source: 'browser',
+        source: 'browser',
         occurredAt: apres(60_000),
         sessionId: sessionVoisine.id,
       });

@@ -7,7 +7,7 @@ import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import { events, projects, sessions } from '../src/database/schema';
 import { EventStore } from '../src/events/event-store.service';
 import { sessionsOf, type Session } from '../src/features/analytics/sessions';
-import { createProject, TEST_ORIGIN } from './fixtures';
+import { TEST_ORIGIN, cleanupFixtures, createProject } from './fixtures';
 import { createTestApp } from './harness';
 
 /**
@@ -147,6 +147,7 @@ describe('AnalyticsService.sessions (e2e)', () => {
     await db.delete(events).where(eq(events.projectId, projectId));
     await db.delete(sessions).where(eq(sessions.projectId, projectId));
     await db.delete(projects).where(eq(projects.id, projectId));
+    await cleanupFixtures(db);
     await app.close();
   });
 

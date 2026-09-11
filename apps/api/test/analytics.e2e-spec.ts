@@ -1,19 +1,18 @@
 import type { INestApplication } from '@nestjs/common';
-import { inArray } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { events, projects, sessions } from '../src/database/schema';
 import { analyticsSummarySchema } from '@events-hub/api-contract';
 
 import {
+  TEST_ORIGIN,
+  cleanupFixtures,
   createProject,
   expectMatchesContract,
   joinOrganization,
   organizationId,
   signUp,
-  TEST_ORIGIN,
 } from './fixtures';
 import { createTestApp } from './harness';
 
@@ -81,15 +80,12 @@ describe('GET /v1/projects/:projectId/analytics — topPages (e2e)', () => {
   let apiKey: string;
   /** Le compte qui lit : membre de l'organisation des projets de test. */
   let cookies: string[];
-  /** Tous les projets créés ici, pour un nettoyage qui n'en oublie aucun. */
-  const created: string[] = [];
 
   const newProject = async (label: string) => {
     const project = await createProject(db, {
       name: `e2e analytics ${label} ${new Date().toISOString()}`,
     });
 
-    created.push(project.id);
     return project;
   };
 
@@ -183,9 +179,7 @@ describe('GET /v1/projects/:projectId/analytics — topPages (e2e)', () => {
   });
 
   afterAll(async () => {
-    await db.delete(events).where(inArray(events.projectId, created));
-    await db.delete(sessions).where(inArray(sessions.projectId, created));
-    await db.delete(projects).where(inArray(projects.id, created));
+    await cleanupFixtures(db);
     await app.close();
   });
 

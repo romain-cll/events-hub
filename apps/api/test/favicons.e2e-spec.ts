@@ -3,7 +3,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { signUp } from './fixtures';
+import { cleanupFixtures, signUp } from './fixtures';
 import { createTestApp } from './harness';
 
 /**
@@ -16,6 +16,7 @@ import { createTestApp } from './harness';
  */
 describe('GET /v1/favicons/:host (e2e)', () => {
   let app: INestApplication<App>;
+  let db: DrizzleDatabase;
   let cookies: string[];
 
   const demander = (host: string, session = cookies) =>
@@ -25,19 +26,22 @@ describe('GET /v1/favicons/:host (e2e)', () => {
 
   beforeAll(async () => {
     app = await createTestApp();
-    app.get<DrizzleDatabase>(DRIZZLE);
+    db = app.get<DrizzleDatabase>(DRIZZLE);
 
     cookies = (await signUp(app)).cookies;
   });
 
   afterAll(async () => {
+    await cleanupFixtures(db);
     await app.close();
   });
 
   it('exige une session', async () => {
     // Sans ça, la route serait un proxy DuckDuckGo ouvert à tout Internet, à
     // nos frais et sous notre adresse IP.
-    await request(app.getHttpServer()).get('/v1/favicons/github.com').expect(401);
+    await request(app.getHttpServer())
+      .get('/v1/favicons/github.com')
+      .expect(401);
   });
 
   describe('ce que la validation refuse', () => {

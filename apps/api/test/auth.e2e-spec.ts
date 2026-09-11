@@ -6,7 +6,12 @@ import type { App } from 'supertest/types';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import { events, projects, sessions, users } from '../src/database/schema';
-import { createProject, TEST_ORIGIN } from './fixtures';
+import {
+  TEST_ORIGIN,
+  cleanupFixtures,
+  createProject,
+  trackSignUp,
+} from './fixtures';
 import { createTestApp } from './harness';
 
 /**
@@ -55,7 +60,7 @@ describe('authentification (e2e)', () => {
   });
 
   afterAll(async () => {
-    await db.delete(users).where(eq(users.email, email));
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -69,6 +74,10 @@ describe('authentification (e2e)', () => {
         .expect(200);
 
       sessionCookies = cookiesOf(response);
+      await trackSignUp(
+        app,
+        (response.body as { user: { id: string } }).user.id,
+      );
 
       expect(sessionCookies.length).toBeGreaterThan(0);
       expect(sessionCookies.join(';')).toContain('session_token');
@@ -160,10 +169,15 @@ describe('authentification (e2e)', () => {
       // organisation nommée `"  Espacé  's org"`.
       const espace = `espace-${randomBytes(6).toString('hex')}@example.test`;
 
-      await request(app.getHttpServer())
+      const inscrit = await request(app.getHttpServer())
         .post('/v1/auth/sign-up/email')
         .send({ email: espace, password, name: '  Espacé  ' })
         .expect(200);
+
+      await trackSignUp(
+        app,
+        (inscrit.body as { user: { id: string } }).user.id,
+      );
 
       const [cree] = await db
         .select({ name: users.name })
@@ -171,8 +185,6 @@ describe('authentification (e2e)', () => {
         .where(eq(users.email, espace));
 
       expect(cree.name).toBe('Espacé');
-
-      await db.delete(users).where(eq(users.email, espace));
     });
 
     it('n’a créé aucun compte au passage', async () => {

@@ -43,4 +43,31 @@ describe.each(SUITES)('%s', (suite) => {
   it('passe par createTestApp', () => {
     expect(source).not.toContain('createNestApplication');
   });
+
+  /**
+   * La symétrique : ce qu'une suite crée, elle le reprend.
+   *
+   * Sans ça, une suite laisse derrière elle des projets, des comptes et surtout
+   * des **organisations** — `organizations` n'ayant aucune clé étrangère vers
+   * `users`, supprimer le compte n'emporte pas la sienne. La base locale en
+   * comptait vingt-cinq mille, pour trois projets réels.
+   *
+   * Rien ne le signale : les suites restent vertes, le slug des organisations
+   * est unique sur six caractères, et le jour où deux se heurtent c'est une
+   * inscription qui échoue en 500, dans une suite qui ne parle pas
+   * d'organisations.
+   *
+   * La règle vise l'appel, pas la fixture : une suite qui n'en crée aucune n'a
+   * rien à reprendre, et `createProject`/`signUp` sont les deux seules portes
+   * d'entrée.
+   */
+  it('reprend ce qu’il a créé', () => {
+    const cree = /\b(createProject|signUp)\s*\(/.test(source);
+
+    if (!cree) return;
+
+    // L'appel, pas la mention : retirer la ligne laisse l'import derrière elle,
+    // et `toContain` resterait vert sur un fichier qui ne nettoie plus rien.
+    expect(source).toMatch(/cleanupFixtures\s*\(/);
+  });
 });

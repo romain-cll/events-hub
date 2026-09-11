@@ -1,14 +1,13 @@
 import { campaignRevenuePageSchema } from '@events-hub/api-contract';
 import type { INestApplication } from '@nestjs/common';
-import { eq, inArray } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { CoreService } from '../src/core/core.service';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { events, projects, sessions, users } from '../src/database/schema';
 import {
   TEST_ORIGIN,
+  cleanupFixtures,
   cookiesOf,
   createProject,
   expectMatchesContract,
@@ -60,7 +59,6 @@ describe('revenu par campagne (e2e)', () => {
   let core: CoreService;
   let projet: TestProject;
   let lecteur: SignedUpUser;
-  const created: string[] = [];
 
   /** Une visite consentie ; rend l'identifiant durable que le hub a posé. */
   const visiter = async (
@@ -127,7 +125,6 @@ describe('revenu par campagne (e2e)', () => {
     core = app.get(CoreService);
 
     projet = await createProject(db, { name: 'e2e revenu campagnes' });
-    created.push(projet.id);
 
     lecteur = await signUp(app, 'Lecteur revenu');
     await joinOrganization(db, await organizationId(db), lecteur.id, 'member');
@@ -139,7 +136,11 @@ describe('revenu par campagne (e2e)', () => {
       medium: 'cpc',
       name: 'rentree',
     });
-    await visiter(SECONDE_VISITE, { source: 'bing', medium: 'organic' }, avecCampagne);
+    await visiter(
+      SECONDE_VISITE,
+      { source: 'bing', medium: 'organic' },
+      avecCampagne,
+    );
 
     // Un visiteur connu, venu sans campagne.
     const direct = await visiter(PREMIERE_VISITE);
@@ -157,10 +158,7 @@ describe('revenu par campagne (e2e)', () => {
   });
 
   afterAll(async () => {
-    await db.delete(events).where(inArray(events.projectId, created));
-    await db.delete(sessions).where(inArray(sessions.projectId, created));
-    await db.delete(projects).where(inArray(projects.id, created));
-    await db.delete(users).where(eq(users.id, lecteur.id));
+    await cleanupFixtures(db);
     await app.close();
   });
 

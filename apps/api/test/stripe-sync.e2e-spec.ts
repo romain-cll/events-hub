@@ -9,17 +9,15 @@ import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import {
   events,
   integrations,
-  projects,
-  sessions,
   stripeCustomers,
   stripeSubscriptionItems,
   stripeSubscriptions,
   stripeWebhookEvents,
-  users,
 } from '../src/database/schema';
 import { StripeConnectService } from '../src/integrations/stripe-connect.service';
 import { VisitorKeyService } from '../src/privacy/visitor-key.service';
 import {
+  cleanupFixtures,
   createProject,
   expectMatchesContract,
   joinOrganization,
@@ -244,10 +242,7 @@ describe('resynchronisation Stripe (e2e)', () => {
     await db
       .delete(stripeCustomers)
       .where(inArray(stripeCustomers.projectId, created));
-    await db.delete(events).where(inArray(events.projectId, created));
-    await db.delete(sessions).where(inArray(sessions.projectId, created));
-    await db.delete(projects).where(inArray(projects.id, created));
-    await db.delete(users).where(eq(users.id, lecteur.id));
+    await cleanupFixtures(db);
     await app.close();
   });
 

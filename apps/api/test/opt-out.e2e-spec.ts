@@ -4,11 +4,12 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { events, projects, sessions } from '../src/database/schema';
+import { events } from '../src/database/schema';
 import {
+  TEST_ORIGIN,
+  cleanupFixtures,
   cookiesOf,
   createProject,
-  TEST_ORIGIN,
   type TestProject,
 } from './fixtures';
 import { createTestApp } from './harness';
@@ -30,7 +31,6 @@ const T0 = new Date('2026-09-01T10:00:00.000Z');
 describe('opposition au traitement (e2e)', () => {
   let app: INestApplication<App>;
   let db: DrizzleDatabase;
-  const created: string[] = [];
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -38,17 +38,12 @@ describe('opposition au traitement (e2e)', () => {
   });
 
   afterAll(async () => {
-    for (const id of created) {
-      await db.delete(events).where(eq(events.projectId, id));
-      await db.delete(sessions).where(eq(sessions.projectId, id));
-      await db.delete(projects).where(eq(projects.id, id));
-    }
+    await cleanupFixtures(db);
     await app.close();
   });
 
   const projetNeuf = async (name: string): Promise<TestProject> => {
     const projet = await createProject(db, { name });
-    created.push(projet.id);
 
     return projet;
   };
