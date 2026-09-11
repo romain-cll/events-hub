@@ -161,7 +161,12 @@ The SDK only carries the answer you already have.
 
 With consent, the hub keeps a durable id for the visitor. It lives in a cookie on
 **our** domain, so your code cannot read it — which is exactly what lets it last
-400 days instead of the seven Safari grants to cookies written in JavaScript.
+13 months instead of the seven days Safari grants to cookies written in
+JavaScript.
+
+That cookie is set once and never refreshed, so it expires 13 months after the
+day the visitor accepted, not 13 months after their last visit. Asking again
+before it lapses is your consent platform's job, not ours.
 
 So the SDK writes a readable copy on **your** domain, `eh_visitor_id`, and rewrites
 it on every page view. Read it like any of your own cookies:
@@ -190,5 +195,51 @@ Building your checkout in the browser instead? `window.eventsHub.getVisitorId()`
 returns the same value, once the first event has come back. The cookie is the
 recommended path: it does not depend on that ordering.
 
-No consent means no durable id, so nothing to join — attribution is one of the
-things consent buys, and it cannot be worked around.
+No consent means no durable id. That does not leave you with nothing — read on.
+
+## Attributing revenue without consent
+
+Every response carries a `sessionId`: the visit the event belongs to. Unlike the
+durable id, it costs no consent, because nothing is written to the visitor's
+device to produce it. It lives in the HTTP response and nowhere else.
+
+```js
+const sessionId = window.eventsHub.getSessionId();
+
+await stripe.checkout.sessions.create({
+  // …
+  metadata: { eh_session_id: sessionId },
+});
+```
+
+Post it to your own backend when you build the checkout, the same way you would
+any value your page holds. There is no cookie to read here — writing one is
+exactly what this path avoids.
+
+**Send both when you have both.** If the visitor consented, put `eh_visitor_id`
+on the Customer as described above *and* `eh_session_id` on the session. We
+prefer the durable id whenever it is present; you never have to choose.
+
+### What it buys, and what it does not
+
+| | `eh_visitor_id` | `eh_session_id` |
+|---|---|---|
+| Consent | required | none |
+| First purchase | attributed | attributed |
+| Purchase days later | attributed to the first visit | attributed to *that day's* visit |
+| Subscription renewal | attributed | never |
+| Lifetime value, cohorts, retention | yes | no |
+
+The middle row is the one to understand. A visitor who finds you through a search
+on Monday and buys on Thursday opens two visits; the payment lands on the second,
+whose referrer is usually empty. So direct traffic is over-credited and the real
+acquisition channel under-credited — systematically, not randomly.
+
+That bias is the price of not asking. It is a floor, not a ceiling: consent
+removes it, and the two mechanisms are designed to run side by side.
+
+### Payment links
+
+A payment link opened from an email is not a visit on your site, so there is
+nothing to attribute it to. Put `eh_visitor_id` on the Customer and renewals
+still land correctly; the first payment through such a link will not.

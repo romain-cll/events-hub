@@ -12,6 +12,7 @@ import {
   customerOf,
   occurredAtOf,
   propertiesOf,
+  sessionIdOf,
   typeOf,
   visitorIdOf,
   VISITOR_METADATA_KEY,
@@ -124,6 +125,9 @@ export class StripeService {
     // qui reste, serait pris pour un doublon et l'événement perdu en silence.
     try {
       learned = await this.learn(projectId, event);
+
+      const visitorId = await this.visitorId(projectId, event, customerId);
+
       written = await this.core.ingest({
         projectId,
         type: typeOf(event),
@@ -134,9 +138,14 @@ export class StripeService {
         attributes: {},
         properties: propertiesOf(event),
         // La source vient du chemin d'entrée, jamais du contenu : ce webhook
-        // arrive de serveur à serveur, donc il n'a pas de visite.
+        // arrive de serveur à serveur.
         source: 'server',
-        visitorId: await this.visitorId(projectId, event, customerId),
+        visitorId,
+        // Le repli, et seulement le repli : une visite ne vaut que pour l'achat
+        // conclu pendant qu'elle durait. La chercher alors qu'on tient déjà une
+        // identité durable ne rattacherait rien de plus et laisserait deux
+        // rattachements concurrents sur la même ligne.
+        sessionId: visitorId ? undefined : sessionIdOf(event.data.object),
       });
     } catch (error) {
       await this.release(event.id);

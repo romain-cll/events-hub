@@ -139,6 +139,20 @@ function currencyOf(object: Stripe.Event.Data.Object): string | undefined {
 export const VISITOR_METADATA_KEY = 'eh_visitor_id';
 
 /**
+ * La clé de repli, pour un visiteur qui n'a pas consenti.
+ *
+ * Elle ne désigne pas la même chose que la première, et c'est tout l'enjeu :
+ * `eh_visitor_id` désigne quelqu'un à travers ses visites, `eh_session_id`
+ * désigne une visite. La seconde ne survit donc ni au lendemain ni à une demi
+ * heure d'inactivité — un renouvellement facturé des mois plus tard ne sera
+ * jamais attribué par elle.
+ *
+ * D'où la règle appliquée dans `attributionOf` : quand les deux sont posées,
+ * c'est la durable qui gagne. Un site qui câble les deux n'a rien à arbitrer.
+ */
+export const SESSION_METADATA_KEY = 'eh_session_id';
+
+/**
  * Le client concerné par un événement, qu'il soit **désigné** par l'objet ou
  * qu'il **soit** l'objet.
  *
@@ -188,6 +202,48 @@ export function customerLinkOf(
 export function visitorIdOf(
   object: Stripe.Event.Data.Object,
 ): string | undefined {
+  return metadataValueOf(object, VISITOR_METADATA_KEY);
+}
+
+/** La visite posée dans la metadata de cet objet, s'il y en a une. */
+export function sessionIdOf(
+  object: Stripe.Event.Data.Object,
+): string | undefined {
+  return metadataValueOf(object, SESSION_METADATA_KEY);
+}
+
+/**
+ * Ce à quoi rattacher le paiement, et sous quelle nature.
+ *
+ * L'union discriminée plutôt que deux champs facultatifs : les deux ne se
+ * combinent pas, et un appelant qui recevrait `{ visitorId?, sessionId? }`
+ * pourrait les traiter tous les deux — donc écrire une identité durable et une
+ * visite pour un même paiement, en ayant l'air de bien faire.
+ *
+ * La durable l'emporte quand les deux sont là. Un site qui pose les deux est un
+ * site dont le visiteur a fini par consentir : la visite n'ajoute alors rien que
+ * la durable ne dise déjà mieux.
+ */
+export type StripeAttribution =
+  | { kind: 'visitor'; visitorId: string }
+  | { kind: 'session'; sessionId: string };
+
+export function attributionOf(
+  object: Stripe.Event.Data.Object,
+): StripeAttribution | undefined {
+  const visitorId = visitorIdOf(object);
+
+  if (visitorId) return { kind: 'visitor', visitorId };
+
+  const sessionId = sessionIdOf(object);
+
+  return sessionId ? { kind: 'session', sessionId } : undefined;
+}
+
+function metadataValueOf(
+  object: Stripe.Event.Data.Object,
+  key: string,
+): string | undefined {
   if (!('metadata' in object)) return undefined;
 
   // L'union des objets d'événement ne décrit pas `metadata` assez finement pour
@@ -197,7 +253,7 @@ export function visitorIdOf(
 
   if (typeof metadata !== 'object' || metadata === null) return undefined;
 
-  const value = (metadata as Record<string, unknown>)[VISITOR_METADATA_KEY];
+  const value = (metadata as Record<string, unknown>)[key];
 
   return typeof value === 'string' && value ? value : undefined;
 }

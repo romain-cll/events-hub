@@ -166,6 +166,38 @@ export class SessionAssigner {
    * ne protège que jusqu'au `COMMIT`, et relâcher entre l'attribution et
    * l'insertion rouvrirait exactement la course qu'il empêche.
    */
+  /**
+   * La visite existe-t-elle, et appartient-elle bien à ce projet ?
+   *
+   * Pour les sources qui **désignent** une visite au lieu d'en faire découper
+   * une — un paiement rapporté par un serveur, qui rend l'identifiant reçu du
+   * site. La valeur vient donc du dehors, et rien ne garantit qu'elle veuille
+   * dire quelque chose.
+   *
+   * La clé étrangère refuserait déjà une visite inexistante, mais elle
+   * n'attraperait pas celle d'un *autre projet* — et elle ne le ferait qu'en
+   * faisant échouer l'écriture, donc en faisant rejouer le webhook
+   * indéfiniment pour une metadata qui ne se corrigera pas toute seule. Ici on
+   * constate, on écrit `null`, et le paiement est enregistré sans visite plutôt
+   * que perdu.
+   *
+   * Le cloisonnement par projet n'est pas une précaution de principe : sans
+   * lui, un site pourrait rattacher son revenu aux visites d'un autre.
+   */
+  async belongsToProject(
+    tx: DrizzleTransaction,
+    sessionId: string,
+    projectId: string,
+  ): Promise<boolean> {
+    const [found] = await tx
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(and(eq(sessions.id, sessionId), eq(sessions.projectId, projectId)))
+      .limit(1);
+
+    return found !== undefined;
+  }
+
   async assign(
     tx: DrizzleTransaction,
     {

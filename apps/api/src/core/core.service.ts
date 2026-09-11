@@ -120,7 +120,26 @@ export type IngestCommand =
        */
       campaign?: RawCampaign;
     })
-  | (IngestBase & { source: 'server' });
+  | (IngestBase & {
+      source: 'server';
+      /**
+       * La visite à laquelle rattacher cet événement, quand la source en
+       * désigne une.
+       *
+       * Opaque ici, comme `visitorId` : le socle constate qu'on lui en donne
+       * une, sans savoir par quel chemin elle est revenue au client.
+       *
+       * `sessionId` à `null` disait « cet événement n'a pas de visite », et
+       * c'est encore vrai d'un deploy ou d'une sonde. Un paiement, lui, peut en
+       * avoir une — celle pendant laquelle l'achat a été conclu — et c'est le
+       * seul rattachement possible pour un visiteur qui n'a pas consenti.
+       *
+       * Elle n'est **pas** offerte à la branche navigateur : là, la visite est
+       * découpée par `SessionAssigner`, et laisser un client la choisir
+       * reviendrait à lui laisser fusionner deux visites étrangères.
+       */
+      sessionId?: string;
+    });
 
 /**
  * Le socle d'ingestion, et il ne fait que ça.
@@ -185,10 +204,14 @@ export class CoreService {
             )
           : null;
 
+        // Deux origines, jamais deux chemins : le navigateur fait découper sa
+        // visite, le serveur en désigne une qu'il a reçue. La seconde est
+        // vérifiée avant d'être écrite — la clé étrangère la refuserait, mais
+        // trop tard et pour la mauvaise raison (voir `sessionOfProject`).
         const sessionId =
           command.source === 'browser'
             ? await this.assignSession(tx, command, visitorKey)
-            : null;
+            : await this.sessionOfProject(tx, command);
 
         await this.eventTypes.register(tx, command.projectId, command.type);
 
@@ -270,6 +293,33 @@ export class CoreService {
    * tout ce qui lit ensuite ignorent lequel des deux l'a produite, et c'est ce
    * qui permet d'en changer en cours de route sans rien reconstruire.
    */
+  /**
+   * La visite qu'une source serveur désigne, une fois vérifiée.
+   *
+   * Rend `null` dans les trois cas où il n'y a rien à rattacher : aucune visite
+   * désignée (un deploy, une sonde), une visite qui n'existe pas, une visite
+   * qui appartient à un autre projet. Les trois se valent du point de vue de
+   * l'écriture — l'événement est enregistré sans visite — et aucun ne fait
+   * échouer l'ingestion : un paiement non attribué reste un paiement, et le
+   * perdre pour une metadata mal posée serait bien pire que de l'écrire nu.
+   */
+  private async sessionOfProject(
+    tx: Parameters<typeof this.sessionAssigner.belongsToProject>[0],
+    command: Extract<IngestCommand, { source: 'server' }>,
+  ): Promise<string | null> {
+    const { sessionId, projectId } = command;
+
+    if (!sessionId) return null;
+
+    return (await this.sessionAssigner.belongsToProject(
+      tx,
+      sessionId,
+      projectId,
+    ))
+      ? sessionId
+      : null;
+  }
+
   private async assignSession(
     tx: Parameters<typeof this.sessionAssigner.assign>[0],
     command: Extract<IngestCommand, { source: 'browser' }>,

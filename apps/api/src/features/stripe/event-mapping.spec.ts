@@ -1,6 +1,7 @@
 import type Stripe from 'stripe';
 
 import {
+  attributionOf,
   customerIdOf,
   customerLinkOf,
   customerOf,
@@ -197,6 +198,61 @@ describe('customerLinkOf', () => {
   it('ignore une metadata vide plutôt que d’apprendre du vide', () => {
     expect(
       avec({ object: 'customer', id: 'cus_3', metadata: { eh_visitor_id: '' } }),
+    ).toBeUndefined();
+  });
+});
+
+
+describe('attributionOf', () => {
+  const VISITEUR = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+  const VISITE = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
+
+  it('rend l’identité durable quand le site en pose une', () => {
+    const { data } = evenement('checkout.session.completed', {
+      metadata: { eh_visitor_id: VISITEUR },
+    });
+
+    expect(attributionOf(data.object)).toEqual({
+      kind: 'visitor',
+      visitorId: VISITEUR,
+    });
+  });
+
+  it('rend la visite quand c’est tout ce que le site a pu poser', () => {
+    // Le visiteur n'a pas consenti : pas d'identité durable à joindre, mais la
+    // visite pendant laquelle il a payé existe quand même.
+    const { data } = evenement('checkout.session.completed', {
+      metadata: { eh_session_id: VISITE },
+    });
+
+    expect(attributionOf(data.object)).toEqual({
+      kind: 'session',
+      sessionId: VISITE,
+    });
+  });
+
+  it('préfère l’identité durable quand les deux sont posées', () => {
+    // Le cas d'un site qui câble les deux sans condition, et c'est le bon
+    // réflexe de sa part : c'est ici qu'on arbitre, pas chez lui. La visite
+    // n'ajouterait rien que la durable ne dise déjà mieux — elle limiterait
+    // l'attribution à l'achat immédiat.
+    const { data } = evenement('checkout.session.completed', {
+      metadata: { eh_visitor_id: VISITEUR, eh_session_id: VISITE },
+    });
+
+    expect(attributionOf(data.object)).toEqual({
+      kind: 'visitor',
+      visitorId: VISITEUR,
+    });
+  });
+
+  it('ne rend rien quand la metadata est absente ou vide', () => {
+    expect(attributionOf(evenement('invoice.paid').data.object)).toBeUndefined();
+    expect(
+      attributionOf(
+        evenement('invoice.paid', { metadata: { eh_session_id: '' } }).data
+          .object,
+      ),
     ).toBeUndefined();
   });
 });
