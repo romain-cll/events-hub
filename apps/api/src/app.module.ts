@@ -14,6 +14,7 @@ import { IngestionModule } from './ingestion/ingestion.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { ProjectsModule } from './projects/projects.module';
+import { RetentionModule } from './retention/retention.module';
 import { SdkModule } from './sdk/sdk.module';
 
 /**
@@ -34,6 +35,7 @@ import { SdkModule } from './sdk/sdk.module';
     DatabaseModule,
     AuthModule,
     IngestionModule,
+    RetentionModule,
     SdkModule,
     FaviconsModule,
     OrganizationsModule,

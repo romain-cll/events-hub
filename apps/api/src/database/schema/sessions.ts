@@ -155,10 +155,11 @@ export const sessions = pgTable(
      * inventer l'URL entière. La promesse est de forme et de moment, pas de
      * provenance.
      *
-     * `utm_term` et `utm_content` ne sont pas ici : ils répondent à « quelle
-     * création », pas à « quelle campagne rapporte ». Ils restent entiers dans
-     * l'URL que le sac d'attributs transporte, et deux colonnes presque toujours
-     * nulles ne valent pas leur place.
+     * Les deux autres paramètres de campagne — terme et contenu — ne sont pas
+     * ici : ils répondent à « quelle création », pas à « quelle campagne
+     * rapporte ». Ils restent entiers dans l'URL que le sac d'attributs
+     * transporte, et deux colonnes presque toujours nulles ne valent pas leur
+     * place.
      */
     campaignSource: text(),
     campaignMedium: text(),
@@ -175,6 +176,12 @@ export const sessions = pgTable(
       table.projectId,
       table.campaignSource,
     ),
+    // Le seul index **non cloisonné par projet** de la table, et c'est voulu :
+    // la purge balaie la plateforme, précisément pour qu'aucun projet ne puisse
+    // y échapper. Elle parcourt cette table de la plus ancienne visite à la plus
+    // récente et s'arrête à la borne de rétention — sans cet index, elle lirait
+    // toute la table chaque nuit pour découvrir qu'il n'y a rien à faire.
+    index('sessions_started_at_idx').on(table.startedAt),
   ],
 );
 

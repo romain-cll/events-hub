@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   index,
   jsonb,
@@ -149,6 +150,18 @@ export const events = pgTable(
     // Toute lecture croise `event_types` pour faire respecter `serverOnly`
     // (voir `EventStore.where`). La corrélation se fait sur ce couple.
     index('events_project_type_idx').on(table.projectId, table.type),
+    // La purge, et rien d'autre : les lignes sans visite qui portent encore une
+    // identité durable, du plus ancien au plus récent.
+    //
+    // **Partiel**, et c'est tout l'intérêt. Il ne couvre qu'une fraction
+    // minuscule de la table, et il **rétrécit à mesure que la purge travaille**
+    // puisqu'une ligne anonymisée sort de son prédicat. Un index global sur la
+    // seule date serait au contraire payé à chaque insertion d'ingestion — sur
+    // le chemin le plus chaud du produit — pour servir une requête qui tourne
+    // une fois par nuit.
+    index('events_sessionless_identified_idx')
+      .on(table.occurredAt)
+      .where(sql`session_id is null and visitor_key is not null`),
   ],
 );
 

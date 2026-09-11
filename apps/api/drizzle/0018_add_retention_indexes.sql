@@ -1,0 +1,2 @@
+CREATE INDEX "events_sessionless_identified_idx" ON "events" USING btree ("occurred_at") WHERE session_id is null and visitor_key is not null;--> statement-breakpoint
+CREATE INDEX "sessions_started_at_idx" ON "sessions" USING btree ("started_at");

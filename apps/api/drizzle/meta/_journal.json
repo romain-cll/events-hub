@@ -127,6 +127,13 @@
       "when": 1789132881365,
       "tag": "0017_absent_ultragirl",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789133911632,
+      "tag": "0018_add_retention_indexes",
+      "breakpoints": true
     }
   ]
 }
