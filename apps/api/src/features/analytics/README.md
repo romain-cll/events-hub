@@ -430,9 +430,18 @@ dénominateur est rendu à part.
 
 Depuis iPadOS 13, Safari envoie par défaut l'en-tête d'un Mac — littéralement
 celui d'un ordinateur de bureau. La majorité des iPad est donc rangée en
-`desktop`. Aucune correction n'est possible : l'information n'est pas dans la
-chaîne. C'est du même ordre que la ville, qui est une estimation, et ça se dit à
-qui lit le chiffre.
+`desktop`, et sous `macOS` au grain système. Aucune correction n'est possible :
+l'information n'est pas dans la chaîne.
+
+**Décision : on le dit, on ne le corrige pas.** La carte affichera « Mac ou
+iPad » plutôt que « Mac », et laissera `desktop` tel quel. Une heuristique qui
+tenterait de distinguer les deux — par la taille d'écran, par le tactile —
+inventerait un fait à partir d'un indice, et se tromperait en silence sur les
+deux populations à la fois. L'iPad pèse peu sur l'audience visée ; une mention
+honnête coûte moins cher qu'une devinette.
+
+C'est du même ordre que la ville, qui est une estimation, et ça se dit à qui lit
+le chiffre plutôt que de se rattraper dans le calcul.
 
 ### `botSessions` — et pourquoi il est publié
 
