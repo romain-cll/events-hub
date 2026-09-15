@@ -201,6 +201,11 @@ export class IngestionController {
       projectId,
       source,
       campaign,
+      // Le signal brut descend **en plus** de sa conséquence. `visitor` porte
+      // déjà ce que le consentement a produit — un identifiant, ou rien — mais
+      // pas ce qui l'a produit : un visiteur sans identité durable a refusé, ou
+      // n'a jamais rien eu à refuser, et les deux se ressemblent en aval.
+      consent,
       network: { ip, userAgent: userAgent ?? '' },
     });
 

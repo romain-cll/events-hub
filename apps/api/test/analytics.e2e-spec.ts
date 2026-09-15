@@ -63,6 +63,8 @@ interface SummaryResponse {
   uniqueVisitors: number;
   bounces: number;
   settledSessions: number;
+  consentGranted: number;
+  consentDeclined: number;
   topPages: TopPage[];
 }
 
@@ -205,7 +207,7 @@ describe('GET /v1/projects/:projectId/analytics — topPages (e2e)', () => {
       expect(second).toEqual(premier);
     });
 
-    it('rend exactement les neuf champs promis, et pas de série', async () => {
+    it('rend exactement les onze champs promis, et pas de série', async () => {
       // `interval` et `timeseries` ont existé jusqu'à l'étape 33. Le découpage
       // dans le temps appartient au lecteur, qui reçoit des sessions datées par
       // la route voisine — cette route-ci ne rend que des agrégats de période.
@@ -214,6 +216,11 @@ describe('GET /v1/projects/:projectId/analytics — topPages (e2e)', () => {
         // `EventStore.where()`. Rendu pour que le retrait ne soit pas muet.
         'botSessions',
         'bounces',
+        // Ce que les visiteurs ont répondu au sujet du cookie de croisement.
+        // Leur somme ne fait pas `sessions`, et l'écart est le nombre de
+        // visites auxquelles on n'a rien demandé.
+        'consentDeclined',
+        'consentGranted',
         'from',
         'pageViews',
         'sessions',
@@ -222,6 +229,17 @@ describe('GET /v1/projects/:projectId/analytics — topPages (e2e)', () => {
         'topPages',
         'uniqueVisitors',
       ]);
+    });
+
+    it('compte les réponses au bandeau sans les confondre avec le silence', async () => {
+      const resume = await summarize(FENETRE);
+
+      // Les fixtures de cette suite n'envoient aucun signal de consentement :
+      // les deux compteurs sont donc à zéro, et surtout pas `sessions`. Un
+      // défaut qui compterait le silence comme un refus se verrait ici.
+      expect(resume.consentGranted).toBe(0);
+      expect(resume.consentDeclined).toBe(0);
+      expect(resume.sessions).toBeGreaterThan(0);
     });
 
     it('refuse `interval`, qui n’existe plus', async () => {

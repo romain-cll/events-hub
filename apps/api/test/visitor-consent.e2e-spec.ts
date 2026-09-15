@@ -105,6 +105,18 @@ describe('consentement et identité du visiteur (e2e)', () => {
     return rows.map((row) => row.visitorKey);
   };
 
+  /** Ce que les sessions du projet ont retenu de la réponse au bandeau. */
+  const consentements = async (
+    projectId: string,
+  ): Promise<(boolean | null)[]> => {
+    const rows = await db
+      .select({ consent: sessions.consent })
+      .from(sessions)
+      .where(eq(sessions.projectId, projectId));
+
+    return rows.map((row) => row.consent);
+  };
+
   it('ne pose aucun cookie quand le site ne dit rien', async () => {
     const projet = await projetNeuf('e2e consentement — muet');
 
@@ -240,5 +252,68 @@ describe('consentement et identité du visiteur (e2e)', () => {
     // identifier : ni le cookie ni l'identifiant n'ont de sens sur ce chemin.
     expect(poseParLaReponse(response)).toBeUndefined();
     expect(response.body).not.toHaveProperty('visitorId');
+  });
+  describe('ce que la session retient de la réponse', () => {
+    it('laisse la colonne vide quand on n’a rien demandé', async () => {
+      const projet = await projetNeuf('e2e consentement — colonne muette');
+
+      await post(evenement(projet)).expect(201);
+
+      // `null`, et surtout pas `false` : la mesure par défaut ne pose aucune
+      // question, donc ce visiteur n'a rien refusé. Les confondre ferait passer
+      // un site sans bandeau pour un site que tout le monde refuse.
+      expect(await consentements(projet.id)).toEqual([null]);
+    });
+
+    it('enregistre l’acceptation et le refus', async () => {
+      const accepte = await projetNeuf('e2e consentement — colonne oui');
+      const refuse = await projetNeuf('e2e consentement — colonne non');
+
+      await post(evenement(accepte, { consent: true })).expect(201);
+      await post(evenement(refuse, { consent: false })).expect(201);
+
+      expect(await consentements(accepte.id)).toEqual([true]);
+      expect(await consentements(refuse.id)).toEqual([false]);
+    });
+
+    it('retient la réponse donnée à la deuxième page', async () => {
+      const projet = await projetNeuf('e2e consentement — bandeau tardif');
+
+      // Le cas qui interdit de figer la valeur à l'ouverture : le premier
+      // événement d'une visite précède toujours le clic sur le bandeau.
+      await post(evenement(projet)).expect(201);
+
+      const accepte = await post(
+        evenement(projet, { consent: true, occurredAt: apres(30_000) }),
+      ).expect(201);
+
+      expect(await consentements(projet.id)).toEqual([true]);
+
+      // Et le refus qui suit l'emporte à son tour : c'est le dernier signal
+      // connu qui fait foi, pas le premier.
+      await post(
+        evenement(projet, { consent: false, occurredAt: apres(60_000) }),
+        `${COOKIE}=${identifiantPose(accepte)}`,
+      ).expect(201);
+
+      expect(await consentements(projet.id)).toEqual([false]);
+    });
+
+    it('n’efface pas une réponse quand l’événement suivant se tait', async () => {
+      const projet = await projetNeuf('e2e consentement — silence après oui');
+
+      const accepte = await post(
+        evenement(projet, { consent: true }),
+      ).expect(201);
+
+      // Un site qui ne câble le bandeau que sur sa page d'accueil envoie le
+      // signal une fois, puis plus rien. L'absence n'est pas une rétractation.
+      await post(
+        evenement(projet, { occurredAt: apres(60_000) }),
+        `${COOKIE}=${identifiantPose(accepte)}`,
+      ).expect(201);
+
+      expect(await consentements(projet.id)).toEqual([true]);
+    });
   });
 });

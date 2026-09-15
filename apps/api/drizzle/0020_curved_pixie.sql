@@ -1,0 +1,13 @@
+-- Ce que le visiteur a répondu au sujet du cookie de croisement : `true`
+-- accepté, `false` refusé, `null` on ne lui a rien demandé — le cas ordinaire,
+-- la mesure d'audience ne posant aucune question.
+--
+-- Nullable et sans défaut, délibérément : un défaut `false` ferait passer
+-- l'absence de question pour un refus, et toutes les visites d'un site sans
+-- bandeau pour des refus.
+--
+-- Aucune reprise de données n'est possible. Le signal a toujours voyagé sur le
+-- fil, il n'était rangé nulle part : les visites antérieures resteront à
+-- `null`. Rupture de série, comme `is_bot` — à ne pas lire comme une vague de
+-- refus qui s'arrête net.
+ALTER TABLE "sessions" ADD COLUMN "consent" boolean;

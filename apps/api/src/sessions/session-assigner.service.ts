@@ -80,6 +80,24 @@ export interface SessionCandidate {
    * la position géographique.
    */
   campaign?: Campaign | null;
+  /**
+   * Ce que le visiteur a répondu au sujet du cookie de croisement.
+   *
+   * **La seule valeur de cette candidate qui ait le droit de changer en cours
+   * de visite**, et la seule colonne de `sessions` à bouger après l'ouverture
+   * avec `startedAt`. Le bandeau se répond à la deuxième page aussi souvent
+   * qu'à la première, et le premier événement d'une visite précède toujours le
+   * clic : la figer à l'ouverture, comme la position ou la campagne,
+   * sous-estimerait les acceptations de façon structurelle.
+   *
+   * C'est donc le **dernier signal connu** qui gagne. `undefined` n'efface
+   * rien : on n'a rien demandé à ce chargement-là, ce qui ne retire pas ce qui
+   * a été répondu au précédent.
+   *
+   * Ça ne coûte aucune requête : `extend` écrit déjà à chaque événement qui
+   * rejoint une session.
+   */
+  consent?: boolean;
 }
 
 /** Un voisin : son instant et la session à laquelle il appartient. */
@@ -208,6 +226,7 @@ export class SessionAssigner {
       location,
       client,
       campaign,
+      consent,
     }: SessionCandidate,
   ): Promise<string> {
     // Triées, et c'est la seule chose qui compte : deux requêtes du même
@@ -237,12 +256,21 @@ export class SessionAssigner {
     if (joinsPrevious && joinsNext) {
       // Les deux voisins sont assez proches : l'événement fait le pont.
       return previous.sessionId === next.sessionId
-        ? this.extend(tx, previous.sessionId, occurredAt)
-        : this.merge(tx, previous.sessionId, next.sessionId, occurredAt);
+        ? this.extend(tx, previous.sessionId, occurredAt, consent)
+        : this.merge(
+            tx,
+            previous.sessionId,
+            next.sessionId,
+            occurredAt,
+            consent,
+          );
     }
 
-    if (joinsPrevious) return this.extend(tx, previous.sessionId, occurredAt);
-    if (joinsNext) return this.extend(tx, next.sessionId, occurredAt);
+    if (joinsPrevious) {
+      return this.extend(tx, previous.sessionId, occurredAt, consent);
+    }
+
+    if (joinsNext) return this.extend(tx, next.sessionId, occurredAt, consent);
 
     return this.open(
       tx,
@@ -252,6 +280,7 @@ export class SessionAssigner {
       location,
       client,
       campaign,
+      consent,
     );
   }
 
@@ -333,6 +362,7 @@ export class SessionAssigner {
     location?: Location,
     client?: Client,
     campaign?: Campaign | null,
+    consent?: boolean,
   ): Promise<string> {
     const [session] = await tx
       .insert(sessions)
@@ -350,6 +380,9 @@ export class SessionAssigner {
         campaignSource: campaign?.source,
         campaignMedium: campaign?.medium,
         campaignName: campaign?.name,
+        // `undefined` laisse la colonne à `null` : personne n'a rien demandé à
+        // ce visiteur, ce qui n'est pas un refus. Voir `sessions.consent`.
+        consent,
       })
       .returning({ id: sessions.id });
 
@@ -368,10 +401,17 @@ export class SessionAssigner {
     tx: DrizzleTransaction,
     sessionId: string,
     occurredAt: Date,
+    consent?: boolean,
   ): Promise<string> {
     await tx
       .update(sessions)
-      .set({ startedAt: sql`least(${sessions.startedAt}, ${occurredAt})` })
+      .set({
+        startedAt: sql`least(${sessions.startedAt}, ${occurredAt})`,
+        // La clé n'est posée que s'il y a un signal : une absence n'efface pas
+        // une réponse donnée au chargement précédent. C'est ce qui fait du
+        // consentement une valeur « dernier connu » et non « dernier vu ».
+        ...(consent === undefined ? {} : { consent }),
+      })
       .where(eq(sessions.id, sessionId));
 
     return sessionId;
@@ -400,6 +440,7 @@ export class SessionAssigner {
     first: string,
     second: string,
     occurredAt: Date,
+    consent?: boolean,
   ): Promise<string> {
     const bornes = await tx
       .select({ id: sessions.id, startedAt: sessions.startedAt })
@@ -420,6 +461,11 @@ export class SessionAssigner {
       .update(sessions)
       .set({
         startedAt: sql`least(${sessions.startedAt}, ${absorbee.startedAt}, ${occurredAt})`,
+        // Même règle qu'à l'extension : l'événement qui fait le pont apporte le
+        // dernier signal connu, et son absence ne défait pas celui de la
+        // survivante. Celui de l'absorbée disparaît avec sa ligne, comme sa
+        // position et sa campagne.
+        ...(consent === undefined ? {} : { consent }),
       })
       .where(eq(sessions.id, survivante.id));
 

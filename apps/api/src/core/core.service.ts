@@ -123,6 +123,23 @@ export type IngestCommand =
        * écrite qu'à l'ouverture de la session — voir `SessionCandidate`.
        */
       campaign?: RawCampaign;
+      /**
+       * Ce que le visiteur a répondu au sujet du cookie de croisement.
+       *
+       * `true` accepté, `false` refusé, **absent** : on ne lui a rien demandé —
+       * et c'est le cas ordinaire. Le mode par défaut de la mesure d'audience
+       * ne pose aucune question, donc l'absence n'est ni un refus ni un trou.
+       *
+       * Le socle reçoit ce signal **en plus** de sa conséquence. Les deux ne
+       * disent pas la même chose : `visitorId` dit ce qu'on a le droit
+       * d'écrire, `consent` dit ce qui a été répondu. Sans lui, un visiteur qui
+       * refuse et un visiteur à qui personne n'a rien demandé sont
+       * indiscernables — ils n'ont ni l'un ni l'autre d'identité durable.
+       *
+       * Branche navigateur seulement : une source serveur n'a personne à qui
+       * demander.
+       */
+      consent?: boolean;
     })
   | (IngestBase & {
       source: 'server';
@@ -397,6 +414,10 @@ export class CoreService {
       location: this.geoIp.locate(network.ip),
       client: this.userAgents.describe(network.userAgent),
       campaign: normalizeCampaign(command.campaign),
+      // Seule valeur de la candidate qui ait le droit de changer en cours de
+      // visite : le bandeau se répond à la deuxième page aussi souvent qu'à la
+      // première. Voir `SessionCandidate.consent`.
+      consent: command.consent,
     });
   }
 

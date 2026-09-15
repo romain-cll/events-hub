@@ -161,6 +161,44 @@ export const sessions = pgTable(
      * transporte, et deux colonnes presque toujours nulles ne valent pas leur
      * place.
      */
+    /**
+     * Ce que le visiteur a répondu au sujet du **cookie de croisement**.
+     *
+     * ## Les trois états, et le plus fréquent est `null`
+     *
+     * `true` accepté, `false` refusé, `null` **rien demandé**. Le mode par
+     * défaut de la mesure d'audience ne pose aucune question — il ne dépose
+     * rien sur le terminal et repose sur l'intérêt légitime — donc `null` est
+     * le cas ordinaire et non un trou de mesure. Seul le croisement du revenu
+     * avec le parcours exige un consentement, parce que lui seul demande une
+     * identité qui traverse les jours.
+     *
+     * Confondre `null` et `false` ferait passer un site sans bandeau pour un
+     * site dont tous les visiteurs refusent. Ce n'est pas la même donnée, et
+     * ça n'appelle pas la même action.
+     *
+     * ## Ce que cette colonne n'est pas
+     *
+     * **Pas une preuve de consentement.** Aucune identité, aucun horodatage de
+     * l'acte, aucune trace de ce qui a été affiché : la preuve incombe au site,
+     * et la dupliquer ici nous ferait garder de la donnée que personne ne nous
+     * demande. Ce qu'on garde est un drapeau d'audience sur une visite anonyme,
+     * emporté avec sa ligne par la purge des 25 mois, dont le seul usage est de
+     * compter les refus.
+     *
+     * ## Elle bouge après l'ouverture, et c'est la seule avec `startedAt`
+     *
+     * Le bandeau se répond à la deuxième page aussi souvent qu'à la première,
+     * et le premier événement d'une visite précède toujours le clic. La figer à
+     * l'ouverture comme la position ou la campagne sous-estimerait les
+     * acceptations de façon structurelle. C'est le dernier signal connu qui
+     * gagne ; une absence n'efface jamais une réponse.
+     *
+     * ⚠️ Rupture de série, comme `isBot` : elle ne se remplit qu'à partir de
+     * sa mise en service. Les visites antérieures sont toutes à `null` — le
+     * signal existait sur le fil, il n'était rangé nulle part.
+     */
+    consent: boolean(),
     campaignSource: text(),
     campaignMedium: text(),
     campaignName: text(),

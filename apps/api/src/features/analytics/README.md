@@ -466,3 +466,43 @@ pas nommer.
 de la détection. Toutes les sessions antérieures sont comptées comme humaines, et
 le resteront : le User-Agent qui aurait permis de les juger n'a jamais été
 stocké. Ce n'est pas une invasion soudaine, c'est une mesure qui commence.
+
+### `consentGranted` et `consentDeclined` — deux nombres, pas un taux
+
+Le consentement ne porte **que sur le croisement**. La mesure d'audience par
+défaut ne demande rien et ne dépose rien : elle tient sur l'intérêt légitime, et
+l'opposition se prend dans la politique de confidentialité. Ce qui exige un
+consentement, c'est l'identité durable — celle qui permet de rattacher un
+paiement au parcours qui l'a produit, des mois après.
+
+Les deux compteurs disent donc **combien de visites sont corrélables à un
+paiement**, pas combien de visiteurs « ont accepté les cookies ».
+
+**Leur somme ne fait pas `sessions`, et l'écart est la donnée la plus
+importante des trois.** C'est le nombre de visites auxquelles on n'a rien
+demandé : un site sans bandeau, ou une page qui ne l'a pas câblé. Les compter
+comme des refus ferait passer l'absence de question pour un non — et un site
+sans plateforme de consentement pour un site que tous ses visiteurs refusent.
+Les deux appellent pourtant des actions opposées : améliorer un bandeau, ou en
+poser un.
+
+**Aucun pourcentage n'est rendu**, et c'est pour la même raison que `bounces` est
+publié sans son taux : le dénominateur dépend de la question. Rapporté aux
+visites qui ont répondu, le chiffre mesure la performance du bandeau ; rapporté à
+toutes les visites, il mesure la couverture de l'attribution. Les deux sont
+légitimes, aucun n'est *le* taux de consentement.
+
+**La valeur retenue est le dernier signal connu**, pas celui de l'ouverture — à
+l'inverse de la position, du client et de la campagne. Le bandeau se répond à la
+deuxième page aussi souvent qu'à la première, et le premier événement d'une
+visite précède toujours le clic : figer à l'ouverture sous-estimerait les
+acceptations de façon structurelle. Une absence de signal n'efface jamais une
+réponse.
+
+**Ce n'est pas une preuve de consentement.** Aucune identité, aucun horodatage de
+l'acte : la preuve incombe au site, et la dupliquer nous ferait garder de la
+donnée que personne ne nous demande. Ce qui est stocké est un drapeau d'audience
+sur une visite anonyme, emporté avec sa ligne par la purge des 25 mois.
+
+**⚠️ Rupture de série**, comme `botSessions` : le signal voyageait sur le fil bien
+avant d'être rangé quelque part. Les visites antérieures resteront sans réponse.

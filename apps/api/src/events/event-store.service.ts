@@ -1662,6 +1662,45 @@ export class EventStore {
   }
 
   /**
+   * Ce que les visiteurs ont répondu au sujet du cookie de croisement.
+   *
+   * ## Deux nombres, et leur somme ne fait pas `sessions`
+   *
+   * Le reste — la majorité, sur un site qui ne demande rien — n'a pas été
+   * interrogé. Le mode par défaut de la mesure ne pose aucune question, donc
+   * une visite sans réponse n'est ni un refus ni un trou : c'est le cas
+   * ordinaire. Rendre un pourcentage ici obligerait à choisir son dénominateur,
+   * et ce choix appartient au lecteur.
+   *
+   * ## `where` et non `scoped`
+   *
+   * Les robots restent **exclus**, comme partout ailleurs. `countBotSessions`
+   * est la seule lecture de ce fichier à regarder de l'autre côté du filtre, et
+   * elle le dit dans son nom.
+   *
+   * Les deux comptes partent ensemble : ils lisent la même jointure, et deux
+   * requêtes pourraient se contredire si un événement arrivait entre les deux.
+   */
+  async countConsent(
+    scope: EventScope,
+  ): Promise<{ granted: number; declined: number }> {
+    const [row] = await this.db
+      .select({
+        granted: sql<number>`count(distinct ${events.sessionId}) filter (where ${sessions.consent})`.mapWith(
+          Number,
+        ),
+        declined: sql<number>`count(distinct ${events.sessionId}) filter (where not ${sessions.consent})`.mapWith(
+          Number,
+        ),
+      })
+      .from(events)
+      .innerJoin(sessions, eq(events.sessionId, sessions.id))
+      .where(this.where(scope));
+
+    return row;
+  }
+
+  /**
    * Écarte les événements qu'un type `serverOnly` n'aurait pas dû voir arriver
    * d'un navigateur.
    *

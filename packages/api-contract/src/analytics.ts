@@ -88,6 +88,29 @@ export const analyticsSummarySchema = z.object({
    */
   botSessions: z.number(),
   /**
+   * Visites dont le visiteur a **accepté** le cookie de croisement.
+   *
+   * Le consentement ne porte que sur l'attribution du revenu — la mesure
+   * d'audience ne demande rien et ne dépose rien. Ce nombre dit donc combien de
+   * visites sont corrélables à un paiement.
+   */
+  consentGranted: z.number(),
+  /**
+   * Visites dont le visiteur a **refusé** le cookie de croisement.
+   *
+   * ⚠️ `consentGranted + consentDeclined` ne fait **pas** `sessions`. L'écart
+   * est le nombre de visites auxquelles on n'a rien demandé — site sans
+   * bandeau, ou page qui ne l'a pas câblé. Les compter comme des refus ferait
+   * passer l'absence de question pour un non, et un site sans bandeau pour un
+   * site que tout le monde refuse.
+   *
+   * Aucun pourcentage n'est rendu : le dénominateur dépend de la question
+   * posée — performance du bandeau, ou couverture de la mesure.
+   *
+   * ⚠️ Rupture de série : ne se remplit qu'à partir de la mise en service.
+   */
+  consentDeclined: z.number(),
+  /**
    * Sessions **terminées** n'ayant vu qu'une seule page — le numérateur du
    * taux de rebond.
    *

@@ -90,6 +90,7 @@ thirty minutes.
 | browser, OS, device type | coarse labels, all optional |
 | is bot | true only for a client that **declared** itself a robot |
 | campaign source, medium, name | from `utm_source`, `utm_medium`, `utm_campaign`, lowercased, frozen when the visit opens |
+| consent | accepted, refused, or **empty** — empty meaning the visitor was never asked, which is the default mode. Not proof of anything: no identity, no timestamp of the act. Last answer wins, since a banner is often answered on the second page. |
 
 ### Stored on the event
 
@@ -174,7 +175,7 @@ What that puts on you:
 | Art. 28 — a written processing agreement | to be signed with whoever operates the hub for you; if you self-host, the question does not arise |
 | Art. 30 — record of processing | one entry for audience measurement, one for revenue attribution if you use it; the tables above are the "categories of data" |
 | Art. 13 — informing visitors | the paragraph below |
-| Art. 7 — collecting and proving consent | entirely yours. **The hub keeps no consent record, on purpose**: duplicating your proof here would make us retain data nobody asked us for. The cookie's existence is the only state. |
+| Art. 7 — collecting and proving consent | entirely yours. **The hub keeps no proof of consent, on purpose**: duplicating your record here would make us retain data nobody asked us for. What it does keep is one anonymous flag per visit — accepted, refused, or never asked — with no identity and no timestamp of the act, so that a site can count how many visitors decline the attribution cookie. It proves nothing and is purged with its row at 25 months. |
 | Art. 15 / 17 — access and erasure | see below; the default mode is an Article 11 case |
 | Retention | 25 months, purged daily — confirm it is enabled on your instance before you declare it |
 | Where the data sits | a deployment fact. Fill it in for your own record — nobody else can. |
@@ -298,7 +299,9 @@ exposed in the dashboard yet; today it takes a direct query against the database
   you put personal data in them, it is stored, and it is your record of processing
   that has to say so.
 - **Your URLs.** See `page.url` above.
-- **Consent and its proof.** No consent log lives here.
+- **Consent and its proof.** No consent log lives here — only an anonymous
+  accepted / refused / never-asked flag on each visit, which proves nothing and
+  is purged with the visit.
 - **`TRUST_PROXY_HOPS`,** if you self-host. It must equal the real number of
   reverse proxies. Set too high, a client can forge its own `X-Forwarded-For` —
   and therefore its own visitor key and country.

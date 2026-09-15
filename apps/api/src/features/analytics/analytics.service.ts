@@ -159,6 +159,27 @@ export interface AnalyticsSummary {
    */
   botSessions: number;
   /**
+   * Visites dont le visiteur a **accepté** le cookie de croisement.
+   *
+   * Le consentement ne porte que sur l'attribution du revenu : la mesure
+   * d'audience, elle, ne demande rien et ne dépose rien. Ce compteur dit donc
+   * combien de visites sont corrélables à un paiement, pas combien de visiteurs
+   * ont « accepté les cookies ».
+   */
+  consentGranted: number;
+  /**
+   * Visites dont le visiteur a **refusé** le cookie de croisement.
+   *
+   * ⚠️ `consentGranted + consentDeclined` ne fait **pas** `sessions`, et
+   * l'écart n'est pas une erreur : c'est le nombre de visites auxquelles on n'a
+   * rien demandé — un site sans bandeau, ou une page qui ne l'a pas câblé. Les
+   * compter comme des refus ferait passer l'absence de question pour un non.
+   *
+   * ⚠️ Rupture de série, comme `botSessions` : le signal existait sur le fil
+   * avant d'être rangé, donc les visites antérieures sont toutes sans réponse.
+   */
+  consentDeclined: number;
+  /**
    * Sessions **terminées** n'ayant vu qu'une seule page.
    *
    * Le numérateur du taux de rebond, au sens de Plausible : une visite est un
@@ -546,6 +567,7 @@ export class AnalyticsService {
       pageViews,
       uniqueVisitors,
       botSessions,
+      consent,
       topPages,
       byPageCount,
     ] = await Promise.all([
@@ -553,6 +575,7 @@ export class AnalyticsService {
         this.events.countEvents(pages),
         this.events.countVisitors(audience),
         this.events.countBotSessions(audience),
+        this.events.countConsent(audience),
         this.events.topValues(pages, {
           source: 'attributes',
           key: PATH_ATTRIBUTE,
@@ -574,6 +597,8 @@ export class AnalyticsService {
       pageViews,
       uniqueVisitors,
       botSessions,
+      consentGranted: consent.granted,
+      consentDeclined: consent.declined,
       bounces: byPageCount.single,
       settledSessions: byPageCount.single + byPageCount.several,
       topPages,
