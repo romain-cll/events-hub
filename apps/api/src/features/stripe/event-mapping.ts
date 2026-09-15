@@ -56,25 +56,33 @@ const BY_BILLING_REASON: Partial<
 export const AMOUNT_KEY = 'payment.amount';
 export const CURRENCY_KEY = 'payment.currency';
 
+/** Le paiement ponctuel, isolé du checkout qui ouvre un abonnement. */
+export const ONE_TIME_TYPE = `${PREFIX}.payment.one_time`;
+
 /**
- * Quel type d'événement répond à quelle question de revenu.
+ * Ce qui compte comme revenu, et pourquoi ces cinq-là seulement.
  *
  * **Un paiement produit plusieurs événements Stripe**, tous porteurs du même
  * montant : additionner « ce qui porte un montant » compterait le même euro
- * quatre fois. Une lecture de revenu vise donc un type, et ce tableau est le
- * seul endroit où le choix est écrit.
+ * quatre fois. Le résultat resterait plausible, et rien ne le signalerait.
  *
- * `one_time` vise le checkout parce que Stripe ne dit rien d'autre d'un
- * paiement ponctuel — il n'a pas de `billing_reason`. Les quatre ne
- * s'additionnent pas : un abonnement pris au checkout produit à la fois un
- * `started` et un `checkout.session.completed`.
+ * La règle qui rend la somme juste : **une facture, une ligne**. Les trois
+ * premiers sont mutuellement exclusifs — Stripe les distingue lui-même par
+ * `billing_reason`, et une facture n'en porte qu'un. `invoice.paid` ramasse les
+ * autres raisons (`manual`, `subscription_threshold`), qui sont rares mais
+ * n'ont aucune raison d'être perdues. `payment.one_time` est le ponctuel pur,
+ * isolé à l'ingestion par `typeOf` : sans cet affinage, il se confondrait avec
+ * le checkout qui ouvre un abonnement, déjà compté par `subscription.started`.
+ *
+ * Aucun des cinq ne recouvre un autre. C'est ce qui permet de les sommer.
  */
-export const TYPE_BY_REVENUE_KIND = {
-  new: `${PREFIX}.subscription.started`,
-  recurring: `${PREFIX}.subscription.renewed`,
-  change: `${PREFIX}.subscription.changed`,
-  one_time: `${PREFIX}.checkout.session.completed`,
-} as const;
+export const REVENUE_TYPES = [
+  `${PREFIX}.subscription.started`,
+  `${PREFIX}.subscription.renewed`,
+  `${PREFIX}.subscription.changed`,
+  `${PREFIX}.invoice.paid`,
+  ONE_TIME_TYPE,
+] as const;
 
 /**
  * Le type d'événement du hub pour un webhook Stripe donné.
@@ -91,6 +99,20 @@ export function typeOf(event: Stripe.Event): string {
       : undefined;
 
     if (refined) return refined;
+  }
+
+  // Le second endroit où Stripe sous-discrimine. `checkout.session.completed`
+  // recouvre deux faits qui n'ont pas le même sens pour le revenu : l'ouverture
+  // d'un abonnement — dont la facture produira son propre événement, porteur du
+  // même montant — et un achat ponctuel, qui n'en produira aucun autre. Les
+  // confondre force à choisir entre compter deux fois l'abonnement ou perdre le
+  // ponctuel. `mode` le dit, il suffit de le lire.
+  if (
+    event.type === 'checkout.session.completed' &&
+    'mode' in object &&
+    object.mode === 'payment'
+  ) {
+    return ONE_TIME_TYPE;
   }
 
   return `${PREFIX}.${event.type}`;
@@ -123,6 +145,10 @@ export function propertiesOf(event: Stripe.Event): Record<string, unknown> {
     'stripe.customer.id': customerOf(object),
     'stripe.billing_reason':
       'billing_reason' in object ? object.billing_reason : undefined,
+    // Recopié pour que l'affinage de `typeOf` se vérifie sur la ligne plutôt
+    // que se devine : c'est lui qui décide si un checkout est du revenu propre
+    // ou le doublon d'une facture à venir.
+    'stripe.checkout.mode': 'mode' in object ? object.mode : undefined,
     'stripe.livemode': event.livemode,
     ...(amount === undefined
       ? {}

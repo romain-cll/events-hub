@@ -285,12 +285,24 @@ function hostOf(url: URL): string {
  * configuration, pas une donnée d'événement. Tant qu'elle n'existe pas, on
  * préfère une ligne `referral` visible à un rapprochement silencieux et faux.
  *
- * Interne au module : `sourceOf` est la seule porte. L'exporter en plus
- * donnerait un second chemin vers la même règle, qui contourne la seule chose
- * que `sourceOf` ajoute — le refus de classer une session dont on n'a vu aucune
- * page.
+ * ## Deux portes, et elles n'ont pas le même garde-fou
+ *
+ * `sourceOf` prend une session repliée et refuse de classer celle dont aucune
+ * page n'a été vue. C'est la porte de l'analytics, et ce refus est ce qui
+ * empêche de gonfler `direct` d'un bruit qui n'a rien à voir avec
+ * l'acquisition.
+ *
+ * Cette fonction-ci est l'autre porte, ouverte pour la lecture du revenu : elle
+ * reçoit un referrer déjà isolé par le Core, sur une ligne qui **existe par
+ * construction** — il a fallu un événement pour la produire. Le garde-fou de
+ * `sourceOf` n'aurait rien à y garder, et l'exiger obligerait à fabriquer une
+ * session de façade pour le satisfaire.
+ *
+ * La règle de classement, elle, reste écrite **une seule fois**. C'est tout ce
+ * qui compte : deux classements qui divergeraient au premier moteur ajouté
+ * seraient pires que deux portes.
  */
-function classifyReferrer(
+export function classifyReferrer(
   referrer: string | null,
   pageUrl: string | null,
 ): Source {

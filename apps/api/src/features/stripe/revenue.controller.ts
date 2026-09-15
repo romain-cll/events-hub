@@ -14,15 +14,18 @@ import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import { ProjectMemberGuard } from '../../projects/project-member.guard';
 import { CohortsService, type CohortsPage } from './cohorts.service';
 import {
-  revenueCampaignsSchema,
+  revenueAttributionSchema,
   revenueCohortsSchema,
   revenueMovementsSchema,
-  type RevenueCampaignsDto,
+  type RevenueAttributionDto,
   type RevenueCohortsDto,
   type RevenueMovementsDto,
 } from './dto/revenue-query.dto';
 import { MovementsService, type MovementsPage } from './movements.service';
-import { RevenueService, type CampaignRevenuePage } from './revenue.service';
+import {
+  RevenueService,
+  type RevenueAttributionPage,
+} from './revenue.service';
 import { StripeService, type SyncReport } from './stripe.service';
 
 /**
@@ -49,19 +52,23 @@ export class RevenueController {
   ) {}
 
   /**
-   * Le revenu par campagne d'acquisition, sur une fenêtre.
+   * D'où vient le revenu, rangé de quatre façons à la fois.
+   *
+   * Une seule route plutôt que quatre : la carte Acquisition les affiche
+   * ensemble, et quatre appels laisseraient leurs totaux diverger dès qu'un
+   * paiement arrive entre deux.
    *
    * `projectId` est validé comme UUID avant d'atteindre la base : un identifiant
    * malformé produit un 400 explicite plutôt qu'une erreur de cast Postgres
    * remontée en 500.
    */
-  @Get('campaigns')
-  campaigns(
+  @Get('attribution')
+  attribution(
     @Param('projectId', new ZodValidationPipe(z.uuid())) projectId: string,
-    @Query(new ZodValidationPipe(revenueCampaignsSchema))
-    query: RevenueCampaignsDto,
-  ): Promise<CampaignRevenuePage> {
-    return this.revenue.campaigns(projectId, query);
+    @Query(new ZodValidationPipe(revenueAttributionSchema))
+    query: RevenueAttributionDto,
+  ): Promise<RevenueAttributionPage> {
+    return this.revenue.attribution(projectId, query);
   }
 
   /**

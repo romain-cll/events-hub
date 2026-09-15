@@ -1,0 +1,320 @@
+import { revenueAttributionPageSchema } from '@events-hub/api-contract';
+import type { INestApplication } from '@nestjs/common';
+import { eq } from 'drizzle-orm';
+import request from 'supertest';
+import type { App } from 'supertest/types';
+
+import { CoreService } from '../src/core/core.service';
+import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
+import { sessions } from '../src/database/schema';
+import {
+  TEST_ORIGIN,
+  cleanupFixtures,
+  cookiesOf,
+  createProject,
+  expectMatchesContract,
+  joinOrganization,
+  organizationId,
+  signUp,
+  type SignedUpUser,
+  type TestProject,
+} from './fixtures';
+import { createTestApp } from './harness';
+
+/**
+ * D'où vient le revenu — de la visite au paiement, sur quatre axes à la fois.
+ *
+ * Ce que seul un vrai Postgres montre ici : les deux `lateral` enchaînés qui
+ * remontent d'un paiement à la **première visite** de son visiteur, puis au
+ * **premier événement** de cette visite — là où vivent le referrer et le chemin
+ * d'entrée, dans un sac que le Core ne sait pas lire mais sait grouper.
+ *
+ * Éprouvé aussi : la séparation des devises, le repli des referrers en
+ * provenances, et le fait qu'un paiement sans parcours ne soit pas rangé sous
+ * « direct ».
+ *
+ * Les paiements sont ingérés par le Core, pas par HTTP : `POST /v1/events` ne
+ * permet pas de désigner un visiteur depuis une source serveur — l'identité y
+ * vient du cookie. Le chemin testé reste le vrai, c'est exactement l'appel que
+ * `features/stripe` fait en traitant un webhook.
+ */
+
+const PREMIERE_VISITE = new Date('2026-07-01T10:00:00.000Z');
+const SECONDE_VISITE = new Date('2026-07-01T14:00:00.000Z');
+
+/** La fenêtre de lecture : elle ne contient que les paiements. */
+const FENETRE = {
+  from: '2026-08-01T00:00:00.000Z',
+  to: '2026-09-01T00:00:00.000Z',
+};
+
+const PAIEMENT = new Date('2026-08-10T12:00:00.000Z');
+
+const NAVIGATEUR =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+
+const COOKIE = '__Host-eh_vid';
+
+const NOUVEAU = 'stripe.subscription.started';
+const RENOUVELLEMENT = 'stripe.subscription.renewed';
+const PONCTUEL = 'stripe.payment.one_time';
+
+interface Visite {
+  campaign?: Record<string, string>;
+  referrer?: string;
+  path?: string;
+  visitorId?: string;
+  at?: Date;
+}
+
+describe('attribution du revenu (e2e)', () => {
+  let app: INestApplication<App>;
+  let db: DrizzleDatabase;
+  let core: CoreService;
+  let projet: TestProject;
+  let lecteur: SignedUpUser;
+
+  /** Une visite consentie ; rend l'identifiant durable que le hub a posé. */
+  const visiter = async ({
+    campaign,
+    referrer,
+    path = '/',
+    visitorId,
+    at = PREMIERE_VISITE,
+  }: Visite): Promise<string> => {
+    const envoi = request(app.getHttpServer())
+      .post('/v1/events')
+      .set('Origin', TEST_ORIGIN)
+      .set('User-Agent', NAVIGATEUR);
+
+    if (visitorId) envoi.set('Cookie', `${COOKIE}=${visitorId}`);
+
+    const response = await envoi
+      .send({
+        apiKey: projet.apiKey,
+        type: 'page_view',
+        occurredAt: at.toISOString(),
+        attributes: {
+          'page.path': path,
+          ...(referrer ? { 'page.referrer': referrer } : {}),
+        },
+        properties: {},
+        consent: true,
+        ...(campaign ? { campaign } : {}),
+      })
+      .expect(201);
+
+    const pose = cookiesOf(response).find((value) => value.startsWith(COOKIE));
+
+    return visitorId ?? /=([^;]+)/.exec(pose ?? '')?.[1] ?? '';
+  };
+
+  /** Un paiement rapporté par un serveur, comme `features/stripe` le fait. */
+  const encaisser = (
+    type: string,
+    amount: number,
+    currency: string,
+    visitorId?: string,
+  ) =>
+    core.ingest({
+      projectId: projet.id,
+      type,
+      occurredAt: PAIEMENT,
+      attributes: {},
+      properties: { 'payment.amount': amount, 'payment.currency': currency },
+      source: 'server',
+      visitorId,
+    });
+
+  const lire = async (query: Record<string, string> = {}) =>
+    expectMatchesContract(
+      (
+        await request(app.getHttpServer())
+          .get(`/v1/projects/${projet.id}/revenue/attribution`)
+          .set('Cookie', lecteur.cookies)
+          .query({ ...FENETRE, ...query })
+          .expect(200)
+      ).body,
+      revenueAttributionPageSchema,
+    );
+
+  beforeAll(async () => {
+    app = await createTestApp();
+    db = app.get<DrizzleDatabase>(DRIZZLE);
+    core = app.get(CoreService);
+
+    projet = await createProject(db, { name: 'e2e attribution' });
+    lecteur = await signUp(app, 'Lecteur attribution');
+    await joinOrganization(db, await organizationId(db), lecteur.id, 'member');
+
+    // Deux visites du même visiteur, deux campagnes, et c'est la première qui
+    // doit gagner : quatre heures les séparent, donc deux sessions.
+    const avecCampagne = await visiter({
+      campaign: { source: 'google', medium: 'cpc', name: 'rentree' },
+      referrer: 'https://www.google.fr/',
+      path: '/pricing',
+    });
+
+    await visiter({
+      campaign: { source: 'bing', medium: 'organic' },
+      referrer: 'https://www.bing.com/',
+      visitorId: avecCampagne,
+      at: SECONDE_VISITE,
+    });
+
+    // Un second moteur, même famille : `google.com` et `google.fr` doivent se
+    // replier en une seule ligne de provenance.
+    const autreGoogle = await visiter({
+      referrer: 'https://www.google.com/',
+      path: '/docs',
+    });
+
+    // Un visiteur connu, venu sans campagne ni referrer : direct.
+    const direct = await visiter({ path: '/' });
+
+    // Le pays vient de la base GeoIP, absente en test : on le pose à la main,
+    // c'est la seule façon d'éprouver cet axe-là.
+    await db
+      .update(sessions)
+      .set({ countryCode: 'FR' })
+      .where(eq(sessions.projectId, projet.id));
+
+    await encaisser(NOUVEAU, 2000, 'eur', avecCampagne);
+    await encaisser(NOUVEAU, 1500, 'usd', avecCampagne);
+    await encaisser(RENOUVELLEMENT, 900, 'eur', avecCampagne);
+    await encaisser(PONCTUEL, 700, 'eur', autreGoogle);
+    await encaisser(NOUVEAU, 500, 'eur', direct);
+
+    // Un visiteur qu'aucune visite ne porte, et un paiement sans identité :
+    // client d'avant l'installation, et consentement refusé.
+    await encaisser(NOUVEAU, 700, 'eur', 'inconnu-au-bataillon');
+    await encaisser(NOUVEAU, 300, 'eur');
+  });
+
+  afterAll(async () => {
+    await cleanupFixtures(db);
+    await app.close();
+  });
+
+  it('range le paiement sous la campagne de la première visite', async () => {
+    const page = await lire();
+
+    // `bing` est la seconde visite du même visiteur : elle ne doit apparaître
+    // nulle part. L'acquisition est antérieure à la fenêtre, et c'est le point
+    // — la fenêtre choisit les paiements, pas l'ancienneté qu'on leur reconnaît.
+    expect(page.campaigns.rows).toEqual([
+      expect.objectContaining({
+        campaign: { source: 'google', medium: 'cpc', name: 'rentree' },
+        currency: 'eur',
+        amount: 2900,
+        payments: 2,
+      }),
+      expect.objectContaining({ currency: 'usd', amount: 1500 }),
+    ]);
+  });
+
+  it('additionne les cinq types sans choisir de `kind`', async () => {
+    const page = await lire();
+
+    // 2000 (started) + 900 (renewed) sur la même campagne : les types sont
+    // disjoints, donc leur somme est le revenu de cette campagne. Il n'y a plus
+    // de paramètre à passer pour choisir lequel compte.
+    expect(page.eventTypes).toContain(NOUVEAU);
+    expect(page.eventTypes).toContain(PONCTUEL);
+    expect(page.campaigns.rows[0].amount).toBe(2900);
+  });
+
+  it('replie les referrers d’un même moteur en une provenance', async () => {
+    const page = await lire();
+    const moteurs = page.sources.rows.filter(
+      (row) => row.source.name === 'google' && row.currency === 'eur',
+    );
+
+    // `google.fr` et `google.com` sont deux lignes pour Postgres : 2900 € du
+    // premier visiteur, 700 € du second. Une seule pour le lecteur.
+    expect(moteurs).toHaveLength(1);
+    expect(moteurs[0].amount).toBe(3600);
+    expect(moteurs[0].source.kind).toBe('search');
+  });
+
+  it('rend les quatre répartitions dans la même réponse', async () => {
+    const page = await lire();
+
+    // Les quatre voient les mêmes paiements, donc les mêmes totaux en euros —
+    // ce qui change est la façon de les ranger. C'est l'intérêt d'une seule
+    // route : quatre appels pourraient se contredire.
+    const euros = (rows: { currency: string | null; amount: number }[]) =>
+      rows
+        .filter((row) => row.currency === 'eur')
+        .reduce((sum, row) => sum + row.amount, 0);
+
+    const total = (axis: {
+      rows: { currency: string | null; amount: number }[];
+      direct: { currency: string | null; amount: number }[];
+      unattributed: { currency: string | null; amount: number }[];
+    }) => euros(axis.rows) + euros(axis.direct) + euros(axis.unattributed);
+
+    expect(total(page.campaigns)).toBe(5100);
+    expect(total(page.sources)).toBe(5100);
+    expect(total(page.landings)).toBe(5100);
+    expect(total(page.countries)).toBe(5100);
+  });
+
+  it('range la page d’entrée de la première visite', async () => {
+    const page = await lire();
+
+    // `/pricing` et non `/` : c'est la page par laquelle ce visiteur est
+    // arrivé, pas celle qu'il a vue ensuite.
+    expect(page.landings.rows.map((row) => row.label)).toEqual(
+      expect.arrayContaining(['/pricing', '/docs', '/']),
+    );
+  });
+
+  it('sépare le visiteur connu sans campagne du paiement sans parcours', async () => {
+    const page = await lire();
+
+    // Connu, venu sans campagne : ce n'est pas un trou de mesure.
+    expect(page.campaigns.direct).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ currency: 'eur', amount: 1200 }),
+      ]),
+    );
+
+    // Deux paiements qu'aucune visite ne réclame — un client d'avant
+    // l'installation, un refus de consentement.
+    expect(page.campaigns.unattributed).toEqual([
+      expect.objectContaining({ currency: 'eur', amount: 1000, payments: 2 }),
+    ]);
+  });
+
+  it('ne mélange jamais deux devises dans un total', async () => {
+    const page = await lire();
+
+    expect(
+      page.campaigns.rows.map((row) => [row.currency, row.amount]),
+    ).toEqual([
+      ['eur', 2900],
+      ['usd', 1500],
+    ]);
+  });
+
+  it('accepte les filtres déclarés sans qu’ils changent quoi que ce soit', async () => {
+    const [sans, avec] = await Promise.all([
+      lire(),
+      lire({ country: 'FR', landing: '/pricing' }),
+    ]);
+
+    // Ils sont posés pour que la page puisse se filtrer plus tard sans rouvrir
+    // le contrat. Tant qu'ils n'agissent pas, ce test est ce qui empêche de
+    // croire qu'ils agissent.
+    expect(avec).toEqual(sans);
+  });
+
+  it('refuse un paramètre qu’il n’applique pas', async () => {
+    await request(app.getHttpServer())
+      .get(`/v1/projects/${projet.id}/revenue/attribution`)
+      .set('Cookie', lecteur.cookies)
+      .query({ ...FENETRE, interval: 'day' })
+      .expect(400);
+  });
+});

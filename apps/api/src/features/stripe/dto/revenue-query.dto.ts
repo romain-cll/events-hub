@@ -6,76 +6,71 @@ const DEFAULT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const instant = z.iso.datetime({ offset: true }).transform((v) => new Date(v));
 
 /**
- * Ce qu'on additionne, et pourquoi c'est l'appelant qui le choisit.
- *
- * **Un seul paiement produit plusieurs événements Stripe** — un checkout par
- * carte en produit couramment quatre, tous porteurs d'un montant. Additionner
- * « tout ce qui porte un montant » compterait le même euro quatre fois, le
- * résultat resterait plausible, et rien ne le signalerait.
- *
- * Le classement vise donc **un type précis**, et le type dépend de la question.
- * Les quatre valeurs ci-dessous sont ces questions, dans le vocabulaire du
- * produit — pas dans celui de Stripe, qui n'a pas à fuir dans une URL publique.
- *
- * Elles ne s'additionnent pas entre elles, et c'est pour ça qu'on n'en rend
- * qu'une à la fois : un abonnement pris au checkout produit à la fois un
- * `started` et un paiement ponctuel, et leur somme doublerait ce client.
- */
-export const REVENUE_KINDS = [
-  'new',
-  'recurring',
-  'change',
-  'one_time',
-] as const;
-
-export type RevenueKind = (typeof REVENUE_KINDS)[number];
-
-/**
  * Le plafond du classement.
  *
- * Dix comme les autres classements. La valeur compte plus ici qu'ailleurs :
- * les campagnes sont **fournies par le client** — n'importe quel `utm_source`
- * dans une URL en crée une — donc leur nombre n'est borné par rien. Ce qui
- * tombe hors du classement n'est pas perdu pour autant : il reste dans le total
- * de la fenêtre, que la réponse rend à côté.
+ * Dix par défaut. La valeur compte plus ici qu'ailleurs : les campagnes et les
+ * pages d'entrée sont **fournies par le client** — n'importe quel `utm_source`
+ * dans une URL en crée une — donc leur nombre n'est borné par rien. Ce qui tombe
+ * hors du classement n'est pas perdu : il reste dans les totaux que la réponse
+ * rend à côté.
  */
 const MAX_LIMIT = 100;
 
 /**
- * `GET /v1/projects/:projectId/revenue/campaigns` — la fenêtre, la question, la
- * coupe.
+ * `GET /v1/projects/:projectId/revenue/attribution` — la fenêtre, la coupe, et
+ * les filtres à venir.
  *
- * `strictObject` comme les lectures d'analytics : un paramètre inconnu rend 400
- * plutôt que d'être ignoré. Sur une API de lecture, un filtre silencieusement
- * écarté produit un chiffre juste à une question que personne n'a posée.
+ * ## Il n'y a plus de `kind`
  *
- * La fenêtre par défaut est de **trente** jours, et pas sept comme l'analytics :
- * un mois est la maille du revenu — un abonnement se renouvelle à ce pas — et
- * sept jours ne montreraient qu'une fraction des paiements récurrents.
+ * Le paramètre choisissait le type de paiement additionné, parce qu'un paiement
+ * déclenche plusieurs événements Stripe porteurs du même montant. L'affinage
+ * fait à l'ingestion a rendu ces types **disjoints** : on les somme tous, et la
+ * question « quelle part vient des renouvellements » se lit dans Stripe, pas
+ * ici.
+ *
+ * ## Les quatre filtres ne font encore rien
+ *
+ * Ils sont **déclarés, validés, et sans effet** — c'est délibéré. La page aura
+ * besoin de se filtrer entièrement (« tout ceci, mais pour la France »), et
+ * poser la forme maintenant évite de rouvrir le contrat à ce moment-là. Les
+ * livrer aujourd'hui doublerait la surface de test d'une fonctionnalité que rien
+ * n'affiche.
+ *
+ * Un e2e vérifie qu'ils sont acceptés **et** qu'ils ne changent rien : c'est ce
+ * qui empêchera de croire qu'ils agissent.
+ *
+ * `strictObject` comme partout : un paramètre inconnu rend 400 plutôt que d'être
+ * ignoré. Sur une API de lecture, un filtre silencieusement écarté produit un
+ * chiffre juste à une question que personne n'a posée.
+ *
+ * La fenêtre par défaut est de **trente** jours : un mois est la maille du
+ * revenu, et sept jours ne montreraient qu'une fraction des renouvellements.
  */
-export const revenueCampaignsSchema = z
+export const revenueAttributionSchema = z
   .strictObject({
     from: instant.optional(),
     to: instant.optional(),
-    kind: z.enum(REVENUE_KINDS).default('new'),
     limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(10),
+    country: z.string().length(2).optional(),
+    landing: z.string().max(500).optional(),
+    source: z.string().max(200).optional(),
+    campaign: z.string().max(200).optional(),
   })
-  .transform(({ kind, limit, from, to }) => {
+  .transform(({ from, to, ...rest }) => {
     const upper = to ?? new Date();
 
     return {
       from: from ?? new Date(upper.getTime() - DEFAULT_WINDOW_MS),
       to: upper,
-      kind,
-      limit,
+      ...rest,
     };
   })
   .refine(({ from, to }) => from <= to, {
     message: '`from` doit être antérieur ou égal à `to`.',
   });
 
-/** Requête de revenu par campagne, validée et résolue. */
-export type RevenueCampaignsDto = z.output<typeof revenueCampaignsSchema>;
+/** Requête d'attribution du revenu, validée et résolue. */
+export type RevenueAttributionDto = z.output<typeof revenueAttributionSchema>;
 
 /**
  * Le nombre de mois suivis après l'acquisition.

@@ -13,14 +13,30 @@ Conséquence : **une lecture de revenu doit viser un type précis**, jamais « t
 ce qui porte `payment.amount` ». Sinon le même euro est compté quatre fois, le
 résultat reste plausible, et rien ne le signale.
 
-Le type à viser dépend de la question :
+L'affinage fait à l'ingestion rend ces types **disjoints**, et c'est ce qui
+permet de les sommer :
 
-| Question | Type |
+| Type | Ce qu'il porte |
 |---|---|
-| Nouveaux clients | `stripe.subscription.started` |
-| Revenu récurrent | `stripe.subscription.renewed` |
-| Expansion / contraction | `stripe.subscription.changed` |
-| Paiement ponctuel | `stripe.checkout.session.completed` |
+| `stripe.subscription.started` | premier paiement d'un abonnement |
+| `stripe.subscription.renewed` | renouvellement |
+| `stripe.subscription.changed` | montée ou descente de gamme |
+| `stripe.invoice.paid` | les autres `billing_reason` — `manual`, seuils |
+| `stripe.payment.one_time` | achat ponctuel pur |
+
+Les quatre premiers viennent tous d'`invoice.paid`, que Stripe distingue
+lui-même par `billing_reason` : **une facture n'en porte qu'un**. Le cinquième
+est le checkout `mode: 'payment'`, isolé par `typeOf` — sans cet affinage il se
+confondrait avec le checkout qui ouvre un abonnement, dont le montant est déjà
+compté par `subscription.started`.
+
+Ce qui reste hors du total, délibérément : `payment_intent.succeeded`,
+`charge.succeeded` et `checkout.session.completed` en `mode: 'subscription'`,
+qui sont les doublons du même euro.
+
+⚠️ **Rupture de série** : les `checkout.session.completed` écrits avant cet
+affinage gardent leur type. Les paiements ponctuels antérieurs restent donc hors
+du total, et le rattrapage ne les récupère pas — il ne rejoue que des factures.
 
 ## Ce que Stripe tranche, et ce qu'il ne tranche pas
 
@@ -120,26 +136,42 @@ rattrapage : elle est réparable, un paiement écrit deux fois ne l'est pas.
 Connect. Le pass-through les laisse déjà traverser le fil, mais rien n'arrive
 tant qu'ils ne sont pas souscrits.
 
-## La lecture : `GET /v1/projects/:id/revenue/campaigns`
+## La lecture : `GET /v1/projects/:id/revenue/attribution`
 
-Le revenu croisé à l'acquisition, et **une seule question à la fois**. `kind`
-choisit le type additionné — `new`, `recurring`, `change`, `one_time` — et la
-réponse rend le type retenu dans `eventType` : un chiffre dont on ne peut pas
-nommer l'origine ne vaut pas mieux qu'un chiffre faux.
+D'où vient l'argent, rangé de **quatre façons à la fois** : par campagne, par
+provenance, par page d'entrée et par pays. Une seule route parce que la carte
+Acquisition les affiche ensemble — quatre appels laisseraient leurs totaux
+diverger dès qu'un paiement arrive entre deux.
 
-La campagne rendue est celle de la **première visite** du visiteur, pas de celle
-où il a payé. C'est un modèle d'attribution assumé — *first touch* — et il
-répond à « quelle campagne m'amène des clients », pas à « quelle page a conclu ».
-Elle est **lue** à chaque appel, jamais gelée sur l'événement : `attribute()`
-rattache des paiements rétroactivement, donc la première visite d'un visiteur
-devient légitimement connaissable après coup.
+Il n'y a **pas de `kind`** : les cinq types sommés sont disjoints (voir plus
+haut), et l'analyse fine du revenu appartient à Stripe. `eventTypes` dit lesquels
+ont été retenus, parce qu'un chiffre dont on ne peut pas nommer l'origine ne vaut
+rien.
 
-Trois listes, et les deux dernières ne sont pas un reste :
+La valeur rendue est celle de la **première visite** du visiteur, pas de celle où
+il a payé. Modèle d'attribution assumé — *first touch* — qui répond à « qu'est-ce
+qui m'amène des clients », pas à « quelle page a conclu ». Elle est **lue** à
+chaque appel, jamais gelée : `attribute()` rattache des paiements
+rétroactivement, donc la première visite devient légitimement connaissable après
+coup.
 
-| Liste | Ce qu'elle porte |
+**Rien n'est recopié pour ça.** La campagne et le pays sont des colonnes de la
+visite ; le referrer et le chemin d'entrée vivent dans le sac du premier
+événement, et le Core les groupe à la clé qu'on lui nomme — comme il groupe déjà
+un montant. Deux `lateral` enchaînés, servis par les index existants.
+
+Le repli des provenances (`google.fr` + `google.com` → une ligne) se fait **après
+coup**, avec `classifyReferrer` de `features/analytics` : la règle de classement
+reste écrite une seule fois. Conséquence à connaître : `visitors` y est un
+**majorant**, un même visiteur pouvant apparaître derrière deux referrers du même
+moteur. Les montants, eux, sont exacts.
+
+Chaque axe rend trois ensembles, et les deux derniers ne sont pas un reste :
+
+| Ensemble | Ce qu'il porte |
 |---|---|
-| `campaigns` | le classement, coupé à `limit` |
-| `direct` | des visiteurs **connus**, venus sans campagne |
+| `rows` | le classement, coupé à `limit` |
+| `direct` | des visiteurs **connus**, sans valeur sur cet axe |
 | `unattributed` | des paiements qu'aucun parcours ne réclame |
 
 Les afficher ensemble est la condition pour que le classement soit lisible :
@@ -149,6 +181,11 @@ fait lire une part comme un total.
 Les montants sortent **en centimes, par devise**, tels que Stripe les écrit.
 Deux devises font deux lignes : les additionner demanderait un taux de change,
 donc une date de taux, donc une décision qui n'appartient pas à ce module.
+
+⚠️ Les filtres `country`, `landing`, `source` et `campaign` sont **déclarés et
+sans effet** : la forme est posée pour que la page puisse se filtrer sans rouvrir
+le contrat. Un e2e vérifie qu'ils ne changent rien, pour qu'on ne croie pas
+qu'ils agissent.
 
 ## Les lectures de rétention
 

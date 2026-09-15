@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { sourceSchema } from './analytics';
+
 /**
  * Ce que `/v1/projects/:projectId/revenue/*` promet.
  *
@@ -24,17 +26,10 @@ export const campaignSchema = z.object({
 
 export type Campaign = z.infer<typeof campaignSchema>;
 
-/**
- * Ce qu'une campagne a rapporté.
- *
- * ⚠️ **La campagne est celle de la première visite du visiteur**, pas de la
- * visite pendant laquelle il a payé. C'est un modèle d'attribution — *first
- * touch* — et il est assumé : c'est celui qui répond à « quelle campagne me
- * rapporte des clients », là où la dernière visite répond à « quelle page a
- * conclu ».
- */
-export const campaignRevenueSchema = z.object({
-  campaign: campaignSchema,
+/** Ce qu'une ligne de classement pèse, quel que soit l'axe. */
+const revenueRow = {
+  /** Le libellé de la ligne, tel qu'on l'affiche. */
+  label: z.string(),
   /**
    * La devise ISO telle que Stripe la donne, ou `null`.
    *
@@ -45,15 +40,45 @@ export const campaignRevenueSchema = z.object({
   currency: z.string().nullable(),
   /** En **centimes**, tels que Stripe les écrit. Jamais divisé ici. */
   amount: z.number(),
-  /** Nombre d'événements du type visé — voir `eventType`. */
+  /** Nombre de paiements comptés — voir `eventTypes`. */
   payments: z.number(),
   /** Visiteurs distincts derrière ces paiements. */
   visitors: z.number(),
+};
+
+/**
+ * Une campagne d'acquisition et ce qu'elle a rapporté.
+ *
+ * ⚠️ **La campagne est celle de la première visite du visiteur**, pas de la
+ * visite pendant laquelle il a payé. C'est un modèle d'attribution — *first
+ * touch* — et il est assumé : c'est celui qui répond à « quelle campagne
+ * m'amène des clients », là où la dernière visite répond à « quelle page a
+ * conclu ».
+ */
+export const campaignRevenueSchema = z.object({
+  ...revenueRow,
+  campaign: campaignSchema,
 });
 
 export type CampaignRevenue = z.infer<typeof campaignRevenueSchema>;
 
-/** Le même total, pour ce qu'aucune campagne ne revendique. */
+/**
+ * Une provenance et ce qu'elle a rapporté.
+ *
+ * Les referrers bruts sont **repliés** : `google.fr` et `google.com` ne font
+ * qu'une ligne. Le repli se faisant après le classement, `visitors` est un
+ * **majorant** — quelqu'un vu derrière deux referrers du même moteur y compte
+ * deux fois. `payments` et `amount`, eux, sont exacts : un paiement n'appartient
+ * qu'à une ligne.
+ */
+export const sourceRevenueSchema = z.object({
+  ...revenueRow,
+  source: sourceSchema,
+});
+
+export type SourceRevenue = z.infer<typeof sourceRevenueSchema>;
+
+/** Le même total, pour ce qu'aucune valeur de l'axe ne revendique. */
 export const unsourcedRevenueSchema = z.object({
   currency: z.string().nullable(),
   amount: z.number(),
@@ -63,58 +88,58 @@ export const unsourcedRevenueSchema = z.object({
 
 export type UnsourcedRevenue = z.infer<typeof unsourcedRevenueSchema>;
 
-/** Les quatre questions de revenu, dans le vocabulaire du produit. */
-export const REVENUE_KINDS = [
-  'new',
-  'recurring',
-  'change',
-  'one_time',
-] as const;
-
-export const revenueKindSchema = z.enum(REVENUE_KINDS);
-
-export type RevenueKind = z.infer<typeof revenueKindSchema>;
+/**
+ * Un axe, et les deux ensembles qui ne sont pas des restes.
+ *
+ * `rows` classe. `direct` porte les paiements de visiteurs **connus** qui n'ont
+ * rien sur cet axe — arrivés sans campagne, sans referrer. `unattributed` porte
+ * ceux qu'aucun parcours ne réclame : consentement refusé, identifiant jamais
+ * posé, ou client antérieur à l'installation.
+ *
+ * Les afficher ensemble n'est pas une option de présentation : annoncer
+ * « 12 k€ venus de Google » sans dire que 30 k€ ne sont rattachés à rien fait
+ * lire une part comme un total.
+ */
+const breakdown = <Row extends z.ZodTypeAny>(row: Row) =>
+  z.object({
+    rows: z.array(row),
+    direct: z.array(unsourcedRevenueSchema),
+    unattributed: z.array(unsourcedRevenueSchema),
+  });
 
 /**
- * `GET /v1/projects/:projectId/revenue/campaigns` — le revenu croisé à
- * l'acquisition.
+ * `GET /v1/projects/:projectId/revenue/attribution` — d'où vient l'argent.
  *
- * ## Trois listes, et les deux dernières ne sont pas un reste
+ * ## Quatre répartitions, une réponse
  *
- * `campaigns` classe ce qui vient d'une campagne. `direct` porte les paiements
- * de visiteurs **connus** venus sans campagne. `unattributed` porte ceux
- * qu'aucun parcours ne réclame : consentement refusé, identifiant jamais posé,
- * ou client antérieur à l'installation.
+ * Les mêmes paiements rangés par campagne, par provenance, par page d'entrée et
+ * par pays. Quatre routes auraient demandé quatre allers-retours pour une seule
+ * carte, et rien ne garantirait que leurs totaux s'accordent — un paiement
+ * arrivé entre deux appels suffirait à les faire diverger.
  *
- * Les afficher ensemble n'est pas une option de présentation, c'est la
- * condition pour que le classement soit lisible : annoncer « 12 k€ venus de
- * Google » sans dire que 30 k€ ne sont rattachés à rien fait lire une part
- * comme un total.
+ * ## `eventTypes` est la définition du chiffre
  *
- * ## `eventType` est la définition du chiffre
- *
- * Un paiement déclenche plusieurs événements Stripe portant tous le même
- * montant ; le classement en vise donc **un seul**, choisi par `kind`. Le type
- * retenu est rendu pour que le chiffre affiché ne soit jamais d'origine
- * devinable — c'est la même exigence que pour un MRR dont on nomme la formule.
- *
- * Les quatre `kind` ne s'additionnent pas entre eux : un abonnement pris au
- * checkout produit à la fois un `new` et un `one_time`.
+ * Un paiement déclenche plusieurs événements Stripe porteurs du même montant.
+ * Ceux qui sont additionnés ici sont **disjoints par construction** — une
+ * facture, une ligne — et la réponse les nomme, parce que c'est la seule façon
+ * de réconcilier ce total avec le tableau de bord Stripe.
  */
-export const campaignRevenuePageSchema = z.object({
+export const revenueAttributionPageSchema = z.object({
   /** Borne incluse. */
   from: z.iso.datetime({ offset: true }),
   /** Borne exclue. */
   to: z.iso.datetime({ offset: true }),
-  kind: revenueKindSchema,
-  /** Le type d'événement réellement additionné. */
-  eventType: z.string(),
-  campaigns: z.array(campaignRevenueSchema),
-  direct: z.array(unsourcedRevenueSchema),
-  unattributed: z.array(unsourcedRevenueSchema),
+  /** Les types d'événement réellement additionnés. */
+  eventTypes: z.array(z.string()),
+  campaigns: breakdown(campaignRevenueSchema),
+  sources: breakdown(sourceRevenueSchema),
+  landings: breakdown(z.object(revenueRow)),
+  countries: breakdown(z.object(revenueRow)),
 });
 
-export type CampaignRevenuePage = z.infer<typeof campaignRevenuePageSchema>;
+export type RevenueAttributionPage = z.infer<
+  typeof revenueAttributionPageSchema
+>;
 
 /**
  * `POST /v1/projects/:projectId/revenue/sync` — ce que le rattrapage a fait.

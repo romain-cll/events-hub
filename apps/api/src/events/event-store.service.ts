@@ -19,6 +19,8 @@ import {
   type SQL,
 } from 'drizzle-orm';
 
+import { alias } from 'drizzle-orm/pg-core';
+
 import {
   DRIZZLE,
   type DrizzleDatabase,
@@ -255,22 +257,55 @@ export interface AmountSelector {
   amount: string;
   /** La clé de la devise. Elle sépare les totaux, elle ne les convertit pas. */
   currency: string;
-  /** Nombre de campagnes classées. Défaut : 10. */
+  /** Nombre de lignes classées. Défaut : 10. */
   limit?: number;
 }
 
+/**
+ * Sur quel axe ranger les paiements — et où cet axe se lit.
+ *
+ * ## Deux natures, une seule jointure de plus
+ *
+ * Certains axes sont des **colonnes de la première visite** : la campagne y a
+ * été rangée à l'ouverture, le pays aussi. D'autres vivent dans le **sac du
+ * premier événement** de cette visite — le referrer et le chemin d'entrée n'ont
+ * jamais eu de colonne, et n'en auront pas : les recopier créerait une seconde
+ * vérité là où la donnée existe déjà.
+ *
+ * ## Le Core ne nomme rien
+ *
+ * `column` est un ensemble **fermé à la compilation**, comme `SESSION_COLUMNS` :
+ * aucune chaîne d'appelant n'atteint le SQL. `key`, elle, est libre et part en
+ * paramètre lié — le Core ignore ce qu'elle désigne, exactement comme dans
+ * `topValues`. C'est ce qui lui permet de grouper un referrer sans savoir ce
+ * qu'est un referrer.
+ */
+export type EntryAxis =
+  | { on: 'session'; column: 'campaign' | 'country' }
+  | { on: 'entry'; source: 'attributes' | 'properties'; key: string };
+
+export interface EntrySelector extends AmountSelector {
+  axis: EntryAxis;
+}
+
 /** Ce qu'un groupe de paiements pèse, et ce qui l'a amené. */
-export interface EntryCampaignTotals {
-  /** La campagne de la première visite du visiteur, ou `null`. */
-  campaign: SessionCampaign | null;
+export interface EntryTotals {
+  /**
+   * Les libellés de l'axe, bruts, dans l'ordre où le Core les a groupés.
+   *
+   * Un seul pour la plupart des axes ; **trois** pour la campagne, qui est un
+   * triplet et dont « source seule » ne désigne rien. Tous nuls veut dire « pas
+   * de valeur sur cet axe », jamais « valeur vide ».
+   */
+  values: (string | null)[];
   /**
    * A-t-on retrouvé une première visite pour ce visiteur ?
    *
    * `false` veut dire qu'aucun parcours ne porte ce paiement — pas de
    * consentement, pas d'identifiant, ou un client antérieur à l'installation.
-   * `true` avec `campaign` à `null` est tout autre chose : on connaît la visite,
-   * elle n'est simplement venue d'aucune campagne. Confondre les deux ferait
-   * passer un trou de mesure pour du trafic direct.
+   * `true` avec des valeurs nulles est tout autre chose : on connaît la visite,
+   * elle n'a simplement rien sur cet axe. Confondre les deux ferait passer un
+   * trou de mesure pour du trafic direct.
    */
   known: boolean;
   /** La devise telle que l'émetteur l'a écrite, ou `null` s'il n'en donne pas. */
@@ -287,15 +322,15 @@ export interface EntryCampaignTotals {
  * Le classement, et ce qu'il ne montre pas.
  *
  * `others` n'est pas un reste décoratif : c'est la part de revenu qu'aucune
- * campagne ne revendique, et elle doit rester visible à côté du classement.
- * L'annoncer séparément est ce qui empêche de lire « 12 k€ venus de Google »
- * comme « 12 k€ sur 12 k€ ».
+ * valeur de cet axe ne revendique, et elle doit rester visible à côté du
+ * classement. L'annoncer séparément est ce qui empêche de lire « 12 k€ venus de
+ * Google » comme « 12 k€ sur 12 k€ ».
  */
-export interface EntryCampaignRanking {
-  /** Les campagnes, du plus gros total au plus petit, coupées à `limit`. */
-  rows: EntryCampaignTotals[];
-  /** Tout ce qui n'a pas de campagne, jamais coupé. */
-  others: EntryCampaignTotals[];
+export interface EntryRanking {
+  /** Les valeurs de l'axe, du plus gros total au plus petit, coupées à `limit`. */
+  rows: EntryTotals[];
+  /** Tout ce qui n'a pas de valeur sur cet axe, jamais coupé. */
+  others: EntryTotals[];
 }
 
 /**
@@ -314,35 +349,25 @@ export interface EntryVisit {
 }
 
 /**
- * Recompose le triplet à partir des trois colonnes plates du groupement.
+ * Aplatit les trois emplacements en une liste.
  *
- * Les trois à `null` valent « pas de campagne », pas « campagne aux champs
- * vides » — la distinction disparaîtrait si on rendait l'objet dans tous les
- * cas, et c'est elle qui sépare une visite directe d'une visite sourcée.
+ * Le Core ne recompose rien : il rend les libellés dans l'ordre où il les a
+ * groupés, et c'est à l'appelant — qui a choisi l'axe — de savoir si le
+ * deuxième et le troisième veulent dire quelque chose.
  */
 function toTotals(row: {
-  campaignSource: string | null;
-  campaignMedium: string | null;
-  campaignName: string | null;
+  first: string | null;
+  second: string | null;
+  third: string | null;
   known: boolean;
   currency: string | null;
   amount: number;
   events: number;
   visitors: number;
-}): EntryCampaignTotals {
-  const { campaignSource, campaignMedium, campaignName, ...totals } = row;
+}): EntryTotals {
+  const { first, second, third, ...totals } = row;
 
-  return {
-    ...totals,
-    campaign:
-      (campaignSource ?? campaignMedium ?? campaignName)
-        ? {
-            source: campaignSource,
-            medium: campaignMedium,
-            name: campaignName,
-          }
-        : null,
-  };
+  return { ...totals, values: [first, second, third] };
 }
 
 export interface EventRow {
@@ -1095,27 +1120,29 @@ export class EventStore {
    * disparaître. Une part d'attribution qu'on ne peut pas voir est une part
    * d'attribution qu'on croit nulle.
    */
-  async entryCampaigns(
+  async entryDimension(
     scope: EventScope,
-    { source, amount, currency, limit = DEFAULT_TOP_LIMIT }: AmountSelector,
-  ): Promise<EntryCampaignRanking> {
+    { axis, source, amount, currency, limit = DEFAULT_TOP_LIMIT }: EntrySelector,
+  ): Promise<EntryRanking> {
     if (!Number.isInteger(limit) || limit < 1) {
       throw new RangeError(
         `[EventStore] limit doit être un entier positif, reçu ${String(limit)}.`,
       );
     }
 
-    const column =
-      source === 'attributes' ? events.attributes : events.properties;
+    const bag = source === 'attributes' ? events.attributes : events.properties;
+    const nothing = sql<string | null>`null`;
 
     // La plus ancienne visite du visiteur, quelle que soit sa date. `marker`
     // n'est là que pour distinguer « aucune visite » de « une visite sans
-    // campagne » : sans lui, les deux rendraient trois colonnes nulles.
+    // valeur » : sans lui, les deux rendraient des colonnes nulles.
     const entry = this.db
       .select({
-        source: sessions.campaignSource,
-        medium: sessions.campaignMedium,
-        name: sessions.campaignName,
+        id: sessions.id,
+        campaignSource: sessions.campaignSource,
+        campaignMedium: sessions.campaignMedium,
+        campaignName: sessions.campaignName,
+        countryCode: sessions.countryCode,
         marker: sql<number>`1`.as('marker'),
       })
       .from(sessions)
@@ -1129,27 +1156,76 @@ export class EventStore {
       .limit(1)
       .as('entry');
 
+    // Le premier événement de cette première visite, et lui seul. C'est là que
+    // vivent le referrer et le chemin d'entrée — dans un sac que le Core ne sait
+    // pas lire, mais qu'il sait grouper à la clé qu'on lui nomme. Rien n'est
+    // recopié nulle part : on lit la donnée là où elle est déjà.
+    //
+    // `events` est joint à lui-même, d'où l'alias. L'ordre est le même que
+    // partout ailleurs — instant, puis `id` pour départager — et
+    // `events_session_occurred_idx` le sert.
+    const entryEvent = alias(events, 'entry_event');
+    // Le sac de l'axe, qui n'est **pas** celui du montant : le referrer vit dans
+    // les attributs du navigateur, le montant dans les propriétés d'un serveur.
+    // Les confondre rendrait des colonnes vides sans rien faire échouer.
+    const entryBag =
+      axis.on === 'entry' && axis.source === 'properties'
+        ? entryEvent.properties
+        : entryEvent.attributes;
+    const firstEvent = this.db
+      .select({
+        value: sql<string | null>`${entryBag} ->> ${
+          axis.on === 'entry' ? axis.key : ''
+        }::text`.as('value'),
+      })
+      .from(entryEvent)
+      .where(eq(entryEvent.sessionId, entry.id))
+      .orderBy(asc(entryEvent.occurredAt), asc(entryEvent.id))
+      .limit(1)
+      .as('first_event');
+
+    // Trois emplacements, toujours : la forme du `select` est figée à la
+    // compilation, et la campagne est le seul axe qui en occupe plus d'un. Les
+    // autres laissent deux `null` constants, que Postgres groupe sans frais.
+    const slots =
+      axis.on === 'entry'
+        ? [sql<string | null>`${firstEvent.value}`, nothing, nothing]
+        : axis.column === 'campaign'
+          ? [
+              sql<string | null>`${entry.campaignSource}`,
+              sql<string | null>`${entry.campaignMedium}`,
+              sql<string | null>`${entry.campaignName}`,
+            ]
+          : [sql<string | null>`${entry.countryCode}`, nothing, nothing];
+
     // Même raison que dans `topValues` : l'extraction est isolée pour que le
     // groupement porte sur des colonnes ordinaires, et non sur des expressions
     // que Drizzle qualifie différemment selon la clause.
-    const extracted = this.db
-      .select({
-        campaignSource: entry.source,
-        campaignMedium: entry.medium,
-        campaignName: entry.name,
-        known: sql<boolean>`${entry.marker} is not null`.as('known'),
-        currency: sql<string | null>`${column} ->> ${currency}::text`.as(
-          'currency',
-        ),
-        amount: sql<
-          string | null
-        >`case when ${column} ->> ${amount}::text ~ '^-?[0-9]+$' then (${column} ->> ${amount}::text)::bigint end`.as(
-          'amount',
-        ),
-        visitorKey: events.visitorKey,
-      })
+    const selection = {
+      first: slots[0].as('first'),
+      second: slots[1].as('second'),
+      third: slots[2].as('third'),
+      known: sql<boolean>`${entry.marker} is not null`.as('known'),
+      currency: sql<string | null>`${bag} ->> ${currency}::text`.as('currency'),
+      amount: sql<
+        string | null
+      >`case when ${bag} ->> ${amount}::text ~ '^-?[0-9]+$' then (${bag} ->> ${amount}::text)::bigint end`.as(
+        'amount',
+      ),
+      visitorKey: events.visitorKey,
+    };
+
+    // La seconde jointure n'est posée que si l'axe la demande : un `lateral`
+    // par ligne d'événement se paie, et l'axe campagne ou pays n'en a aucun
+    // besoin.
+    const joined = this.db
+      .select(selection)
       .from(events)
-      .leftJoinLateral(entry, sql`true`)
+      .leftJoinLateral(entry, sql`true`);
+
+    const extracted = (
+      axis.on === 'entry' ? joined.leftJoinLateral(firstEvent, sql`true`) : joined
+    )
       .where(this.where(scope))
       .as('extracted');
 
@@ -1161,9 +1237,9 @@ export class EventStore {
     const payments = sql<number>`count(*)`.mapWith(Number);
 
     const columns = {
-      campaignSource: extracted.campaignSource,
-      campaignMedium: extracted.campaignMedium,
-      campaignName: extracted.campaignName,
+      first: extracted.first,
+      second: extracted.second,
+      third: extracted.third,
       known: extracted.known,
       currency: extracted.currency,
       amount: total,
@@ -1172,41 +1248,41 @@ export class EventStore {
     };
 
     const grouped = [
-      extracted.campaignSource,
-      extracted.campaignMedium,
-      extracted.campaignName,
+      extracted.first,
+      extracted.second,
+      extracted.third,
       extracted.known,
       extracted.currency,
     ];
 
-    const hasCampaign = or(
-      isNotNull(extracted.campaignSource),
-      isNotNull(extracted.campaignMedium),
-      isNotNull(extracted.campaignName),
+    const named = or(
+      isNotNull(extracted.first),
+      isNotNull(extracted.second),
+      isNotNull(extracted.third),
     );
 
-    // Écrit en positif plutôt qu'en `not(hasCampaign)` : les deux requêtes se
+    // Écrit en positif plutôt qu'en `not(named)` : les deux requêtes se
     // relisent alors côte à côte, et leur complémentarité se vérifie à l'œil.
-    const noCampaign = and(
-      isNull(extracted.campaignSource),
-      isNull(extracted.campaignMedium),
-      isNull(extracted.campaignName),
+    const unnamed = and(
+      isNull(extracted.first),
+      isNull(extracted.second),
+      isNull(extracted.third),
     );
 
     const [ranked, rest] = await Promise.all([
       this.db
         .select(columns)
         .from(extracted)
-        .where(hasCampaign)
+        .where(named)
         .groupBy(...grouped)
         // Le second critère départage à égalité : sans lui, la coupe du `limit`
         // serait non déterministe, comme pour les autres classements.
-        .orderBy(desc(total), asc(extracted.campaignSource))
+        .orderBy(desc(total), asc(extracted.first))
         .limit(limit),
       this.db
         .select(columns)
         .from(extracted)
-        .where(noCampaign)
+        .where(unnamed)
         .groupBy(...grouped)
         .orderBy(desc(total)),
     ]);

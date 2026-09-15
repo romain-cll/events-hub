@@ -258,6 +258,40 @@ describe('attributionOf', () => {
   });
 });
 
+describe('typeOf — le checkout, qui recouvre deux faits', () => {
+  const checkout = (mode: string) =>
+    evenement('checkout.session.completed', {
+      id: 'cs_1',
+      object: 'checkout.session',
+      mode,
+      amount_total: 4900,
+      currency: 'eur',
+    });
+
+  it('isole le paiement ponctuel', () => {
+    // Sans cet affinage, il faudrait choisir entre compter deux fois
+    // l'abonnement et perdre le ponctuel : les deux arrivent sous le même type.
+    expect(typeOf(checkout('payment'))).toBe('stripe.payment.one_time');
+  });
+
+  it('laisse le checkout d’abonnement à son type', () => {
+    // Son montant est déjà compté par la facture, qui produira son propre
+    // événement. Le renommer le ferait entrer une seconde fois dans le total.
+    expect(typeOf(checkout('subscription'))).toBe(
+      'stripe.checkout.session.completed',
+    );
+    expect(typeOf(checkout('setup'))).toBe(
+      'stripe.checkout.session.completed',
+    );
+  });
+
+  it('recopie le mode, pour que la décision se vérifie', () => {
+    expect(propertiesOf(checkout('payment'))).toMatchObject({
+      'stripe.checkout.mode': 'payment',
+    });
+  });
+});
+
 describe('replayOf — une facture lue dans l’historique', () => {
   const facture = (overrides: Record<string, unknown> = {}) =>
     ({
