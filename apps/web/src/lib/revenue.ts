@@ -1,13 +1,14 @@
 import {
   revenueAttributionPageSchema,
   type RevenueAttributionPage,
+  type UnsourcedRevenue,
 } from '@events-hub/api-contract';
 import { queryOptions } from '@tanstack/react-query';
 
 import { windowFor, type Period } from './analytics';
 import { apiJson } from './api';
 
-export type { RevenueAttributionPage };
+export type { RevenueAttributionPage, UnsourcedRevenue };
 
 /**
  * L'accès aux lectures de revenu, et il n'y en a qu'une pour l'instant.

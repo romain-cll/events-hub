@@ -35,6 +35,7 @@ import {
   EmptyTitle,
 } from '#/components/ui/empty';
 import { Button } from '#/components/ui/button';
+import { Hint } from '#/components/hint';
 import { PeriodSelector } from '#/components/period-selector';
 import { Badge } from '#/components/ui/badge';
 import { Skeleton } from '#/components/ui/skeleton';
@@ -70,6 +71,7 @@ import {
   attributionQuery,
   type AttributionAxis,
   type RevenueAttributionPage,
+  type UnsourcedRevenue,
 } from '#/lib/revenue';
 
 /**
@@ -476,11 +478,15 @@ function Analytics() {
           {/* Quatre colonnes sur grand écran, deux sur moyen. Trois cartes
               plus une case vide ne se rangent pas en trois colonnes : la
               quatrième tomberait seule sur une seconde ligne. */}
-          {/* Six cartes : les quatre d'audience, plus ce que l'argent ajoute.
+          {/* Six cartes en **deux rangées de trois**, et pas une ligne de six :
+              à six colonnes elles tombaient à 158 px, où l'évolution en haut à
+              droite chevauchait la valeur. Le graphique descend sous la ligne de
+              flottaison, et c'est le prix assumé d'un bandeau lisible.
+
               Le revenu et les paiements ne portent pas de comparaison avec la
               période précédente — il faudrait une seconde lecture d'attribution
               pour une flèche, et elle coûte quatre agrégations. */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Metric
               label="Unique visitors"
               value={summary.data?.uniqueVisitors}
@@ -498,10 +504,14 @@ function Analytics() {
             />
             <BounceMetric summary={summary.data} previous={compareTo} />
             <RevenueMetric attribution={attribution.data} />
+            {/* `null` et non `undefined` : le second veut dire « on lit
+                encore » et laisse un squelette en place indéfiniment. Ici il n'y
+                aura jamais de comparaison — la mesurer demanderait une seconde
+                lecture d'attribution sur la période précédente. */}
             <Metric
               label="Payments"
               value={paymentsOf(attribution.data)}
-              previous={undefined}
+              previous={null}
             />
           </div>
 
@@ -1675,6 +1685,20 @@ const ROWS = 10;
 const CARD_BODY = 'h-106';
 
 /**
+ * Le même corps, mais en **plancher**, pour les cartes de revenu.
+ *
+ * Elles portent souvent moins de dix lignes — un projet sans Stripe branché n'en
+ * a aucune — et la hauteur fixe y creusait un trou blanc de 420 px sous un état
+ * vide. Le plancher garde l'alignement entre les deux cartes voisines sans
+ * imposer le vide.
+ *
+ * Écrit en toutes lettres, et pas dérivé de `CARD_BODY` par interpolation : le
+ * scanner de Tailwind lit les **littéraux** du source. Une classe composée à
+ * l'exécution ne serait jamais générée, et la carte n'aurait aucune hauteur.
+ */
+const CARD_BODY_MIN = 'min-h-106';
+
+/**
  * Une colonne du tableau, telle que la planche la décrit.
  *
  * Les trois onglets de Pages n'ont pas les mêmes colonnes — ni les mêmes
@@ -1701,6 +1725,15 @@ interface Column {
   align?: 'right';
   /** Estompée : la seconde lecture d'une ligne, jamais la première. */
   dim?: boolean;
+  /**
+   * La définition du mot, quand c'en est un de métier.
+   *
+   * Présente, l'en-tête prend un souligné pointillé et rend la définition au
+   * survol — voir `Hint`. Le public de ce produit n'est pas analyste, et un
+   * tableau qui emploie « conversion » ou « revenu par visiteur » sans les
+   * définir laisse son lecteur deviner, ou croire qu'il a compris.
+   */
+  hint?: string;
 }
 
 interface TableRow {
@@ -1784,7 +1817,11 @@ function DataTable({
               column.align === 'right' ? 'text-right' : ''
             }`}
           >
-            {column.head}
+            {column.hint ? (
+              <Hint title={column.hint}>{column.head}</Hint>
+            ) : (
+              column.head
+            )}
           </div>
         ))}
       </div>
@@ -1943,6 +1980,85 @@ function hostOf(origin: string): string {
  * depuis 2013. Il faudra brancher Search Console.
  */
 /**
+ * Les deux ensembles qu'aucune valeur d'axe ne revendique, en lignes de tableau.
+ *
+ * ## Pourquoi ils sont dans le tableau et pas en note
+ *
+ * Parce que sans eux la colonne Revenue ne somme pas le chiffre du bandeau, et
+ * qu'un tableau qui contredit l'agrégat au-dessus de lui fait perdre confiance
+ * dans l'écran entier. C'est exactement ce qui s'est produit : le bandeau
+ * annonçait 20 $, les deux cartes affichaient « No revenue yet », et tout le
+ * revenu était là — non attribué.
+ *
+ * Avec ces lignes, la vérification se fait à l'œil : la colonne tombe juste, ou
+ * il y a un bug.
+ *
+ * ## Deux libellés, deux causes, deux actions
+ *
+ * `direct` est un visiteur qu'on **connaît**, arrivé sans rien sur cet axe :
+ * c'est une observation, pas un trou. `unattributed` est un paiement qu'aucun
+ * parcours ne réclame — consentement refusé, identifiant jamais posé, client
+ * antérieur à l'installation. Les fondre ferait passer un défaut d'intégration
+ * pour du trafic direct.
+ *
+ * Visiteurs et conversion restent à `—` : on ne sait pas combien de personnes se
+ * cachent derrière un paiement non attribué, et leur inventer un dénominateur
+ * produirait un taux faux.
+ */
+function unclassified(
+  breakdown:
+    | {
+        direct: UnsourcedRevenue[];
+        unattributed: UnsourcedRevenue[];
+      }
+    | undefined,
+  { columns, revenue }: { columns: number; revenue: number },
+): TableRow[] {
+  const groups = [
+    {
+      key: 'direct',
+      label: (
+        <Hint title="A visitor we know, who arrived with nothing on this axis. An observation, not a gap.">
+          Direct
+        </Hint>
+      ),
+      rows: breakdown?.direct ?? [],
+    },
+    {
+      key: 'unattributed',
+      label: (
+        <Hint title="A payment no journey claims: consent refused, no identifier ever set, or a customer who predates the install.">
+          Unattributed
+        </Hint>
+      ),
+      rows: breakdown?.unattributed ?? [],
+    },
+  ];
+
+  return groups.flatMap(({ key, label, rows }) =>
+    rows.map((row, index) => ({
+      key: `${key}-${String(row.currency)}-${String(index)}`,
+      state: 'dimmed' as const,
+      // Les colonnes diffèrent d'une carte à l'autre : le libellé ouvre
+      // toujours, le revenu tombe à l'index qu'on nous donne, le reste est un
+      // tiret. Le déduire — « le revenu est la dernière » — plaçait le montant
+      // sous « Per visitor » dans la carte Acquisition, qui en a une de plus.
+      cells: Array.from({ length: columns }, (_, column) => {
+        if (column === 0) return <span key="label">{label}</span>;
+
+        if (column === revenue) {
+          return (
+            <span key="revenue">{money(row.amount, row.currency)}</span>
+          );
+        }
+
+        return <span key={`gap-${String(column)}`}>—</span>;
+      }),
+    })),
+  );
+}
+
+/**
  * Le revenu de la période, dans la devise qui pèse le plus.
  *
  * ## Pourquoi une seule devise, et pas un total
@@ -1962,8 +2078,7 @@ function RevenueMetric({
 }: {
   attribution: RevenueAttributionPage | undefined;
 }) {
-  const totals = totalsByCurrency(attribution);
-  const [top, ...others] = totals;
+  const [top, second, ...rest] = totalsByCurrency(attribution);
 
   return (
     <Card>
@@ -1976,10 +2091,16 @@ function RevenueMetric({
             <Skeleton className="h-8 w-24" />
           )}
         </CardTitle>
-        {others.length > 0 && (
-          <CardAction>
-            <Badge variant="secondary">+{others.length} more</Badge>
-          </CardAction>
+
+        {/* La seconde devise **en clair**, et pas un badge « +1 more » : celui-ci
+            ne disait rien à qui encaisse 2 000 $ et 1 400 €, et laissait lire le
+            premier montant comme un total. Au-delà de deux, le compte reprend son
+            sens — il est alors précédé de deux montants, pas d'un seul. */}
+        {second && (
+          <p className="text-muted-foreground text-xs tabular-nums">
+            {money(second.amount, second.currency)}
+            {rest.length > 0 && ` · +${String(rest.length)} more`}
+          </p>
         )}
       </CardHeader>
     </Card>
@@ -2066,7 +2187,7 @@ function Audience({
 
   const breakdown = attribution?.[axis];
 
-  const rows: TableRow[] = (breakdown?.rows ?? []).map((row, index) => {
+  const classified: TableRow[] = (breakdown?.rows ?? []).map((row, index) => {
     const visitors = seen?.get(row.label);
 
     return {
@@ -2083,6 +2204,11 @@ function Audience({
       ],
     };
   });
+
+  const rows = [
+    ...classified,
+    ...unclassified(breakdown, { columns: 4, revenue: 3 }),
+  ];
 
   return (
     <Card>
@@ -2114,7 +2240,11 @@ function Audience({
         </CardAction>
       </CardHeader>
 
-      <CardContent className={CARD_BODY}>
+      {/* Un **plancher**, pas une hauteur fixe : `CARD_BODY` est calibré sur dix
+          lignes, et l'appliquer à l'état vide creusait un trou blanc de 420 px.
+          Le plancher garde l'alignement entre les deux cartes voisines sans
+          imposer le vide. */}
+      <CardContent className={CARD_BODY_MIN}>
         {attribution ? (
           <DataTable
             columns={[
@@ -2166,7 +2296,7 @@ function Acquisition({
     return visitors?.[tab === 'campaign' ? 'campaign' : tab === 'source' ? 'source' : 'landing']?.get(label);
   };
 
-  const rows: TableRow[] = (breakdown?.rows ?? []).map((row, index) => {
+  const classified: TableRow[] = (breakdown?.rows ?? []).map((row, index) => {
     const seen = audience(row.label);
     const customers = row.visitors;
 
@@ -2193,6 +2323,13 @@ function Acquisition({
     };
   });
 
+  // Les non classés ferment le tableau. Sans eux, la colonne Revenue ne somme
+  // pas le chiffre du bandeau — et c'est ce désaccord qui a révélé le bug.
+  const rows = [
+    ...classified,
+    ...unclassified(breakdown, { columns: 6, revenue: 4 }),
+  ];
+
   return (
     <Card>
       <CardHeader>
@@ -2216,16 +2353,31 @@ function Acquisition({
         </CardAction>
       </CardHeader>
 
-      <CardContent className={CARD_BODY}>
+      {/* Un **plancher**, pas une hauteur fixe : `CARD_BODY` est calibré sur dix
+          lignes, et l'appliquer à l'état vide creusait un trou blanc de 420 px.
+          Le plancher garde l'alignement entre les deux cartes voisines sans
+          imposer le vide. */}
+      <CardContent className={CARD_BODY_MIN}>
         {attribution ? (
           <DataTable
             columns={[
               { head: AXIS_LABELS[tab] },
               { head: 'Visitors', width: '5rem', align: 'right' },
               { head: 'Customers', width: '5.5rem', align: 'right' },
-              { head: 'Conv.', width: '4.5rem', align: 'right', dim: true },
-              { head: 'Revenue', width: '6rem', align: 'right' },
-              { head: 'Per visitor', width: '6rem', align: 'right' },
+              {
+                head: 'Conv.',
+                width: '4.5rem',
+                align: 'right',
+                dim: true,
+                hint: 'Share of the visitors this source brought who became customers. First touch: a visitor is credited to the source that brought them first, not the one they came back through.',
+              },
+              { head: 'Revenue', width: '6.5rem', align: 'right' },
+              {
+                head: 'Per visitor',
+                width: '6.5rem',
+                align: 'right',
+                hint: 'Revenue ÷ visitors. The column that reveals a low-volume, high-value source — absolute revenue always buries it under the big channels.',
+              },
             ]}
             rows={rows}
             empty={{
