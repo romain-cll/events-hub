@@ -3,6 +3,8 @@ import type {
   LocationGrain,
   LocationsPage,
   SessionsPage,
+  TechnologyGrain,
+  TechnologyPage,
 } from '@events-hub/api-contract';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -45,6 +47,7 @@ import {
   previousSummaryQuery,
   sessionsQuery,
   summaryQuery,
+  technologyQuery,
   type Period,
 } from '#/lib/analytics';
 import {
@@ -54,15 +57,20 @@ import {
   entryPages,
   exits,
   percentChange,
-  referrers,
-  trafficSources,
+  visitorsByAxis,
   type ComparedDay,
   type ExitRow,
-  type SourceRow,
 } from '#/lib/analytics-rollup';
 import { API_URL } from '#/lib/api';
 import { deploymentsQuery, type DayDeployments } from '#/lib/deployments';
 import { ingestionQuery, projectsQuery } from '#/lib/projects';
+import {
+  ACQUISITION_AXES,
+  AUDIENCE_AXES,
+  attributionQuery,
+  type AttributionAxis,
+  type RevenueAttributionPage,
+} from '#/lib/revenue';
 
 /**
  * La période vit dans l'URL plutôt que dans un `useState` : un dashboard se
@@ -92,6 +100,37 @@ export const Route = createFileRoute('/_authed/projects/$projectId/analytics')({
  * journée, pas sur la veille pour un visiteur à l'ouest de Greenwich.
  */
 const number = new Intl.NumberFormat('en-US');
+
+/** Le nom d'un axe d'attribution, tel que l'onglet et l'en-tête l'affichent. */
+const AXIS_LABELS: Record<AttributionAxis, string> = {
+  campaign: 'Campaign',
+  source: 'Source',
+  landing: 'Landing page',
+  country: 'Country',
+  browser: 'Browser',
+  os: 'System',
+  device: 'Device',
+};
+
+/**
+ * Un montant, tel que Stripe l'a écrit — en centimes, dans sa devise.
+ *
+ * La division par cent se fait **ici et nulle part ailleurs** : l'API rend des
+ * entiers parce que toutes les devises n'ont pas deux décimales, et
+ * `Intl.NumberFormat` sait lesquelles en ont combien. Le faire plus haut ferait
+ * entrer des flottants dans une donnée comptable.
+ *
+ * `null` en devise veut dire que l'événement n'en portait pas : on montre le
+ * nombre nu plutôt qu'un symbole inventé.
+ */
+function money(amount: number, currency: string | null): string {
+  if (!currency) return number.format(amount);
+
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: currency.toUpperCase(),
+  }).format(amount / 100);
+}
 const dayLabel = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: '2-digit',
@@ -233,20 +272,7 @@ function periodLabel(days: Period, offset: number): string {
   return `${format.format(first)} – ${format.format(last)}`;
 }
 
-/**
- * Les natures qu'on annonce à côté du nom.
- *
- * `referral` n'y est pas, et c'est le seul absent volontaire. Un lien depuis
- * `news.ycombinator.com` est simplement une source : le site est nommé, il n'y
- * a rien à ajouter. Écrire « referral » à côté figerait le mot sur ce cas-là,
- * alors qu'il est réservé à ce qui viendra — un `?ref=` posé délibérément sur
- * un lien, une notion qui n'existe encore ni dans le SDK ni dans l'API.
- *
- * `search` et `internal` restent, parce que le nom seul ne les dit pas :
- * `google` pourrait être n'importe quel site, et `shop.test` ressemble à un
- * tiers alors que c'est nous.
- */
-const LABELLED_KINDS = new Set<SourceRow['kind']>(['search', 'internal']);
+
 
 /**
  * ## Deux requêtes, et tout le reste en découle
@@ -285,6 +311,15 @@ function Analytics() {
   const before = useQuery(previousSessionsQuery(projectId, days, offset));
   const beforeSummary = useQuery(previousSummaryQuery(projectId, days, offset));
   const deployments = useQuery(deploymentsQuery(projectId, days, offset));
+  // Un seul appel pour les deux cartes du bas : des appels séparés laisseraient
+  // leurs totaux diverger dès qu'un paiement arrive entre les deux.
+  const attribution = useQuery(attributionQuery(projectId, days, offset));
+  // Même clé que la carte Locations, donc servie par le cache : elle fournit le
+  // dénominateur de l'onglet Country, que les sessions ne portent pas.
+  const countries = useQuery(
+    locationsQuery(projectId, days, offset, 'country', 250),
+  );
+  const technology = useQuery(technologyQuery(projectId, days, offset, 'browser'));
   const projects = useQuery(projectsQuery());
   const ingestion = useQuery(ingestionQuery(projectId));
 
@@ -350,7 +385,9 @@ function Analytics() {
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 p-8">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Audience &amp; revenue
+          </h1>
           <p className="text-muted-foreground text-sm">
             {project?.name ?? 'Loading…'}
           </p>
@@ -439,7 +476,11 @@ function Analytics() {
           {/* Quatre colonnes sur grand écran, deux sur moyen. Trois cartes
               plus une case vide ne se rangent pas en trois colonnes : la
               quatrième tomberait seule sur une seconde ligne. */}
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {/* Six cartes : les quatre d'audience, plus ce que l'argent ajoute.
+              Le revenu et les paiements ne portent pas de comparaison avec la
+              période précédente — il faudrait une seconde lecture d'attribution
+              pour une flèche, et elle coûte quatre agrégations. */}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             <Metric
               label="Unique visitors"
               value={summary.data?.uniqueVisitors}
@@ -456,6 +497,12 @@ function Analytics() {
               previous={compareTo && compareTo.sessions}
             />
             <BounceMetric summary={summary.data} previous={compareTo} />
+            <RevenueMetric attribution={attribution.data} />
+            <Metric
+              label="Payments"
+              value={paymentsOf(attribution.data)}
+              previous={undefined}
+            />
           </div>
 
           <Card>
@@ -486,8 +533,18 @@ function Analytics() {
               la porte pas, et ses deux totaux sont déjà dans les agrégats du
               haut. Ce qui part avec, et qu'il faut savoir : le temps actif, et
               les deux mises en garde qui l'accompagnaient. */}
+          <Acquisition
+            attribution={attribution.data}
+            sessions={sessions.data}
+            locations={countries.data}
+          />
+
           <div className="grid items-start gap-4 lg:grid-cols-2">
-            <Acquisition sessions={sessions.data} />
+            <Audience
+              attribution={attribution.data}
+              technology={technology.data}
+              locations={countries.data}
+            />
             <Pages summary={summary.data} sessions={sessions.data} />
           </div>
 
@@ -1868,142 +1925,6 @@ function hostOf(origin: string): string {
  * illisible n'en a pas donné. La place reste réservée pour que la colonne
  * d'icônes ne se déchire pas.
  */
-interface BarRow {
-  key: string;
-  /** Ce qui s'écrit dans la gouttière, à droite. Voir `Bars` pour l'alignement. */
-  label: ReactNode;
-  /** Le domaine de l'icône, ou `null` quand la provenance n'a pas de site. */
-  host: string | null;
-  value: number;
-}
-
-/**
- * Le classement en **barres horizontales** — la forme que la planche donne à
- * l'acquisition.
- *
- * ## Pourquoi ce n'est pas un `Rank`
- *
- * Parce que la planche ne dit pas la même chose des deux cartes, et que l'écart
- * était réel : Acquisition y est un graphique — libellés à droite dans une
- * gouttière, barres pleines, repères verticaux — là où Pages est un tableau
- * bordé. Une seule question se pose ici (« combien, comparé aux autres ? »), et
- * une barre y répond mieux qu'une colonne de chiffres ; Pages en pose deux ou
- * trois par ligne, ce qu'une barre ne sait pas porter.
- *
- * ## Deux colonnes, pas une grille de lignes
- *
- * La gouttière et l'aire tracée sont deux colonnes indépendantes, alignées
- * parce que leurs rangs ont la même hauteur et le même écart. C'est ce qui
- * permet aux repères verticaux d'être **un seul** calque continu : dans une
- * grille ligne à ligne, ils se seraient interrompus à chaque gouttière.
- *
- * ## Le retrait de droite, et pourquoi il est en `ch`
- *
- * La valeur suit la barre au lieu d'être rangée dans une colonne — c'est ce qui
- * fait qu'elle **étiquette** la barre plutôt que de la commenter. Elle déborde
- * donc de la piste, et la place qu'elle réclame se réserve en retrait.
- *
- * En `ch` parce que c'est la largeur d'un chiffre : le retrait suit le nombre
- * le plus long au lieu de parier sur lui. Même raison que `width="auto"` sur
- * l'axe du graphique principal — une largeur en dur est fausse deux fois, trop
- * large sur `380` et trop étroite sur `1,204,918`.
- */
-function Bars({
-  rows,
-  empty,
-}: {
-  rows: BarRow[];
-  empty: { title: string; description: string };
-}) {
-  if (rows.length === 0) {
-    return (
-      <Empty>
-        <EmptyTitle>{empty.title}</EmptyTitle>
-        <EmptyDescription>{empty.description}</EmptyDescription>
-      </Empty>
-    );
-  }
-
-  // Le maximum, jamais le total : la barre dit « comparé à la plus grande »,
-  // ce que le classement, tronqué ou non, sait toujours. Une part d'un tout
-  // prétendrait connaître le tout.
-  const highest = Math.max(...rows.map((row) => row.value), 1);
-
-  const written = rows.map((row) => number.format(row.value));
-  const widest = Math.max(...written.map((value) => value.length));
-
-  return (
-    <div className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-2 text-xs">
-      {/* La gouttière. Alignée à droite, donc les libellés viennent buter
-          contre leur barre plutôt que de la laisser flotter au bout d'un blanc.
-          L'icône est au bout, côté barre : c'est le seul emplacement qui la
-          garde en colonne nette sous un texte, lui, en drapeau. */}
-      <div className="text-muted-foreground flex flex-col gap-3">
-        {rows.map((row) => (
-          <div
-            key={row.key}
-            // Plafonnée : un referrer peut être long, et la gouttière mangerait
-            // l'aire tracée qui, elle, porte la comparaison.
-            className="flex h-7 max-w-48 items-center justify-end gap-1.5"
-          >
-            {row.label}
-            {/* La place est tenue même sans icône, sinon la colonne se
-                déchire sur `Direct`. */}
-            <span className="flex size-4 shrink-0 items-center justify-center">
-              {row.host !== null && <Favicon host={row.host} />}
-            </span>
-          </div>
-        ))}
-      </div>
-
-      <div
-        style={{
-          paddingRight: `calc(${widest}ch + var(--spacing) * 2)`,
-        }}
-      >
-        <div className="relative flex flex-col gap-3">
-          {/* Quatre repères à 25, 50, 75 et 100 % — quatre cellules égales
-              bordées à droite, plutôt que quatre positions calculées. Pas de
-              trait à zéro : la gouttière marque déjà l'origine.
-
-              `border-border/50` est le trait du graphique principal, où
-              `CartesianGrid` le prend par la feuille de `ChartContainer`. Les
-              deux graphiques de la page se lisent donc sur la même trame. */}
-          <div aria-hidden className="absolute inset-0 flex">
-            {[0, 1, 2, 3].map((mark) => (
-              <div key={mark} className="border-border/50 flex-1 border-r" />
-            ))}
-          </div>
-
-          {rows.map((row, rank) => (
-            <div key={row.key} className="relative h-7">
-              <div
-                className="bg-chart-1 h-full rounded-[4px]"
-                style={{ width: `${(row.value / highest) * 100}%` }}
-              />
-              {/* Posée au bout de la barre, pas dans une colonne : elle
-                  étiquette la barre. Le retrait du parent lui garde la place. */}
-              <span
-                className="absolute inset-y-0 flex items-center pl-2 tabular-nums"
-                style={{ left: `${(row.value / highest) * 100}%` }}
-              >
-                {written[rank]}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const ACQUISITION_TABS = [
-  { value: 'sources', label: 'Sources' },
-  { value: 'referrers', label: 'Referrers' },
-  { value: 'terms', label: 'Search terms' },
-] as const;
-
-type AcquisitionTab = (typeof ACQUISITION_TABS)[number]['value'];
 
 /**
  * D'où viennent les sessions — trois lectures du même classement.
@@ -2021,98 +1942,300 @@ type AcquisitionTab = (typeof ACQUISITION_TABS)[number]['value'];
  * chantier oublié : `document.referrer` de Google ne porte plus la requête
  * depuis 2013. Il faudra brancher Search Console.
  */
-function Acquisition({ sessions }: { sessions: SessionsPage | undefined }) {
-  const [tab, setTab] = useState<AcquisitionTab>('sources');
+/**
+ * Le revenu de la période, dans la devise qui pèse le plus.
+ *
+ * ## Pourquoi une seule devise, et pas un total
+ *
+ * Parce qu'additionner des euros et des dollars demanderait un taux de change,
+ * donc une date de taux, donc une décision qui n'appartient pas à un tableau de
+ * bord. Quand il y en a plusieurs, la carte le dit au lieu de choisir en
+ * silence.
+ *
+ * Le montant agrège les trois ensembles d'un axe — classé, direct, non
+ * attribué — parce que c'est le revenu **de la période**, pas celui qu'on sait
+ * rattacher. Le second se lira dans la carte de qualité de la mesure, à l'écran
+ * v2.
+ */
+function RevenueMetric({
+  attribution,
+}: {
+  attribution: RevenueAttributionPage | undefined;
+}) {
+  const totals = totalsByCurrency(attribution);
+  const [top, ...others] = totals;
 
-  const sources = sessions && trafficSources(sessions.sessions);
-  const referral = sessions && referrers(sessions.sessions);
+  return (
+    <Card>
+      <CardHeader className="gap-1">
+        <CardDescription>Revenue</CardDescription>
+        <CardTitle className="text-3xl tabular-nums">
+          {attribution ? (
+            money(top?.amount ?? 0, top?.currency ?? null)
+          ) : (
+            <Skeleton className="h-8 w-24" />
+          )}
+        </CardTitle>
+        {others.length > 0 && (
+          <CardAction>
+            <Badge variant="secondary">+{others.length} more</Badge>
+          </CardAction>
+        )}
+      </CardHeader>
+    </Card>
+  );
+}
+
+/**
+ * Les totaux par devise, du plus gros au plus petit.
+ *
+ * Lus sur **un seul axe** — n'importe lequel : les mêmes paiements y sont tous,
+ * seulement rangés autrement. Les additionner sur deux axes les compterait deux
+ * fois.
+ */
+function totalsByCurrency(
+  attribution: RevenueAttributionPage | undefined,
+): { currency: string | null; amount: number }[] {
+  const axis = attribution?.campaign;
+
+  if (!axis) return [];
+
+  const totals = new Map<string | null, number>();
+
+  for (const row of [...axis.rows, ...axis.direct, ...axis.unattributed]) {
+    totals.set(row.currency, (totals.get(row.currency) ?? 0) + row.amount);
+  }
+
+  return [...totals]
+    .map(([currency, amount]) => ({ currency, amount }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
+/**
+ * Le nombre de paiements de la période.
+ *
+ * Additif, contrairement aux visiteurs : un paiement appartient à une ligne et
+ * une seule, alors qu'un visiteur peut apparaître derrière deux valeurs d'un
+ * même axe. C'est pour ça que la carte compte des paiements et pas des clients.
+ */
+function paymentsOf(
+  attribution: RevenueAttributionPage | undefined,
+): number | undefined {
+  const axis = attribution?.campaign;
+
+  if (!axis) return undefined;
+
+  return [...axis.rows, ...axis.direct, ...axis.unattributed].reduce(
+    (sum, row) => sum + row.payments,
+    0,
+  );
+}
+
+/**
+ * Qui sont les visiteurs, et lesquels rapportent.
+ *
+ * Trois onglets — navigateur, système, appareil — chacun croisant deux
+ * lectures : les visiteurs viennent du classement d'audience, le revenu de
+ * l'attribution. C'est le même croisement que dans Acquisition, sur des axes que
+ * le visiteur ne choisit pas.
+ *
+ * Le pays n'y est pas : il a sa propre carte, avec son planisphère.
+ */
+function Audience({
+  attribution,
+  technology,
+  locations,
+}: {
+  attribution: RevenueAttributionPage | undefined;
+  technology: TechnologyPage | undefined;
+  locations: LocationsPage | undefined;
+}) {
+  const [tab, setTab] = useState<TechnologyGrain>('browser');
+
+  const axis: AttributionAxis =
+    tab === 'device' ? 'device' : tab === 'os' ? 'os' : 'browser';
+
+  // Une seule lecture d'audience est chargée — celle du navigateur. Les deux
+  // autres onglets rendent le revenu seul plutôt que de déclencher une requête
+  // par bascule : la donnée d'audience arrivera avec l'écran v2, qui porte le
+  // sélecteur de grain.
+  const seen =
+    tab === 'browser' && technology
+      ? new Map(technology.rows.map((row) => [row.value, row.visitors]))
+      : undefined;
+
+  const breakdown = attribution?.[axis];
+
+  const rows: TableRow[] = (breakdown?.rows ?? []).map((row, index) => {
+    const visitors = seen?.get(row.label);
+
+    return {
+      key: `${row.label}-${String(row.currency)}-${String(index)}`,
+      cells: [
+        <span key="label" className="truncate">
+          {row.label || 'Unknown'}
+        </span>,
+        <span key="visitors">
+          {visitors === undefined ? '—' : number.format(visitors)}
+        </span>,
+        <span key="customers">{number.format(row.visitors)}</span>,
+        <span key="revenue">{money(row.amount, row.currency)}</span>,
+      ],
+    };
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Who they are</CardTitle>
+        <CardDescription>
+          {locations
+            ? 'The same payments, split by what the visitor brought with them.'
+            : 'Loading…'}
+        </CardDescription>
+        <CardAction>
+          <Tabs
+            value={tab}
+            onValueChange={(value) => setTab(value as TechnologyGrain)}
+          >
+            <TabsList>
+              {AUDIENCE_AXES.filter((value) => value !== 'country').map(
+                (value) => (
+                  <TabsTrigger
+                    key={value}
+                    value={value === 'device' ? 'device' : value}
+                  >
+                    {AXIS_LABELS[value]}
+                  </TabsTrigger>
+                ),
+              )}
+            </TabsList>
+          </Tabs>
+        </CardAction>
+      </CardHeader>
+
+      <CardContent className={CARD_BODY}>
+        {attribution ? (
+          <DataTable
+            columns={[
+              { head: AXIS_LABELS[axis] },
+              { head: 'Visitors', width: '5rem', align: 'right' },
+              { head: 'Customers', width: '5.5rem', align: 'right' },
+              { head: 'Revenue', width: '6rem', align: 'right' },
+            ]}
+            rows={rows}
+            empty={{
+              title: 'No revenue yet',
+              description:
+                'Payments appear here once a Stripe account is connected and a first payment has been attributed.',
+            }}
+          />
+        ) : (
+          <Skeleton className="h-full w-full" />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function Acquisition({
+  attribution,
+  sessions,
+  locations,
+}: {
+  attribution: RevenueAttributionPage | undefined;
+  sessions: SessionsPage | undefined;
+  locations: LocationsPage | undefined;
+}) {
+  const [tab, setTab] = useState<AttributionAxis>('campaign');
+
+  // Les visiteurs viennent des sessions **déjà chargées**, les clients et le
+  // revenu de l'attribution. Le croisement se fait ici parce que les deux
+  // moitiés sont sur la page : le demander au serveur ajouterait une route pour
+  // un repli de trente lignes.
+  const visitors = sessions && visitorsByAxis(sessions.sessions);
+  const perCountry =
+    locations &&
+    new Map(locations.rows.map((row) => [row.value, row.visitors]));
+
+  const breakdown = attribution?.[tab];
+
+  const audience = (label: string): number | undefined => {
+    if (tab === 'country') return perCountry?.get(label);
+
+    return visitors?.[tab === 'campaign' ? 'campaign' : tab === 'source' ? 'source' : 'landing']?.get(label);
+  };
+
+  const rows: TableRow[] = (breakdown?.rows ?? []).map((row, index) => {
+    const seen = audience(row.label);
+    const customers = row.visitors;
+
+    return {
+      key: `${row.label}-${String(row.currency)}-${String(index)}`,
+      cells: [
+        <span key="label" className="truncate">
+          {row.label || '(none)'}
+        </span>,
+        <span key="visitors">{seen === undefined ? '—' : number.format(seen)}</span>,
+        <span key="customers">{number.format(customers)}</span>,
+        <span key="conv">
+          {seen === undefined || seen === 0
+            ? '—'
+            : `${((customers / seen) * 100).toFixed(1)}%`}
+        </span>,
+        <span key="revenue">{money(row.amount, row.currency)}</span>,
+        <span key="per">
+          {seen === undefined || seen === 0
+            ? '—'
+            : money(Math.round(row.amount / seen), row.currency)}
+        </span>,
+      ],
+    };
+  });
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Acquisition</CardTitle>
-        <CardDescription>How each session reached the site.</CardDescription>
+        <CardDescription>
+          First touch — the first visit of the visitor, not the one that paid.
+        </CardDescription>
         <CardAction>
           <Tabs
             value={tab}
-            onValueChange={(value) => setTab(value as AcquisitionTab)}
+            onValueChange={(value) => setTab(value as AttributionAxis)}
           >
             <TabsList>
-              {ACQUISITION_TABS.map(({ value, label }) => (
-                <TabsTrigger
-                  key={value}
-                  // Visible mais inerte : masquer l'onglet ferait croire que la
-                  // vue n'est pas prévue, alors qu'elle attend une intégration.
-                  disabled={value === 'terms'}
-                  value={value}
-                >
-                  {label}
-                  {value === 'terms' && (
-                    <Badge className="ml-1.5" variant="secondary">
-                      Soon
-                    </Badge>
-                  )}
+              {ACQUISITION_AXES.map((axis) => (
+                <TabsTrigger key={axis} value={axis}>
+                  {AXIS_LABELS[axis]}
                 </TabsTrigger>
               ))}
             </TabsList>
           </Tabs>
         </CardAction>
       </CardHeader>
+
       <CardContent className={CARD_BODY}>
-        {sources === undefined || referral === undefined ? (
-          <Skeleton className={`w-full ${CARD_BODY}`} />
-        ) : tab === 'sources' ? (
-          <>
-            <Bars
-              empty={{
-                title: 'No sources yet',
-                description:
-                  'Sessions get a source from the referrer of their first page view.',
-              }}
-              rows={sources.rows.slice(0, ROWS).map((source) => ({
-                key: `${source.kind}-${source.name ?? ''}`,
-                host: source.host,
-                label: (
-                  <>
-                    <span className="min-w-0 truncate">{source.label}</span>
-                    {/* La nature reste écrite malgré l'icône : celle-ci lève
-                        bien l'ambiguïté sur `Google`, mais pas sur `internal`,
-                        où le favicon de notre propre site le ferait au
-                        contraire passer pour un tiers. */}
-                    {LABELLED_KINDS.has(source.kind) && (
-                      <span className="shrink-0 text-2xs">{source.kind}</span>
-                    )}
-                  </>
-                ),
-                value: source.sessions,
-              }))}
-            />
-            {/* Ce que l'attribution ne couvre pas. Une session sans vue de page
-                n'a aucune provenance observable — et ce n'est pas `direct`, qui
-                est une observation. Taire l'écart laisserait croire le total
-                exhaustif. */}
-            {sources.unattributed > 0 && (
-              <p className="text-muted-foreground pt-3 text-xs">
-                {number.format(sources.unattributed)} sessions without a page
-                view
-              </p>
-            )}
-          </>
-        ) : (
-          <Bars
+        {attribution ? (
+          <DataTable
+            columns={[
+              { head: AXIS_LABELS[tab] },
+              { head: 'Visitors', width: '5rem', align: 'right' },
+              { head: 'Customers', width: '5.5rem', align: 'right' },
+              { head: 'Conv.', width: '4.5rem', align: 'right', dim: true },
+              { head: 'Revenue', width: '6rem', align: 'right' },
+              { head: 'Per visitor', width: '6rem', align: 'right' },
+            ]}
+            rows={rows}
             empty={{
-              title: 'No referrers yet',
-              description: 'Sites that link to you will show up here.',
+              title: 'No revenue yet',
+              description:
+                'Payments appear here once a Stripe account is connected and a first payment has been attributed.',
             }}
-            rows={referral.slice(0, ROWS).map((source) => ({
-              key: source.name ?? '',
-              // `referrers` a déjà écarté les lignes sans nom : sur un
-              // `referral`, l'hôte est donc toujours là.
-              host: source.host,
-              label: <span className="min-w-0 truncate">{source.label}</span>,
-              value: source.sessions,
-            }))}
           />
+        ) : (
+          <Skeleton className="h-full w-full" />
         )}
       </CardContent>
     </Card>

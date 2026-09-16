@@ -495,3 +495,71 @@ export function referrers(sessions: SessionRow[]): SourceRow[] {
     (row) => row.kind === 'referral' && row.name !== null,
   );
 }
+
+/**
+ * Les visiteurs distincts par axe d'acquisition, repliés depuis les sessions.
+ *
+ * ## Pourquoi ici et pas côté serveur
+ *
+ * Parce que la donnée est **déjà chargée**. La page lit la liste des sessions
+ * pour tracer le trafic quotidien ; chacune porte sa provenance, sa campagne,
+ * sa page d'entrée et un alias de visiteur. Demander les mêmes comptes à l'API
+ * ajouterait une route pour un repli de trente lignes.
+ *
+ * ## Des visiteurs, pas des sessions
+ *
+ * La déduplication porte sur l'alias : quelqu'un revenu trois fois compte pour
+ * un. C'est le dénominateur qu'un taux de conversion demande — rapporté aux
+ * sessions, il dirait qu'un visiteur fidèle convertit moins bien qu'un visiteur
+ * de passage.
+ *
+ * ⚠️ L'alias ne vaut que dans **une** réponse et ne franchit pas la journée :
+ * deux fenêtres ne se recoupent pas, et c'est voulu. Voir `SessionRow`.
+ */
+export interface AxisVisitors {
+  source: Map<string, number>;
+  campaign: Map<string, number>;
+  landing: Map<string, number>;
+}
+
+export function visitorsByAxis(sessions: SessionRow[]): AxisVisitors {
+  const seen = {
+    source: new Map<string, Set<string>>(),
+    campaign: new Map<string, Set<string>>(),
+    landing: new Map<string, Set<string>>(),
+  };
+
+  const add = (axis: keyof typeof seen, key: string, alias: string) => {
+    const aliases = seen[axis].get(key) ?? new Set<string>();
+
+    aliases.add(alias);
+    seen[axis].set(key, aliases);
+  };
+
+  for (const session of sessions) {
+    if (session.source) add('source', session.source.label, session.visitorAlias);
+
+    if (session.campaign) {
+      const { source, medium, name } = session.campaign;
+
+      add(
+        'campaign',
+        [source, medium, name].filter(Boolean).join(' / '),
+        session.visitorAlias,
+      );
+    }
+
+    if (session.entryPath) {
+      add('landing', session.entryPath, session.visitorAlias);
+    }
+  }
+
+  const counted = (aliases: Map<string, Set<string>>) =>
+    new Map([...aliases].map(([key, set]) => [key, set.size]));
+
+  return {
+    source: counted(seen.source),
+    campaign: counted(seen.campaign),
+    landing: counted(seen.landing),
+  };
+}
