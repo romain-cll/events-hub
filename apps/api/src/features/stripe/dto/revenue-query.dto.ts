@@ -17,8 +17,49 @@ const instant = z.iso.datetime({ offset: true }).transform((v) => new Date(v));
 const MAX_LIMIT = 100;
 
 /**
- * `GET /v1/projects/:projectId/revenue/attribution` — la fenêtre, la coupe, et
- * les filtres à venir.
+ * Les axes sur lesquels les paiements peuvent être rangés.
+ *
+ * Ensemble **fermé**, et c'est la propriété de sécurité du mécanisme : la
+ * valeur vient d'une URL, elle est résolue ici puis dans le Core en référence de
+ * colonne ou en clé liée. Aucune chaîne d'appelant n'atteint le SQL.
+ */
+export const ATTRIBUTION_AXES = [
+  'campaign',
+  'source',
+  'landing',
+  'country',
+  'browser',
+  'os',
+  'device',
+] as const;
+
+export type AttributionAxis = (typeof ATTRIBUTION_AXES)[number];
+
+/**
+ * Ce qu'on rend quand l'appelant ne demande rien : la carte Acquisition.
+ *
+ * Les trois axes d'audience — navigateur, système, appareil — ne sont pas du
+ * défaut parce qu'ils appartiennent à une autre carte. Chaque groupement est une
+ * passe SQL de plus : les rendre tous par défaut ferait payer sept agrégations
+ * à qui en affiche quatre.
+ */
+const DEFAULT_AXES = [
+  'campaign',
+  'source',
+  'landing',
+  'country',
+] as const satisfies readonly AttributionAxis[];
+
+/**
+ * `GET /v1/projects/:projectId/revenue/attribution` — la fenêtre, les axes, la
+ * coupe, et les filtres à venir.
+ *
+ * ## `axes` : on ne calcule que ce qui sera affiché
+ *
+ * Une liste séparée par des virgules, `?axes=campaign,source`. Le client demande
+ * exactement ce qu'il montre, et le serveur ne paie que ces groupements-là. La
+ * réponse ne porte alors **que** les clés demandées : rendre les autres vides
+ * laisserait croire qu'elles ont été calculées et qu'il n'y a rien dedans.
  *
  * ## Il n'y a plus de `kind`
  *
@@ -50,6 +91,12 @@ export const revenueAttributionSchema = z
   .strictObject({
     from: instant.optional(),
     to: instant.optional(),
+    axes: z
+      .string()
+      .optional()
+      .transform((value) => value?.split(','))
+      .pipe(z.array(z.enum(ATTRIBUTION_AXES)).min(1).optional())
+      .transform((value) => value ?? [...DEFAULT_AXES]),
     limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(10),
     country: z.string().length(2).optional(),
     landing: z.string().max(500).optional(),

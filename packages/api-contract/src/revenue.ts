@@ -110,12 +110,16 @@ const breakdown = <Row extends z.ZodTypeAny>(row: Row) =>
 /**
  * `GET /v1/projects/:projectId/revenue/attribution` — d'où vient l'argent.
  *
- * ## Quatre répartitions, une réponse
+ * ## Les axes demandés, et eux seuls
  *
- * Les mêmes paiements rangés par campagne, par provenance, par page d'entrée et
- * par pays. Quatre routes auraient demandé quatre allers-retours pour une seule
- * carte, et rien ne garantirait que leurs totaux s'accordent — un paiement
- * arrivé entre deux appels suffirait à les faire diverger.
+ * Les mêmes paiements rangés par campagne, provenance, page d'entrée, pays,
+ * navigateur, système ou appareil — `?axes=` choisit lesquels. Une clé absente
+ * veut dire « pas demandée », **jamais** « calculée et vide » : chaque
+ * groupement est une passe SQL, et les rendre tous ferait payer sept
+ * agrégations à qui en affiche quatre.
+ *
+ * Une seule route parce qu'une carte les affiche ensemble : plusieurs appels
+ * laisseraient leurs totaux diverger dès qu'un paiement arrive entre deux.
  *
  * ## `eventTypes` est la définition du chiffre
  *
@@ -131,10 +135,13 @@ export const revenueAttributionPageSchema = z.object({
   to: z.iso.datetime({ offset: true }),
   /** Les types d'événement réellement additionnés. */
   eventTypes: z.array(z.string()),
-  campaigns: breakdown(campaignRevenueSchema),
-  sources: breakdown(sourceRevenueSchema),
-  landings: breakdown(z.object(revenueRow)),
-  countries: breakdown(z.object(revenueRow)),
+  campaign: breakdown(campaignRevenueSchema).optional(),
+  source: breakdown(sourceRevenueSchema).optional(),
+  landing: breakdown(z.object(revenueRow)).optional(),
+  country: breakdown(z.object(revenueRow)).optional(),
+  browser: breakdown(z.object(revenueRow)).optional(),
+  os: breakdown(z.object(revenueRow)).optional(),
+  device: breakdown(z.object(revenueRow)).optional(),
 });
 
 export type RevenueAttributionPage = z.infer<

@@ -280,8 +280,15 @@ export interface AmountSelector {
  * `topValues`. C'est ce qui lui permet de grouper un referrer sans savoir ce
  * qu'est un referrer.
  */
+export type EntrySessionColumn =
+  | 'campaign'
+  | 'country'
+  | 'browser'
+  | 'os'
+  | 'device';
+
 export type EntryAxis =
-  | { on: 'session'; column: 'campaign' | 'country' }
+  | { on: 'session'; column: EntrySessionColumn }
   | { on: 'entry'; source: 'attributes' | 'properties'; key: string };
 
 export interface EntrySelector extends AmountSelector {
@@ -1142,7 +1149,10 @@ export class EventStore {
         campaignSource: sessions.campaignSource,
         campaignMedium: sessions.campaignMedium,
         campaignName: sessions.campaignName,
-        countryCode: sessions.countryCode,
+        country: sessions.countryCode,
+        browser: sessions.browser,
+        os: sessions.os,
+        device: sessions.deviceType,
         marker: sql<number>`1`.as('marker'),
       })
       .from(sessions)
@@ -1187,6 +1197,18 @@ export class EventStore {
     // Trois emplacements, toujours : la forme du `select` est figée à la
     // compilation, et la campagne est le seul axe qui en occupe plus d'un. Les
     // autres laissent deux `null` constants, que Postgres groupe sans frais.
+    // Les colonnes de la première visite sur lesquelles un classement peut
+    // porter, résolues par un objet dont les clés sont connues à la
+    // compilation : aucune chaîne d'appelant n'atteint le SQL. Même propriété
+    // que `SESSION_COLUMNS`. La campagne n'y est pas — elle occupe trois
+    // emplacements et se traite à part.
+    const fromEntry = {
+      country: entry.country,
+      browser: entry.browser,
+      os: entry.os,
+      device: entry.device,
+    } as const;
+
     const slots =
       axis.on === 'entry'
         ? [sql<string | null>`${firstEvent.value}`, nothing, nothing]
@@ -1196,7 +1218,11 @@ export class EventStore {
               sql<string | null>`${entry.campaignMedium}`,
               sql<string | null>`${entry.campaignName}`,
             ]
-          : [sql<string | null>`${entry.countryCode}`, nothing, nothing];
+          : [
+              sql<string | null>`${fromEntry[axis.column]}`,
+              nothing,
+              nothing,
+            ];
 
     // Même raison que dans `topValues` : l'extraction est isolée pour que le
     // groupement porte sur des colonnes ordinaires, et non sur des expressions

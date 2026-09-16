@@ -126,8 +126,8 @@ describe('attribution du revenu (e2e)', () => {
       visitorId,
     });
 
-  const lire = async (query: Record<string, string> = {}) =>
-    expectMatchesContract(
+  const lire = async (query: Record<string, string> = {}) => {
+    const page = expectMatchesContract(
       (
         await request(app.getHttpServer())
           .get(`/v1/projects/${projet.id}/revenue/attribution`)
@@ -137,6 +137,22 @@ describe('attribution du revenu (e2e)', () => {
       ).body,
       revenueAttributionPageSchema,
     );
+
+    // Les clés sont optionnelles — une absente veut dire « pas demandée ». Les
+    // cas qui suivent demandent les axes par défaut, donc les quatre sont là :
+    // l'affirmer une fois ici évite un `?.` sur chaque assertion.
+    if (!page.campaign || !page.source || !page.landing || !page.country) {
+      throw new Error('Les quatre axes par défaut devraient être rendus.');
+    }
+
+    return {
+      ...page,
+      campaign: page.campaign,
+      source: page.source,
+      landing: page.landing,
+      country: page.country,
+    };
+  };
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -202,7 +218,7 @@ describe('attribution du revenu (e2e)', () => {
     // `bing` est la seconde visite du même visiteur : elle ne doit apparaître
     // nulle part. L'acquisition est antérieure à la fenêtre, et c'est le point
     // — la fenêtre choisit les paiements, pas l'ancienneté qu'on leur reconnaît.
-    expect(page.campaigns.rows).toEqual([
+    expect(page.campaign.rows).toEqual([
       expect.objectContaining({
         campaign: { source: 'google', medium: 'cpc', name: 'rentree' },
         currency: 'eur',
@@ -221,12 +237,12 @@ describe('attribution du revenu (e2e)', () => {
     // de paramètre à passer pour choisir lequel compte.
     expect(page.eventTypes).toContain(NOUVEAU);
     expect(page.eventTypes).toContain(PONCTUEL);
-    expect(page.campaigns.rows[0].amount).toBe(2900);
+    expect(page.campaign.rows[0].amount).toBe(2900);
   });
 
   it('replie les referrers d’un même moteur en une provenance', async () => {
     const page = await lire();
-    const moteurs = page.sources.rows.filter(
+    const moteurs = page.source.rows.filter(
       (row) => row.source.name === 'google' && row.currency === 'eur',
     );
 
@@ -254,10 +270,10 @@ describe('attribution du revenu (e2e)', () => {
       unattributed: { currency: string | null; amount: number }[];
     }) => euros(axis.rows) + euros(axis.direct) + euros(axis.unattributed);
 
-    expect(total(page.campaigns)).toBe(5100);
-    expect(total(page.sources)).toBe(5100);
-    expect(total(page.landings)).toBe(5100);
-    expect(total(page.countries)).toBe(5100);
+    expect(total(page.campaign)).toBe(5100);
+    expect(total(page.source)).toBe(5100);
+    expect(total(page.landing)).toBe(5100);
+    expect(total(page.country)).toBe(5100);
   });
 
   it('range la page d’entrée de la première visite', async () => {
@@ -265,7 +281,7 @@ describe('attribution du revenu (e2e)', () => {
 
     // `/pricing` et non `/` : c'est la page par laquelle ce visiteur est
     // arrivé, pas celle qu'il a vue ensuite.
-    expect(page.landings.rows.map((row) => row.label)).toEqual(
+    expect(page.landing.rows.map((row) => row.label)).toEqual(
       expect.arrayContaining(['/pricing', '/docs', '/']),
     );
   });
@@ -274,7 +290,7 @@ describe('attribution du revenu (e2e)', () => {
     const page = await lire();
 
     // Connu, venu sans campagne : ce n'est pas un trou de mesure.
-    expect(page.campaigns.direct).toEqual(
+    expect(page.campaign.direct).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ currency: 'eur', amount: 1200 }),
       ]),
@@ -282,7 +298,7 @@ describe('attribution du revenu (e2e)', () => {
 
     // Deux paiements qu'aucune visite ne réclame — un client d'avant
     // l'installation, un refus de consentement.
-    expect(page.campaigns.unattributed).toEqual([
+    expect(page.campaign.unattributed).toEqual([
       expect.objectContaining({ currency: 'eur', amount: 1000, payments: 2 }),
     ]);
   });
@@ -291,7 +307,7 @@ describe('attribution du revenu (e2e)', () => {
     const page = await lire();
 
     expect(
-      page.campaigns.rows.map((row) => [row.currency, row.amount]),
+      page.campaign.rows.map((row) => [row.currency, row.amount]),
     ).toEqual([
       ['eur', 2900],
       ['usd', 1500],
@@ -308,6 +324,47 @@ describe('attribution du revenu (e2e)', () => {
     // le contrat. Tant qu'ils n'agissent pas, ce test est ce qui empêche de
     // croire qu'ils agissent.
     expect(avec).toEqual(sans);
+  });
+
+  it('ne rend que les axes demandés', async () => {
+    const response = await request(app.getHttpServer())
+      .get(`/v1/projects/${projet.id}/revenue/attribution`)
+      .set('Cookie', lecteur.cookies)
+      .query({ ...FENETRE, axes: 'campaign,browser' })
+      .expect(200);
+
+    const page = expectMatchesContract(
+      response.body,
+      revenueAttributionPageSchema,
+    );
+
+    // Une clé absente veut dire « pas demandée », jamais « calculée et vide » :
+    // chaque axe est une passe SQL, et les rendre tous ferait payer sept
+    // agrégations à qui en affiche deux.
+    expect(page.campaign).toBeDefined();
+    expect(page.browser).toBeDefined();
+    expect(page.source).toBeUndefined();
+    expect(page.country).toBeUndefined();
+  });
+
+  it('range aussi les paiements par navigateur', async () => {
+    const response = await request(app.getHttpServer())
+      .get(`/v1/projects/${projet.id}/revenue/attribution`)
+      .set('Cookie', lecteur.cookies)
+      .query({ ...FENETRE, axes: 'browser' })
+      .expect(200);
+
+    const page = expectMatchesContract(
+      response.body,
+      revenueAttributionPageSchema,
+    );
+
+    // Toutes les visites de cette suite portent le même User-Agent : une seule
+    // ligne, et c'est la preuve que l'axe lit bien la colonne de la visite.
+    expect(page.browser?.rows).toEqual([
+      expect.objectContaining({ label: 'Chrome', currency: 'eur' }),
+      expect.objectContaining({ label: 'Chrome', currency: 'usd' }),
+    ]);
   });
 
   it('refuse un paramètre qu’il n’applique pas', async () => {

@@ -12,7 +12,10 @@ import {
   CURRENCY_KEY,
   REVENUE_TYPES,
 } from './event-mapping';
-import type { RevenueAttributionDto } from './dto/revenue-query.dto';
+import type {
+  AttributionAxis,
+  RevenueAttributionDto,
+} from './dto/revenue-query.dto';
 
 /**
  * Ce qu'une valeur d'axe a rapporté sur la fenêtre.
@@ -103,10 +106,20 @@ export interface RevenueAttributionPage {
    * été retenus est la seule façon de réconcilier ce total avec Stripe.
    */
   eventTypes: string[];
-  campaigns: RevenueBreakdown<CampaignRevenue>;
-  sources: RevenueBreakdown<SourceRevenue>;
-  landings: RevenueBreakdown<RevenueRow>;
-  countries: RevenueBreakdown<RevenueRow>;
+  /**
+   * Les répartitions demandées, et **elles seules**.
+   *
+   * Une clé absente veut dire « pas demandée », jamais « calculée et vide ».
+   * Les rendre toutes ferait payer sept agrégations SQL à qui en affiche
+   * quatre, et laisserait croire qu'un axe vide a été mesuré.
+   */
+  campaign?: RevenueBreakdown<CampaignRevenue>;
+  source?: RevenueBreakdown<SourceRevenue>;
+  landing?: RevenueBreakdown<RevenueRow>;
+  country?: RevenueBreakdown<RevenueRow>;
+  browser?: RevenueBreakdown<RevenueRow>;
+  os?: RevenueBreakdown<RevenueRow>;
+  device?: RevenueBreakdown<RevenueRow>;
 }
 
 /**
@@ -135,7 +148,7 @@ export class RevenueService {
 
   async attribution(
     projectId: string,
-    { from, to, limit }: RevenueAttributionDto,
+    { from, to, axes, limit }: RevenueAttributionDto,
   ): Promise<RevenueAttributionPage> {
     const scope = { projectId, from, to, types: [...REVENUE_TYPES] };
     const money = {
@@ -144,39 +157,68 @@ export class RevenueService {
       currency: CURRENCY_KEY,
     };
 
-    const read = (axis: EntryAxis): Promise<EntryRanking> =>
-      this.events.entryDimension(scope, { ...money, axis, limit: SCAN_LIMIT });
+    // Où chaque axe se lit. Les deux premiers vivent dans le sac du premier
+    // événement de la visite ; les autres sont des colonnes posées à son
+    // ouverture. Le Core ne sait pas ce que `page.referrer` désigne — il groupe
+    // la clé qu'on lui nomme.
+    const where: Record<AttributionAxis, EntryAxis> = {
+      campaign: { on: 'session', column: 'campaign' },
+      source: { on: 'entry', source: 'attributes', key: REFERRER_KEY },
+      landing: { on: 'entry', source: 'attributes', key: PATH_KEY },
+      country: { on: 'session', column: 'country' },
+      browser: { on: 'session', column: 'browser' },
+      os: { on: 'session', column: 'os' },
+      device: { on: 'session', column: 'device' },
+    };
 
-    const [campaigns, referrers, landings, countries] = await Promise.all([
-      read({ on: 'session', column: 'campaign' }),
-      read({ on: 'entry', source: 'attributes', key: REFERRER_KEY }),
-      read({ on: 'entry', source: 'attributes', key: PATH_KEY }),
-      read({ on: 'session', column: 'country' }),
-    ]);
+    // Une passe par axe demandé, en parallèle : elles lisent la même fenêtre et
+    // ne peuvent donc pas se contredire.
+    const rankings = await Promise.all(
+      axes.map((axis) =>
+        this.events.entryDimension(scope, {
+          ...money,
+          axis: where[axis],
+          limit: SCAN_LIMIT,
+        }),
+      ),
+    );
 
-    return {
+    const page: RevenueAttributionPage = {
       from,
       to,
       eventTypes: [...REVENUE_TYPES],
-      campaigns: this.breakdown(campaigns, limit, (row) => {
-        const [source, medium, name] = row.values;
-
-        return {
-          ...strip(row),
-          label: [source, medium, name].filter(Boolean).join(' / '),
-          campaign: { source, medium, name },
-        };
-      }),
-      sources: this.folded(referrers, limit),
-      landings: this.breakdown(landings, limit, (row) => ({
-        ...strip(row),
-        label: row.values[0] ?? '',
-      })),
-      countries: this.breakdown(countries, limit, (row) => ({
-        ...strip(row),
-        label: row.values[0] ?? '',
-      })),
     };
+
+    axes.forEach((axis, index) => {
+      const ranking = rankings[index];
+
+      if (axis === 'campaign') {
+        page.campaign = this.breakdown(ranking, limit, (row) => {
+          const [source, medium, name] = row.values;
+
+          return {
+            ...strip(row),
+            label: [source, medium, name].filter(Boolean).join(' / '),
+            campaign: { source, medium, name },
+          };
+        });
+
+        return;
+      }
+
+      if (axis === 'source') {
+        page.source = this.folded(ranking, limit);
+
+        return;
+      }
+
+      page[axis] = this.breakdown(ranking, limit, (row) => ({
+        ...strip(row),
+        label: row.values[0] ?? '',
+      }));
+    });
+
+    return page;
   }
 
   /**
