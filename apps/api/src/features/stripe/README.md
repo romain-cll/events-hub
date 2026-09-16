@@ -187,6 +187,42 @@ sans effet** : la forme est posée pour que la page puisse se filtrer sans rouvr
 le contrat. Un e2e vérifie qu'ils ne changent rien, pour qu'on ne croie pas
 qu'ils agissent.
 
+## L'historique du montant, écrit avant d'être lu
+
+`stripe_subscription_revisions` note une ligne chaque fois que le montant
+mensuel d'un abonnement **ou son statut** change. Elle existe alors qu'aucune
+lecture ne s'en sert encore, et c'est délibéré.
+
+Le MRR courant se calcule à tout moment depuis les deux tables d'abonnement. Sa
+**décomposition** — ce qui l'a fait bouger — demande l'écart entre deux instants,
+et cet écart n'est reconstructible nulle part : Stripe n'expose aucun état passé,
+son API Events ne remonte que trente jours, et notre projection écrase l'ancien
+montant à chaque mise à jour. **Chaque mois sans cette table est un mois absent
+du waterfall pour toujours.**
+
+Trois choses à savoir avant de la lire :
+
+- **On range des faits, pas des causes.** Un avant, un après, un statut.
+  « Expansion », « churn » et « nouveau » se déduisent des deux montants ; les
+  figer en base les trancherait avant que la lecture ait dit ce dont elle a
+  besoin.
+- **`monthlyBefore` à `null` n'est pas zéro** : le premier dit que l'abonnement
+  n'existait pas, le second qu'il ne valait rien.
+- **Une résiliation ne met pas le montant à zéro.** Stripe renvoie l'abonnement
+  avec ses prix et le statut `canceled` : c'est ce qu'on recopie. C'est à la
+  lecture de décider qu'un `canceled` ne compte pas — et c'est pour ça que le
+  statut est stocké, et qu'un changement de statut seul suffit à écrire une
+  ligne.
+
+Le montant mensualisé vient de `monthlyAmountOf` — la formule de Stripe, annuel
+÷ 12, trimestriel ÷ 3 — **hors remises, taxes et proration**, qui dépendent de la
+facture et pas de l'abonnement. L'écran qui affichera le MRR doit le dire à côté
+du chiffre.
+
+⚠️ **L'historique démarre à la mise en service.** Les abonnements déjà en base
+n'auront de révision qu'à leur premier changement : la courbe partira plate, et
+ce n'est pas une panne. Le passé ne se rattraperait qu'en repartant des factures.
+
 ## Les lectures de rétention
 
 `GET /revenue/cohorts` — la matrice triangulaire. Une ligne par mois de

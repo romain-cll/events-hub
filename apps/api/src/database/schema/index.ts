@@ -19,3 +19,4 @@ export * from './integrations';
 export * from './stripe-webhook-events';
 export * from './stripe-customers';
 export * from './stripe-subscriptions';
+export * from './stripe-subscription-revisions';

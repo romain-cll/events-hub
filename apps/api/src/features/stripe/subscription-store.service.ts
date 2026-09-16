@@ -1,11 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { eq, lt } from 'drizzle-orm';
+import { and, eq, lt } from 'drizzle-orm';
 
 import { DRIZZLE, type DrizzleDatabase } from '../../database/database.module';
 import {
   stripeSubscriptionItems,
+  stripeSubscriptionRevisions,
   stripeSubscriptions,
 } from '../../database/schema';
+import { monthlyAmountOf, type Priced } from './monthly-amount';
 import type { Projection } from './subscription-projection';
 
 /**
@@ -50,6 +52,31 @@ export class SubscriptionStore {
     { subscription, items }: Projection,
   ): Promise<boolean> {
     return await this.db.transaction(async (tx) => {
+      // L'état d'avant, lu avant de l'écraser. C'est la seule fenêtre où il
+      // existe encore : l'upsert juste en dessous le remplace, et Postgres ne
+      // rend pas l'ancienne ligne d'un `ON CONFLICT`.
+      const [existing] = await tx
+        .select({ id: stripeSubscriptions.id, status: stripeSubscriptions.status })
+        .from(stripeSubscriptions)
+        .where(
+          and(
+            eq(stripeSubscriptions.projectId, projectId),
+            eq(stripeSubscriptions.stripeId, subscription.stripeId),
+          ),
+        );
+
+      const previous = existing
+        ? await tx
+            .select({
+              unitAmount: stripeSubscriptionItems.unitAmount,
+              quantity: stripeSubscriptionItems.quantity,
+              interval: stripeSubscriptionItems.interval,
+              intervalCount: stripeSubscriptionItems.intervalCount,
+            })
+            .from(stripeSubscriptionItems)
+            .where(eq(stripeSubscriptionItems.subscriptionId, existing.id))
+        : [];
+
       const [row] = await tx
         .insert(stripeSubscriptions)
         .values({ projectId, ...subscription })
@@ -61,8 +88,15 @@ export class SubscriptionStore {
         .returning({ id: stripeSubscriptions.id });
 
       // Observation périmée : la ligne en base décrit un état postérieur, on la
-      // laisse tranquille.
+      // laisse tranquille. Aucune révision non plus — ce qu'on lit n'est pas la
+      // dernière vérité connue, et l'écrire fabriquerait un aller-retour dans la
+      // série.
       if (!row) return false;
+
+      await this.record(tx, projectId, row.id, { subscription, items }, {
+        status: existing?.status ?? null,
+        items: previous,
+      });
 
       await tx
         .delete(stripeSubscriptionItems)
@@ -75,6 +109,53 @@ export class SubscriptionStore {
         .values(items.map((item) => ({ subscriptionId: row.id, ...item })));
 
       return true;
+    });
+  }
+
+  /**
+   * Note le changement de montant, s'il y en a un.
+   *
+   * ## Pourquoi seulement s'il y en a un
+   *
+   * Parce que la plupart des webhooks d'abonnement ne bougent pas le MRR : un
+   * renouvellement, une carte mise à jour, une facture payée passent tous par
+   * ici. Leur donner une ligne noierait les vraies variations sous du bruit, et
+   * une série qui compte des non-événements ne se lit pas.
+   *
+   * ## Pourquoi `null` n'est pas zéro
+   *
+   * Aucune ligne précédente veut dire que l'abonnement vient d'exister — c'est
+   * une entrée dans la série. Un abonnement qui existait à zéro est autre chose,
+   * et les confondre ferait passer chaque création pour une reprise.
+   *
+   * La devise vient de l'abonnement et pas des items : ils portent la même, et
+   * c'est celle-là qui sépare les séries.
+   */
+  private async record(
+    tx: Parameters<Parameters<DrizzleDatabase['transaction']>[0]>[0],
+    projectId: string,
+    subscriptionId: string,
+    { subscription, items }: Projection,
+    previous: { status: string | null; items: Priced[] },
+  ): Promise<void> {
+    const before =
+      previous.status === null ? null : monthlyAmountOf(previous.items);
+    const after = monthlyAmountOf(items);
+
+    // Le statut compte autant que le montant : une résiliation ne change
+    // souvent **rien** aux prix — Stripe renvoie les mêmes items, avec
+    // `canceled` — et s'en tenir au montant la rendrait invisible, alors que
+    // c'est le mouvement qui pèse le plus lourd dans un waterfall.
+    if (before === after && previous.status === subscription.status) return;
+
+    await tx.insert(stripeSubscriptionRevisions).values({
+      projectId,
+      subscriptionId,
+      observedAt: subscription.observedAt,
+      currency: subscription.currency,
+      monthlyBefore: before,
+      monthlyAfter: after,
+      status: subscription.status,
     });
   }
 }

@@ -12,6 +12,7 @@ import {
   sessions,
   stripeCustomers,
   stripeSubscriptionItems,
+  stripeSubscriptionRevisions,
   stripeSubscriptions,
   stripeWebhookEvents,
 } from '../src/database/schema';
@@ -159,6 +160,7 @@ describe('projection d’abonnement (e2e)', () => {
         .where(eq(stripeWebhookEvents.eventId, id));
     }
     // Les items partent en cascade avec leur abonnement.
+    // Les révisions et les items partent en cascade avec leur abonnement.
     await db
       .delete(stripeSubscriptions)
       .where(eq(stripeSubscriptions.projectId, projet.id));
@@ -189,6 +191,19 @@ describe('projection d’abonnement (e2e)', () => {
       .select()
       .from(stripeSubscriptions)
       .where(eq(stripeSubscriptions.projectId, projet.id));
+
+  /** Les révisions du projet, de la plus ancienne à la plus récente. */
+  const revisions = () =>
+    db
+      .select({
+        before: stripeSubscriptionRevisions.monthlyBefore,
+        after: stripeSubscriptionRevisions.monthlyAfter,
+        status: stripeSubscriptionRevisions.status,
+        currency: stripeSubscriptionRevisions.currency,
+      })
+      .from(stripeSubscriptionRevisions)
+      .where(eq(stripeSubscriptionRevisions.projectId, projet.id))
+      .orderBy(asc(stripeSubscriptionRevisions.observedAt));
 
   const lignes = async (subscriptionId: string) =>
     db
@@ -289,6 +304,45 @@ describe('projection d’abonnement (e2e)', () => {
       endedAt: new Date((T0 + 2_592_000) * 1000),
     });
     expect(await abonnements()).toHaveLength(1);
+  });
+
+  describe('l’historique du montant', () => {
+    it('note l’entrée, puis le changement de plan', async () => {
+      const lignes = await revisions();
+
+      // La création : `null` et non zéro — l'abonnement n'existait pas, il ne
+      // valait pas rien. 1 900 par mois pour une ligne mensuelle.
+      // Puis la montée de gamme : 4 900 × 3 + 900 = 15 600.
+      expect(lignes).toEqual([
+        { before: null, after: 1900, status: 'active', currency: 'eur' },
+        { before: 1900, after: 15_600, status: 'active', currency: 'eur' },
+        // La résiliation : Stripe renvoie l'abonnement avec ses prix, pas à
+        // zéro. Le montant après est donc celui des items de cette charge utile
+        // — ici le forfait seul. C'est un **fait**, et c'est à la lecture de
+        // décider qu'un `canceled` ne compte pas dans le MRR. L'observation
+        // périmée, elle, n'a rien écrit du tout.
+        { before: 15_600, after: 1900, status: 'canceled', currency: 'eur' },
+      ]);
+    });
+
+    it('n’écrit rien quand ni le montant ni le statut ne bougent', async () => {
+      const avant = await revisions();
+
+      // Un renouvellement, une carte mise à jour, une facture payée passent
+      // tous par la projection sans rien changer au MRR. Leur donner une ligne
+      // noierait les vraies variations sous du bruit.
+      await post({
+        id: 'evt_abo_sans_effet',
+        created: T0 + 500,
+        object: abonnement({
+          status: 'canceled',
+          canceled_at: T0 + 200,
+          ended_at: T0 + 2_592_000,
+        }),
+      }).expect(200);
+
+      expect(await revisions()).toEqual(avant);
+    });
   });
 
   it('écrit l’événement même quand il n’y a rien à projeter', async () => {
