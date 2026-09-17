@@ -431,7 +431,9 @@ function visit(visitor, at, { first, converting, buying }) {
         'page.path': page,
         'page.url': url,
         'sdk.version': '0.4.2',
-        'screen.size': visitor.client[3] ?? null,
+        // Un robot n'a pas d'écran : la clé est absente, pas nulle. `null`
+        // affirmerait une taille inconnue là où il n'y a rien à mesurer.
+        ...(visitor.client[3] ? { 'screen.size': visitor.client[3] } : {}),
         'navigator.language': visitor.geo[3],
         // Le referrer n'est présent qu'à l'arrivée : ensuite le navigateur
         // renvoie notre propre origine, et `entry-source` le classerait en
@@ -619,6 +621,17 @@ const CURRENCIES = [
 ];
 
 /**
+ * La devise de règlement du compte, et les taux que « Stripe » aurait appliqués.
+ *
+ * En production ces trois valeurs sont **recopiées** de la balance transaction,
+ * jamais calculées — c'est tout l'intérêt de la mécanique. Ici il n'y a pas de
+ * Stripe derrière, donc on les fabrique : un taux figé par devise suffit à ce
+ * que la colonne cumulée existe et que les arrondis se voient.
+ */
+const SETTLEMENT_CURRENCY = 'eur';
+const EXCHANGE_RATES = { eur: null, usd: 0.9184, gbp: 1.1735 };
+
+/**
  * Le monde Stripe, construit **à partir** des visiteurs qui ont converti.
  *
  * Trois populations, parce que la carte « qualité de la mesure » a trois causes
@@ -673,7 +686,11 @@ function buildStripe(visitors) {
   /** Un paiement, et le bruit qui l'accompagne réellement chez Stripe. */
   const invoice = (customer, at, amount, reason, subscriptionId) => {
     const invoiceId = `in_${randomUUID().replace(/-/g, '').slice(0, 22)}`;
-    const money = { 'payment.amount': amount, 'payment.currency': customer.currency };
+    const money = {
+      'payment.amount': amount,
+      'payment.currency': customer.currency,
+      ...settled(amount, customer.currency),
+    };
     const type =
       reason === 'subscription_create'
         ? 'stripe.subscription.started'
@@ -835,9 +852,12 @@ function buildStripe(visitors) {
     // Une poignée d'achats ponctuels plutôt qu'un abonnement : le type existe
     // pour eux, et sans eux il ne serait jamais exercé.
     if (chance(0.12)) {
+      const oneOff = pick([4900, 9900, 19900, 29900]);
+
       emit('stripe.payment.one_time', startedAt, customer, {
-        'payment.amount': pick([4900, 9900, 19900, 29900]),
+        'payment.amount': oneOff,
         'payment.currency': currency,
+        ...settled(oneOff, currency),
         'stripe.event.type': 'checkout.session.completed',
         'stripe.checkout.mode': 'payment',
         'stripe.object.id': `cs_${randomUUID().replace(/-/g, '').slice(0, 22)}`,
@@ -1039,11 +1059,28 @@ async function main() {
   }
 }
 
+/**
+ * Le règlement d'un montant, dans la devise du compte.
+ *
+ * Le taux nul de la devise du compte n'est pas un oubli : Stripe ne rend pas de
+ * taux quand il n'y a rien à convertir, et le seeder doit reproduire ce cas
+ * sous peine de laisser croire qu'un règlement sans taux est anormal.
+ */
+function settled(amount, currency) {
+  const rate = EXCHANGE_RATES[currency] ?? null;
+
+  return {
+    'payment.settled': rate === null ? amount : Math.round(amount * rate),
+    'payment.settled_currency': SETTLEMENT_CURRENCY,
+    'payment.exchange_rate': rate,
+  };
+}
+
 /** `undefined` n'a pas de représentation JSON : il ferait disparaître la clé
  *  d'un côté et écrirait `null` de l'autre selon le chemin. Autant trancher. */
 function dropUndefined(bag) {
   return Object.fromEntries(
-    Object.entries(bag).filter(([, value]) => value !== undefined && value !== null),
+    Object.entries(bag).filter(([, value]) => value !== undefined),
   );
 }
 

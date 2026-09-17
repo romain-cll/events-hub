@@ -8,6 +8,8 @@ import {
   occurredAtOf,
   propertiesOf,
   replayOf,
+  settlementOf,
+  settlementRefOf,
   typeOf,
 } from './event-mapping';
 
@@ -51,17 +53,17 @@ describe('typeOf', () => {
     // Le cœur du fichier. `invoice.paid` recouvre trois faits qui n'ont pas le
     // même sens : les confondre ferait passer une expansion pour de la
     // récurrence, et fausserait « d'où viennent les nouveaux clients ».
-    expect(
-      typeOf(evenement('invoice.paid', { billing_reason: reason })),
-    ).toBe(attendu);
+    expect(typeOf(evenement('invoice.paid', { billing_reason: reason }))).toBe(
+      attendu,
+    );
   });
 
   it('retombe sur le pass-through pour une raison qu’on n’interprète pas', () => {
     // `manual` et `subscription_threshold` existent. Leur inventer un type
     // figerait une interprétation que personne n'a encore.
-    expect(typeOf(evenement('invoice.paid', { billing_reason: 'manual' }))).toBe(
-      'stripe.invoice.paid',
-    );
+    expect(
+      typeOf(evenement('invoice.paid', { billing_reason: 'manual' })),
+    ).toBe('stripe.invoice.paid');
   });
 
   it('ne s’émeut pas d’une facture sans raison de facturation', () => {
@@ -120,19 +122,13 @@ describe('propertiesOf', () => {
 
 describe('customerIdOf', () => {
   it('accepte l’identifiant comme l’objet développé', () => {
-    expect(customerIdOf({ customer: 'cus_1' })).toBe(
-      'cus_1',
-    );
-    expect(
-      customerIdOf({ customer: { id: 'cus_2' } }),
-    ).toBe('cus_2');
+    expect(customerIdOf({ customer: 'cus_1' })).toBe('cus_1');
+    expect(customerIdOf({ customer: { id: 'cus_2' } })).toBe('cus_2');
   });
 
   it('rend undefined plutôt que de deviner', () => {
     expect(customerIdOf({})).toBeUndefined();
-    expect(
-      customerIdOf({ customer: null }),
-    ).toBeUndefined();
+    expect(customerIdOf({ customer: null })).toBeUndefined();
   });
 });
 
@@ -198,11 +194,14 @@ describe('customerLinkOf', () => {
 
   it('ignore une metadata vide plutôt que d’apprendre du vide', () => {
     expect(
-      avec({ object: 'customer', id: 'cus_3', metadata: { eh_visitor_id: '' } }),
+      avec({
+        object: 'customer',
+        id: 'cus_3',
+        metadata: { eh_visitor_id: '' },
+      }),
     ).toBeUndefined();
   });
 });
-
 
 describe('attributionOf', () => {
   const VISITEUR = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
@@ -248,7 +247,9 @@ describe('attributionOf', () => {
   });
 
   it('ne rend rien quand la metadata est absente ou vide', () => {
-    expect(attributionOf(evenement('invoice.paid').data.object)).toBeUndefined();
+    expect(
+      attributionOf(evenement('invoice.paid').data.object),
+    ).toBeUndefined();
     expect(
       attributionOf(
         evenement('invoice.paid', { metadata: { eh_session_id: '' } }).data
@@ -280,9 +281,7 @@ describe('typeOf — le checkout, qui recouvre deux faits', () => {
     expect(typeOf(checkout('subscription'))).toBe(
       'stripe.checkout.session.completed',
     );
-    expect(typeOf(checkout('setup'))).toBe(
-      'stripe.checkout.session.completed',
-    );
+    expect(typeOf(checkout('setup'))).toBe('stripe.checkout.session.completed');
   });
 
   it('recopie le mode, pour que la décision se vérifie', () => {
@@ -355,5 +354,68 @@ describe('replayOf — une facture lue dans l’historique', () => {
     // Une facture émise n'est pas du revenu, et une impayée encore moins.
     expect(replayOf(facture({ status: 'open' }))).toBeNull();
     expect(replayOf(facture({ status: 'void' }))).toBeNull();
+  });
+});
+
+describe('le règlement, désigné puis recopié', () => {
+  it('désigne la facture par son identifiant', () => {
+    expect(settlementRefOf({ object: 'invoice', id: 'in_1' })).toEqual({
+      on: 'invoice',
+      id: 'in_1',
+    });
+  });
+
+  it('désigne l’intention d’un checkout, pas le checkout', () => {
+    // Le checkout ne porte pas la charge : c'est l'intention qui désigne sa
+    // dernière charge, et c'est elle qu'il faudra développer.
+    expect(
+      settlementRefOf({
+        object: 'checkout.session',
+        id: 'cs_1',
+        payment_intent: 'pi_1',
+      }),
+    ).toEqual({ on: 'payment_intent', id: 'pi_1' });
+  });
+
+  it('ne désigne rien pour un objet sans règlement', () => {
+    // Sans ce refus, chaque `customer.updated` coûterait un appel à Stripe.
+    expect(settlementRefOf({ object: 'customer', id: 'cus_1' })).toBeNull();
+    expect(
+      settlementRefOf({ object: 'checkout.session', id: 'cs_1' }),
+    ).toBeNull();
+  });
+
+  it('recopie le montant réglé sans le recalculer', () => {
+    // 4900 × 0.9184 fait 4500,16 : si `settled` était dérivé du taux, l'arrondi
+    // serait le nôtre et non celui de Stripe — un centime d'écart par paiement,
+    // et le total cesse d'être le leur. On prend donc `amount` tel quel.
+    expect(
+      settlementOf({
+        amount: 4501,
+        currency: 'eur',
+        exchange_rate: 0.9184,
+      } as Stripe.BalanceTransaction),
+    ).toEqual({
+      'payment.settled': 4501,
+      'payment.settled_currency': 'eur',
+      'payment.exchange_rate': 0.9184,
+    });
+  });
+
+  it('garde le taux nul quand il n’y a rien à convertir', () => {
+    // `null` est le cas courant, pas un manque : une charge déjà libellée dans
+    // la devise du compte n'a pas de taux. L'écrire permet de distinguer « pas
+    // converti » de « converti à l'identique ».
+    expect(
+      settlementOf({
+        amount: 4900,
+        currency: 'eur',
+        exchange_rate: null,
+      } as Stripe.BalanceTransaction),
+    ).toEqual({
+      'payment.settled': 4900,
+      'payment.settled_currency': 'eur',
+      'payment.exchange_rate': null,
+    });
   });
 });

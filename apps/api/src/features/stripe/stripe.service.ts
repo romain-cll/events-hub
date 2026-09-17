@@ -14,8 +14,11 @@ import {
   occurredAtOf,
   propertiesOf,
   sessionIdOf,
+  settlementOf,
+  settlementRefOf,
   typeOf,
   visitorIdOf,
+  REVENUE_TYPES,
   VISITOR_METADATA_KEY,
 } from './event-mapping';
 import { projectionOf, rowsOf } from './subscription-projection';
@@ -150,16 +153,20 @@ export class StripeService {
       learned = await this.learn(projectId, event);
 
       const visitorId = await this.visitorId(projectId, event, customerId);
+      const type = typeOf(event);
 
       written = await this.core.ingest({
         projectId,
-        type: typeOf(event),
+        type,
         occurredAt: occurredAtOf(event),
         // `attributes` appartient au SDK navigateur — contexte de page, écran,
         // langue. Un événement qui n'est jamais passé par un navigateur n'en a
         // aucun, et lui en inventer ferait mentir la moitié des lectures.
         attributes: {},
-        properties: propertiesOf(event),
+        properties: {
+          ...propertiesOf(event),
+          ...(await this.settlement(type, event.account, event.data.object)),
+        },
         // La source vient du chemin d'entrée, jamais du contenu : ce webhook
         // arrive de serveur à serveur.
         source: 'server',
@@ -420,7 +427,10 @@ export class StripeService {
             type: replay.type,
             occurredAt: replay.occurredAt,
             attributes: {},
-            properties: replay.properties,
+            properties: {
+              ...replay.properties,
+              ...(await this.settlement(replay.type, account, invoice)),
+            },
             source: 'server',
             visitorId,
           });
@@ -438,6 +448,93 @@ export class StripeService {
       });
 
     return { invoices, skipped };
+  }
+
+  /**
+   * Le règlement d'un paiement, chez Stripe, ou rien.
+   *
+   * ## Pourquoi un appel de plus, et un seul
+   *
+   * La `balance_transaction` n'est pas dans le webhook. La chaîne complète —
+   * facture, paiement, charge, transaction — se remonte pourtant en **une**
+   * requête, parce que l'expansion de Stripe accepte quatre niveaux et qu'il en
+   * faut exactement quatre. Deux appels auraient doublé le coût du rejeu
+   * historique, qui traite les factures une par une.
+   *
+   * ## Pourquoi il ne peut pas faire échouer l'écriture
+   *
+   * Le `try` de l'appelant relâche la réservation et laisse Stripe rejouer :
+   * c'est le bon comportement pour une base indisponible, et le mauvais pour un
+   * taux de change. Un compte injoignable, une clé expirée, une limite de débit
+   * — aucune de ces pannes ne justifie de **perdre un paiement**. On rend donc
+   * un sac vide, et la ligne apparaît « non convertie » à l'écran plutôt que de
+   * ne pas apparaître du tout.
+   *
+   * Le filtre sur le type est là pour la même économie : seuls les cinq types de
+   * revenu ont un règlement, et interroger Stripe sur un `customer.updated`
+   * serait un appel par webhook pour rien.
+   */
+  private async settlement(
+    type: string,
+    account: string | undefined,
+    object: Stripe.Event.Data.Object,
+  ): Promise<Record<string, unknown>> {
+    if (!account) return {};
+    if (!REVENUE_TYPES.some((revenue) => revenue === type)) return {};
+
+    const ref = settlementRefOf(object);
+
+    if (!ref) return {};
+
+    try {
+      const transaction =
+        ref.on === 'invoice'
+          ? await this.invoiceSettlement(account, ref.id)
+          : await this.intentSettlement(account, ref.id);
+
+      return transaction ? settlementOf(transaction) : {};
+    } catch (error) {
+      this.logger.warn(
+        `Règlement Stripe illisible pour ${ref.id} : ${String(error)}. Le paiement est écrit, il restera non converti.`,
+      );
+
+      return {};
+    }
+  }
+
+  /** Facture → son paiement → sa charge → la transaction. Quatre niveaux, un appel. */
+  private async invoiceSettlement(
+    account: string,
+    invoice: string,
+  ): Promise<Stripe.BalanceTransaction | null> {
+    const { data } = await this.connect.api.invoicePayments.list(
+      {
+        invoice,
+        // Une facture réglée en plusieurs fois existe, et ce sac ne sait en
+        // porter qu'un. On prend le premier plutôt que d'additionner des
+        // transactions dont les taux peuvent différer — additionner serait
+        // recalculer, et c'est exactement ce qu'on refuse de faire.
+        limit: 1,
+        expand: ['data.payment.charge.balance_transaction'],
+      },
+      { stripeAccount: account },
+    );
+
+    return balanceOf(data[0]?.payment.charge);
+  }
+
+  /** Intention → sa dernière charge → la transaction. Deux niveaux, un appel. */
+  private async intentSettlement(
+    account: string,
+    intent: string,
+  ): Promise<Stripe.BalanceTransaction | null> {
+    const paid = await this.connect.api.paymentIntents.retrieve(
+      intent,
+      { expand: ['latest_charge.balance_transaction'] },
+      { stripeAccount: account },
+    );
+
+    return balanceOf(paid.latest_charge);
   }
 
   /**
@@ -679,4 +776,24 @@ export class StripeService {
       `Compte Stripe ${accountId} débranché depuis Stripe : connexion retirée du projet ${integration.projectId}.`,
     );
   }
+}
+
+/**
+ * La transaction au bout d'une expansion, ou `null`.
+ *
+ * Trois formes possibles pour une même référence — absente, un identifiant non
+ * développé, l'objet — et une seule est exploitable. Le `null` des deux autres
+ * n'est pas un échec : une expansion peut échouer silencieusement chez Stripe,
+ * et on préfère une ligne non convertie à un montant deviné.
+ */
+function balanceOf(
+  charge: string | Stripe.Charge | null | undefined,
+): Stripe.BalanceTransaction | null {
+  if (typeof charge !== 'object' || charge === null) return null;
+
+  const transaction = charge.balance_transaction;
+
+  return typeof transaction === 'object' && transaction !== null
+    ? transaction
+    : null;
 }

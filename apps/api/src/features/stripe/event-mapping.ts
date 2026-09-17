@@ -56,6 +56,39 @@ const BY_BILLING_REASON: Partial<
 export const AMOUNT_KEY = 'payment.amount';
 export const CURRENCY_KEY = 'payment.currency';
 
+/**
+ * Le même paiement, dans la devise où le compte est réglé.
+ *
+ * ## Pourquoi trois clés de plus, et pas un taux de notre cru
+ *
+ * Un tableau qui range les sources par revenu doit mettre les euros et les
+ * dollars sur la même ligne, sinon une source qui encaisse dans deux devises
+ * occupe deux rangs et le classement ne veut plus rien dire. Convertir suppose
+ * un taux — et dès qu'on choisit le nôtre, notre total cesse d'être celui de
+ * Stripe. C'est l'écart que ce produit ne peut pas se permettre : un client qui
+ * voit deux chiffres différents conclut que le nôtre est faux, et il a raison
+ * de le conclure.
+ *
+ * Stripe convertit déjà, pour se régler. Sa `balance_transaction` porte le
+ * montant dans la devise du compte et le taux appliqué. On les **recopie**,
+ * exactement comme le reste : la somme convertie est alors littéralement celle
+ * qu'il affiche, et il n'y a pas d'écart à expliquer.
+ *
+ * ## Le brut, pas le net
+ *
+ * `amount` et non `net` : le net retire la commission Stripe, et « combien
+ * cette source rapporte » n'est pas « combien il reste après commission ». La
+ * seconde question est légitime, elle n'est simplement pas celle-ci.
+ *
+ * ## Le taux est nul quand il n'y a rien à convertir
+ *
+ * Une charge déjà libellée dans la devise du compte n'a pas de taux, et
+ * `settled` y vaut `amount`. Ce n'est pas un manque : c'est le cas courant.
+ */
+export const SETTLED_KEY = 'payment.settled';
+export const SETTLED_CURRENCY_KEY = 'payment.settled_currency';
+export const EXCHANGE_RATE_KEY = 'payment.exchange_rate';
+
 /** Le paiement ponctuel, isolé du checkout qui ouvre un abonnement. */
 export const ONE_TIME_TYPE = `${PREFIX}.payment.one_time`;
 
@@ -391,5 +424,59 @@ export function replayOf(invoice: Stripe.Invoice): {
       [AMOUNT_KEY]: invoice.amount_paid,
       [CURRENCY_KEY]: invoice.currency,
     },
+  };
+}
+
+/**
+ * Où trouver le règlement d'un paiement, quand il y en a un à trouver.
+ *
+ * La `balance_transaction` **n'est pas** dans le webhook, et elle n'est pas non
+ * plus à un saut de l'objet reçu : `invoice.charge` a disparu de l'API, une
+ * facture désigne désormais ses paiements par une sous-collection. Deux formes
+ * d'objet portent du revenu, donc deux chemins.
+ *
+ * Cette fonction ne fait que **désigner** ce qu'il faudra lire : elle reste
+ * pure, comme tout ce fichier, et c'est le service qui décide d'appeler Stripe
+ * ou non. `null` pour tout le reste — un `customer.created` n'a rien à régler.
+ */
+export function settlementRefOf(
+  object: Stripe.Event.Data.Object,
+): { on: 'invoice' | 'payment_intent'; id: string } | null {
+  // `in` plutôt qu'un affinage sur `object.object` : l'union des objets Stripe
+  // n'est pas discriminée par ce champ côté types, et le compilateur ne restreint
+  // donc rien. C'est déjà la façon dont `customerOf` s'y prend, juste au-dessus.
+  const kind = 'object' in object ? object.object : undefined;
+  const id = 'id' in object ? object.id : undefined;
+
+  if (kind === 'invoice') {
+    return typeof id === 'string' ? { on: 'invoice', id } : null;
+  }
+
+  if (kind === 'checkout.session') {
+    // Le checkout ne porte pas la charge, il porte l'intention — qui, elle,
+    // désigne sa dernière charge. Un saut de plus, mais toujours un seul appel.
+    const intent: unknown =
+      'payment_intent' in object ? object.payment_intent : undefined;
+
+    return typeof intent === 'string' ? { on: 'payment_intent', id: intent } : null;
+  }
+
+  return null;
+}
+
+/**
+ * Le règlement, recopié verbatim.
+ *
+ * Trois champs, aucun calcul : `settled` **n'est pas** dérivé de `amount` et du
+ * taux. Le refaire nous-mêmes réintroduirait l'arrondi que Stripe a déjà tranché
+ * et rendrait, un centime plus loin, exactement l'écart qu'on cherche à éviter.
+ */
+export function settlementOf(
+  transaction: Stripe.BalanceTransaction,
+): Record<string, unknown> {
+  return {
+    [SETTLED_KEY]: transaction.amount,
+    [SETTLED_CURRENCY_KEY]: transaction.currency,
+    [EXCHANGE_RATE_KEY]: transaction.exchange_rate,
   };
 }

@@ -74,22 +74,66 @@ function fakeDb({ updateFails }: { updateFails: boolean }) {
   };
 }
 
+/**
+ * Un double de l'API Stripe réduit au seul chemin du règlement.
+ *
+ * `settles: false` rend un client qui **échoue** : c'est le cas qui compte, et
+ * il est aussi celui que toutes les autres assertions de ce fichier
+ * traversaient déjà sans le dire.
+ */
+function fakeStripe(settles: boolean) {
+  return {
+    invoicePayments: {
+      list: () =>
+        settles
+          ? Promise.resolve({
+              data: [
+                {
+                  payment: {
+                    charge: {
+                      balance_transaction: {
+                        amount: 4501,
+                        currency: 'eur',
+                        exchange_rate: 0.9184,
+                      },
+                    },
+                  },
+                },
+              ],
+            })
+          : Promise.reject(new Error('compte injoignable')),
+    },
+  };
+}
+
 function serviceAvec({
   updateFails = false,
   ingestFails = false,
-}: { updateFails?: boolean; ingestFails?: boolean } = {}) {
+  settles = false,
+}: {
+  updateFails?: boolean;
+  ingestFails?: boolean;
+  settles?: boolean;
+} = {}) {
   const { db, del } = fakeDb({ updateFails });
 
-  const ingest = jest.fn(() =>
-    ingestFails
+  // Les commandes sont retenues plutôt que relues dans `mock.calls` : le double
+  // est typé sans paramètre, et TypeScript refuse alors d'indexer un tuple vide.
+  const ingested: { properties: Record<string, unknown> }[] = [];
+
+  const ingest = jest.fn((command: { properties: Record<string, unknown> }) => {
+    ingested.push(command);
+
+    return ingestFails
       ? Promise.reject(new Error('écriture refusée'))
-      : Promise.resolve({ id: 'evt-écrit' }),
-  );
+      : Promise.resolve({ id: 'evt-écrit' });
+  });
 
   const service = new StripeService(
     db,
     {
       verifyWebhook: () => EVENT,
+      api: fakeStripe(settles),
     } as unknown as StripeConnectService,
     {
       findByAccount: () => Promise.resolve({ projectId: PROJECT_ID }),
@@ -101,7 +145,7 @@ function serviceAvec({
     { save: () => Promise.resolve(true) } as unknown as SubscriptionStore,
   );
 
-  return { service, del, ingest };
+  return { service, del, ingest, ingested };
 }
 
 describe('StripeService — la réservation et l’écriture', () => {
@@ -128,6 +172,42 @@ describe('StripeService — la réservation et l’écriture', () => {
 
     // Le test du lot. Relâcher ici ferait rejouer Stripe, et le rejeu écrirait
     // le paiement une seconde fois — le revenu double sans que rien ne le dise.
+    expect(del).not.toHaveBeenCalled();
+  });
+});
+
+describe('StripeService — le règlement', () => {
+  it('recopie le montant réglé sur le paiement', async () => {
+    const { service, ingested } = serviceAvec({ settles: true });
+
+    await service.handle(Buffer.from('{}'), 'signature');
+
+    expect(ingested[0]).toMatchObject({
+      properties: {
+        'payment.amount': 4900,
+        'payment.currency': 'eur',
+        'payment.settled': 4501,
+        'payment.settled_currency': 'eur',
+        'payment.exchange_rate': 0.9184,
+      },
+    });
+  });
+
+  it('écrit quand même le paiement quand Stripe ne répond pas', async () => {
+    // Le test du lot. Un compte injoignable, une clé expirée, une limite de
+    // débit — aucune de ces pannes ne justifie de **perdre un paiement**. La
+    // ligne part sans règlement, et l'écran la montrera non convertie plutôt
+    // que de ne pas la montrer.
+    const { service, del, ingested } = serviceAvec({ settles: false });
+
+    await expect(
+      service.handle(Buffer.from('{}'), 'signature'),
+    ).resolves.toBeUndefined();
+
+    expect(ingested[0].properties['payment.amount']).toBe(4900);
+    expect(ingested[0].properties).not.toHaveProperty('payment.settled');
+    // Et surtout : la réservation tient. La relâcher ferait rejouer Stripe, et
+    // le rejeu écrirait le paiement une seconde fois.
     expect(del).not.toHaveBeenCalled();
   });
 });
