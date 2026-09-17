@@ -36,6 +36,12 @@ import {
 } from '#/components/ui/empty';
 import { Button } from '#/components/ui/button';
 import { Hint } from '#/components/hint';
+import {
+  AXIS_WIDTH,
+  RevenuePanel,
+  dominantCurrency,
+  revenueDays,
+} from '#/components/revenue-panel';
 import { PeriodSelector } from '#/components/period-selector';
 import { Badge } from '#/components/ui/badge';
 import { Skeleton } from '#/components/ui/skeleton';
@@ -69,6 +75,7 @@ import {
   ACQUISITION_AXES,
   AUDIENCE_AXES,
   attributionQuery,
+  revenueSeriesQuery,
   type AttributionAxis,
   type RevenueAttributionPage,
   type UnsourcedRevenue,
@@ -322,6 +329,9 @@ function Analytics() {
     locationsQuery(projectId, days, offset, 'country', 250),
   );
   const technology = useQuery(technologyQuery(projectId, days, offset, 'browser'));
+  // Le second panneau du graphique. Un pas quotidien : il doit tomber sur les
+  // mêmes journées que le trafic, qui est replié au jour.
+  const series = useQuery(revenueSeriesQuery(projectId, days, offset, 'day'));
   const projects = useQuery(projectsQuery());
   const ingestion = useQuery(ingestionQuery(projectId));
 
@@ -523,9 +533,17 @@ function Analytics() {
             <RevenueMetric attribution={attribution.data} />
           </div>
 
+          {/* Deux panneaux, **un seul axe de dates**, et surtout pas deux axes
+              Y sur un même dessin : superposer des visiteurs et des euros sur
+              deux échelles laisse croire qu'un croisement veut dire quelque
+              chose, alors que déplacer l'une des échelles le déplace aussi.
+
+              Empilés, ils gardent la question lisible — « ce pic de trafic
+              a-t-il rapporté ? » — sans promettre une corrélation que le dessin
+              fabriquerait. */}
           <Card>
             <CardHeader>
-              <CardTitle>Unique visitors</CardTitle>
+              <CardTitle>Traffic and revenue</CardTitle>
               <CardDescription>
                 {visitors && visitors.length > 0
                   ? `${dayLabel.format(new Date(visitors[0].start))} – ${dayLabel.format(
@@ -534,12 +552,28 @@ function Analytics() {
                   : 'Loading…'}
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="flex flex-col gap-2">
               {visitors ? (
-                <VisitorsChart
-                  days={visitors}
-                  deployments={deployments.data ?? []}
-                />
+                <>
+                  <VisitorsChart
+                    days={visitors}
+                    deployments={deployments.data ?? []}
+                  />
+
+                  {/* Le panneau du revenu attend le sien : sans les journées du
+                      trafic, il ne saurait pas quelles bornes dessiner, et les
+                      deux axes ne tomberaient pas l'un sur l'autre. */}
+                  <RevenuePanel
+                    days={revenueDays(
+                      visitors.map((day) => day.start),
+                      series.data,
+                      dominantCurrency(series.data),
+                    )}
+                    currency={dominantCurrency(series.data)}
+                    formatAmount={money}
+                    formatDay={(start) => dayLabel.format(new Date(start))}
+                  />
+                </>
               ) : (
                 <Skeleton className="h-[300px] w-full sm:h-[420px]" />
               )}
@@ -1300,11 +1334,12 @@ function VisitorsChart({
           tickLine={false}
           axisLine={false}
           tickMargin={4}
-          // `auto` plutôt qu'une largeur en dur : l'axe prend ce que ses
-          // étiquettes demandent, et pas un pixel de plus. Une valeur fixe est
-          // forcément fausse deux fois — trop large sur `0 / 20 / 40`, trop
-          // étroite le jour où un projet passe à `1 200 000`.
-          width="auto"
+          // Une largeur **partagée** avec le panneau du revenu, et non `auto`.
+          // Seul, cet axe prendrait ce que ses étiquettes demandent ; empilé, il
+          // doit commencer à la même abscisse que celui du dessous, sans quoi un
+          // pic de trafic ne tombe pas au-dessus de la barre du même jour. Voir
+          // `AXIS_WIDTH`.
+          width={AXIS_WIDTH}
           // Des visiteurs sont des entiers : sans ça, une échelle basse se
           // gradue en `0,5 / 1 / 1,5`.
           allowDecimals={false}
