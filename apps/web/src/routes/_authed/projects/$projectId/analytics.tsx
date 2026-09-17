@@ -36,6 +36,9 @@ import {
 } from '#/components/ui/empty';
 import { Button } from '#/components/ui/button';
 import { Hint } from '#/components/hint';
+import { MeasurementQuality } from '#/components/measurement-quality';
+import { CohortsCard } from '#/components/revenue/cohorts-card';
+import { MovementsCard } from '#/components/revenue/movements-card';
 import {
   AXIS_WIDTH,
   RevenuePanel,
@@ -75,6 +78,8 @@ import {
   ACQUISITION_AXES,
   AUDIENCE_AXES,
   attributionQuery,
+  cohortsQuery,
+  movementsQuery,
   revenueSeriesQuery,
   type AttributionAxis,
   type RevenueAttributionPage,
@@ -332,6 +337,11 @@ function Analytics() {
   // Le second panneau du graphique. Un pas quotidien : il doit tomber sur les
   // mêmes journées que le trafic, qui est replié au jour.
   const series = useQuery(revenueSeriesQuery(projectId, days, offset, 'day'));
+  // Les deux seules lectures qui ne suivent pas le sélecteur de période : une
+  // cohorte et un mouvement d'abonnement se comptent au **mois**, et une fenêtre
+  // de sept jours n'en montrerait aucun. Voir `cohortsQuery`.
+  const cohorts = useQuery(cohortsQuery(projectId));
+  const movements = useQuery(movementsQuery(projectId));
   const projects = useQuery(projectsQuery());
   const ingestion = useQuery(ingestionQuery(projectId));
 
@@ -558,6 +568,7 @@ function Analytics() {
                   <VisitorsChart
                     days={visitors}
                     deployments={deployments.data ?? []}
+                    hideDates
                   />
 
                   {/* Le panneau du revenu attend le sien : sans les journées du
@@ -601,6 +612,22 @@ function Analytics() {
           </div>
 
           <Locations projectId={projectId} days={days} offset={offset} />
+
+          {/* Rétention et valeur. Les deux cartes lisent les mois, pas la
+              fenêtre du haut de page — elles le disent elles-mêmes. */}
+          <div className="grid items-start gap-4 lg:grid-cols-2">
+            <CohortsCard page={cohorts.data} />
+            <MovementsCard page={movements.data} />
+          </div>
+
+          {/* En pied de page, et jamais ailleurs : annoncer un revenu attribué
+              sans dire quelle part échappe à la mesure est un mensonge par
+              omission. La carte ferme la page parce qu'elle qualifie tout ce qui
+              précède, pas parce qu'elle compte moins. */}
+          <MeasurementQuality
+            attribution={attribution.data}
+            summary={summary.data}
+          />
         </>
       )}
     </div>
@@ -1252,9 +1279,19 @@ type ChartDay = ComparedDay & {
 function VisitorsChart({
   days,
   deployments,
+  hideDates = false,
 }: {
   days: ComparedDay[];
   deployments: DayDeployments[];
+  /**
+   * Taire l'axe des dates, parce qu'un panneau le porte déjà en dessous.
+   *
+   * Deux axes identiques l'un au-dessus de l'autre ne disent rien de plus que
+   * l'un des deux : ils occupent de la hauteur et laissent croire que les deux
+   * dessins ont chacun leur temps. C'est au contraire le partage de cet axe qui
+   * fait tenir l'empilement, et l'écrire une fois le dit mieux que deux.
+   */
+  hideDates?: boolean;
 }) {
   // Le maximum des deux séries. Recharts le recalcule pour le domaine, mais les
   // graduations sont posées à la main et ne peuvent pas l'attendre.
@@ -1328,6 +1365,10 @@ function VisitorsChart({
           axisLine={false}
           tickMargin={8}
           minTickGap={16}
+          // L'axe reste **déclaré** quand il est tu : c'est lui qui distribue
+          // les abscisses. Le retirer ferait retomber Recharts sur un index, et
+          // les deux panneaux cesseraient de tomber l'un sur l'autre.
+          hide={hideDates}
           tickFormatter={(start: string) => dayLabel.format(new Date(start))}
         />
         <YAxis
