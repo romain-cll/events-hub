@@ -22,7 +22,8 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.suites.js && jest --config ./test/jest-e2e.retention.js"
+    "test:e2e": "jest --config ./test/jest-e2e.suites.js && jest --config ./test/jest-e2e.retention.js",
+    "db:seed": "node scripts/seed-demo.mjs"
   },
   "dependencies": {
     "@better-auth/drizzle-adapter": "^1.7.1",
