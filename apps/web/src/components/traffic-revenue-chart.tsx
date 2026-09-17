@@ -367,12 +367,14 @@ export function TrafficRevenueChart({
             // distingue plus rien et ne fait que rendre les petits jours
             // illisibles.
             fillOpacity={1}
-            radius={2}
+            radius={3}
             // Sans plafond, Recharts donne à chaque barre toute la largeur de sa
             // case : un mois à un seul paiement dessine une colonne de quarante
             // pixels qui se lit comme une période, pas comme un jour. Le plafond
-            // la ramène à la largeur d'un repère.
-            maxBarSize={14}
+            // la ramène à la largeur d'un repère — assez large pour qu'un petit
+            // montant reste visible, assez étroit pour qu'un jour isolé ne se
+            // lise pas comme une semaine.
+            maxBarSize={20}
           />
         )}
 
@@ -426,7 +428,7 @@ export function TrafficRevenueChart({
           connectNulls={false}
           activeDot={false}
           dot={{
-            r: 4,
+            r: 5,
             fill: 'var(--color-deployments)',
             // ⚠️ Sans ça, le point est **translucide** et ce qu'il y a dessous
             // se voit au travers : Recharts pose un `fillOpacity` de 0,6 par
@@ -435,7 +437,9 @@ export function TrafficRevenueChart({
             // L'anneau isole le point de ce qu'il y a dessous — une barre, la
             // courbe, la grille — pour qu'il reste net où qu'il tombe.
             stroke: 'var(--background)',
-            strokeWidth: 2,
+            // L'anneau s'épaissit avec le point : à rayon 5 un liseré de deux
+            // pixels ne le décolle plus de la barre qu'il chevauche.
+            strokeWidth: 2.5,
             strokeOpacity: 1,
           }}
         />
