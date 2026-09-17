@@ -4,7 +4,6 @@ import type {
   LocationsPage,
   SessionsPage,
   TechnologyGrain,
-  TechnologyPage,
 } from '@events-hub/api-contract';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -241,9 +240,6 @@ function Analytics() {
   // dénominateur de l'onglet Country, que les sessions ne portent pas.
   const countries = useQuery(
     locationsQuery(projectId, days, offset, 'country', 250),
-  );
-  const technology = useQuery(
-    technologyQuery(projectId, days, offset, 'browser'),
   );
   // Le second panneau du graphique. Un pas quotidien : il doit tomber sur les
   // mêmes journées que le trafic, qui est replié au jour.
@@ -491,8 +487,10 @@ function Analytics() {
 
           <div className="grid items-start gap-4 lg:grid-cols-2">
             <Audience
+              projectId={projectId}
+              days={days}
+              offset={offset}
               attribution={attribution.data}
-              technology={technology.data}
               locations={countries.data}
             />
             <Pages summary={summary.data} sessions={sessions.data} />
@@ -1616,6 +1614,21 @@ function totalsByCurrency(
 }
 
 /**
+ * La profondeur du classement d'audience de la carte « Who they are ».
+ *
+ * Dix suffiraient à un affichage ; ici la lecture sert de **table de
+ * correspondance**, pas de liste. Les deux classements ne trient pas sur la
+ * même chose — le revenu par montant, l'audience par visiteurs — et un
+ * navigateur qui rapporte sans figurer au top 10 du trafic afficherait un
+ * tiret alors qu'on connaît son compte.
+ *
+ * Le plafond ne coûte rien parce que ces axes sont de faible cardinalité par
+ * nature : une poignée de navigateurs, autant de systèmes, trois types
+ * d'appareil. « Tout » tient dessous, et c'est le but.
+ */
+const TECHNOLOGY_DEPTH = 250;
+
+/**
  * Qui sont les visiteurs, et lesquels rapportent.
  *
  * Trois onglets — navigateur, système, appareil — chacun croisant deux
@@ -1626,27 +1639,37 @@ function totalsByCurrency(
  * Le pays n'y est pas : il a sa propre carte, avec son planisphère.
  */
 function Audience({
+  projectId,
+  days,
+  offset,
   attribution,
-  technology,
   locations,
 }: {
+  projectId: string;
+  days: Period;
+  offset: number;
   attribution: RevenueAttributionPage | undefined;
-  technology: TechnologyPage | undefined;
   locations: LocationsPage | undefined;
 }) {
   const [tab, setTab] = useState<TechnologyGrain>('browser');
 
-  const axis: AttributionAxis =
-    tab === 'device' ? 'device' : tab === 'os' ? 'os' : 'browser';
+  // Les trois onglets nomment le même axe des deux côtés : le classement
+  // d'audience et celui du revenu lisent la même colonne de session, sous le
+  // même nom. C'est ce qui rend la jointure par libellé légitime plus bas.
+  const axis: AttributionAxis = tab;
 
-  // Une seule lecture d'audience est chargée — celle du navigateur. Les deux
-  // autres onglets rendent le revenu seul plutôt que de déclencher une requête
-  // par bascule : la donnée d'audience arrivera avec l'écran v2, qui porte le
-  // sélecteur de grain.
-  const seen =
-    tab === 'browser' && technology
-      ? new Map(technology.rows.map((row) => [row.value, row.visitors]))
-      : undefined;
+  // Le classement d'audience suit l'onglet, une lecture par grain. Les trois
+  // ne sortent pas d'une même passe côté serveur — c'est une agrégation par
+  // colonne — et les charger toutes à l'ouverture en paierait deux que
+  // personne ne regarde. React Query garde celles déjà vues, donc une bascule
+  // ne coûte qu'à la première.
+  const technology = useQuery(
+    technologyQuery(projectId, days, offset, tab, TECHNOLOGY_DEPTH),
+  );
+
+  const seen = technology.data
+    ? new Map(technology.data.rows.map((row) => [row.value, row.visitors]))
+    : undefined;
 
   const breakdown = attribution?.[axis];
 
@@ -1659,8 +1682,18 @@ function Audience({
         <span key="label" className="truncate">
           {row.label || 'Unknown'}
         </span>,
+        // Le tiret dit « ce navigateur n'a pas de visite sur la période »,
+        // et il doit pouvoir le dire : l'afficher pendant le chargement le
+        // rendrait faux une fraction de seconde sur chaque bascule d'onglet,
+        // le temps que la lecture du grain arrive.
         <span key="visitors">
-          {visitors === undefined ? '—' : number.format(visitors)}
+          {technology.isPending ? (
+            <Skeleton className="ml-auto h-4 w-10" />
+          ) : visitors === undefined ? (
+            '—'
+          ) : (
+            number.format(visitors)
+          )}
         </span>,
         <span key="customers">{number.format(row.visitors)}</span>,
         <span key="revenue">{money(row.amount, row.currency)}</span>,
@@ -1687,10 +1720,7 @@ function Audience({
             <TabsList>
               {AUDIENCE_AXES.filter((value) => value !== 'country').map(
                 (value) => (
-                  <TabsTrigger
-                    key={value}
-                    value={value === 'device' ? 'device' : value}
-                  >
+                  <TabsTrigger key={value} value={value}>
                     {AXIS_LABELS[value]}
                   </TabsTrigger>
                 ),
