@@ -29,9 +29,9 @@ import { createTestApp } from './harness';
  * **premier événement** de cette visite — là où vivent le referrer et le chemin
  * d'entrée, dans un sac que le Core ne sait pas lire mais sait grouper.
  *
- * Éprouvé aussi : la séparation des devises, le repli des referrers en
- * provenances, et le fait qu'un paiement sans parcours ne soit pas rangé sous
- * « direct ».
+ * Éprouvé aussi : le cumul des devises sur le **règlement** recopié de Stripe,
+ * le repli des referrers en hôtes puis en natures, et le fait qu'un paiement
+ * sans parcours ne soit pas rangé sous « direct ».
  *
  * Les paiements sont ingérés par le Core, pas par HTTP : `POST /v1/events` ne
  * permet pas de désigner un visiteur depuis une source serveur — l'identité y
@@ -54,6 +54,12 @@ const NAVIGATEUR =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
 
 const COOKIE = '__Host-eh_vid';
+
+/** La devise du compte connecté : celle dans laquelle tout est réglé. */
+const REGLEMENT = 'eur';
+
+/** Le taux que « Stripe » aurait appliqué. Recopié, jamais recalculé. */
+const TAUX = 0.92;
 
 const NOUVEAU = 'stripe.subscription.started';
 const RENOUVELLEMENT = 'stripe.subscription.renewed';
@@ -109,19 +115,38 @@ describe('attribution du revenu (e2e)', () => {
     return visitorId ?? /=([^;]+)/.exec(pose ?? '')?.[1] ?? '';
   };
 
-  /** Un paiement rapporté par un serveur, comme `features/stripe` le fait. */
+  /**
+   * Un paiement rapporté par un serveur, comme `features/stripe` le fait.
+   *
+   * Le **règlement** est écrit à côté du montant facturé, parce que c'est ce
+   * que les lectures somment : `features/stripe` le recopie de la transaction
+   * de solde à l'ingestion, et un paiement sans lui n'est pas convertible.
+   * `settle: false` produit exactement ce cas.
+   */
   const encaisser = (
     type: string,
     amount: number,
     currency: string,
     visitorId?: string,
+    settle = true,
   ) =>
     core.ingest({
       projectId: projet.id,
       type,
       occurredAt: PAIEMENT,
       attributes: {},
-      properties: { 'payment.amount': amount, 'payment.currency': currency },
+      properties: {
+        'payment.amount': amount,
+        'payment.currency': currency,
+        ...(settle
+          ? {
+              'payment.settled':
+                currency === REGLEMENT ? amount : Math.round(amount * TAUX),
+              'payment.settled_currency': REGLEMENT,
+              'payment.exchange_rate': currency === REGLEMENT ? null : TAUX,
+            }
+          : {}),
+      },
       source: 'server',
       visitorId,
     });
@@ -141,7 +166,7 @@ describe('attribution du revenu (e2e)', () => {
     // Les clés sont optionnelles — une absente veut dire « pas demandée ». Les
     // cas qui suivent demandent les axes par défaut, donc les quatre sont là :
     // l'affirmer une fois ici évite un `?.` sur chaque assertion.
-    if (!page.campaign || !page.source || !page.landing || !page.country) {
+    if (!page.campaign || !page.source || !page.referrer || !page.landing) {
       throw new Error('Les quatre axes par défaut devraient être rendus.');
     }
 
@@ -149,8 +174,8 @@ describe('attribution du revenu (e2e)', () => {
       ...page,
       campaign: page.campaign,
       source: page.source,
+      referrer: page.referrer,
       landing: page.landing,
-      country: page.country,
     };
   };
 
@@ -205,6 +230,10 @@ describe('attribution du revenu (e2e)', () => {
     // client d'avant l'installation, et consentement refusé.
     await encaisser(NOUVEAU, 700, 'eur', 'inconnu-au-bataillon');
     await encaisser(NOUVEAU, 300, 'eur');
+
+    // Et un paiement écrit avant que la recopie du règlement existe : il compte
+    // comme paiement, il ne compte dans aucun total.
+    await encaisser(PONCTUEL, 4200, 'eur', direct, false);
   });
 
   afterAll(async () => {
@@ -218,14 +247,16 @@ describe('attribution du revenu (e2e)', () => {
     // `bing` est la seconde visite du même visiteur : elle ne doit apparaître
     // nulle part. L'acquisition est antérieure à la fenêtre, et c'est le point
     // — la fenêtre choisit les paiements, pas l'ancienneté qu'on leur reconnaît.
+    // 2000 + 900 encaissés en euros, 1500 en dollars réglés 1380 : une seule
+    // ligne, parce que c'est le règlement qu'on somme et qu'il est dans une
+    // seule devise.
     expect(page.campaign.rows).toEqual([
       expect.objectContaining({
         campaign: { source: 'google', medium: 'cpc', name: 'rentree' },
         currency: 'eur',
-        amount: 2900,
-        payments: 2,
+        amount: 4280,
+        payments: 3,
       }),
-      expect.objectContaining({ currency: 'usd', amount: 1500 }),
     ]);
   });
 
@@ -237,28 +268,43 @@ describe('attribution du revenu (e2e)', () => {
     // de paramètre à passer pour choisir lequel compte.
     expect(page.eventTypes).toContain(NOUVEAU);
     expect(page.eventTypes).toContain(PONCTUEL);
-    expect(page.campaign.rows[0].amount).toBe(2900);
+    expect(page.campaign.rows[0].payments).toBe(3);
   });
 
-  it('replie les referrers d’un même moteur en une provenance', async () => {
+  it('replie les referrers d’un même moteur en un hôte', async () => {
     const page = await lire();
-    const moteurs = page.source.rows.filter(
+    const moteurs = page.referrer.rows.filter(
       (row) => row.source.name === 'google' && row.currency === 'eur',
     );
 
-    // `google.fr` et `google.com` sont deux lignes pour Postgres : 2900 € du
+    // `google.fr` et `google.com` sont deux lignes pour Postgres : 4280 € du
     // premier visiteur, 700 € du second. Une seule pour le lecteur.
     expect(moteurs).toHaveLength(1);
-    expect(moteurs[0].amount).toBe(3600);
+    expect(moteurs[0].amount).toBe(4980);
     expect(moteurs[0].source.kind).toBe('search');
+  });
+
+  it('range une visite balisée sous Campaign, pas sous Search', async () => {
+    const page = await lire();
+
+    // Le premier visiteur arrive de `google.fr` **avec** des paramètres de
+    // campagne. Le referrer seul le rangerait en `search`, ce qui ferait lire
+    // « la recherche m'apporte 4980 € » en y comptant du trafic acheté.
+    const natures = Object.fromEntries(
+      page.source.rows
+        .filter((row) => row.currency === 'eur')
+        .map((row) => [row.nature, row.amount]),
+    );
+
+    expect(natures).toEqual({ campaign: 4280, search: 700 });
   });
 
   it('rend les quatre répartitions dans la même réponse', async () => {
     const page = await lire();
 
-    // Les quatre voient les mêmes paiements, donc les mêmes totaux en euros —
-    // ce qui change est la façon de les ranger. C'est l'intérêt d'une seule
-    // route : quatre appels pourraient se contredire.
+    // Les quatre voient les mêmes paiements, donc le même total réglé — ce qui
+    // change est la façon de les ranger. C'est l'intérêt d'une seule route :
+    // quatre appels pourraient se contredire.
     const euros = (rows: { currency: string | null; amount: number }[]) =>
       rows
         .filter((row) => row.currency === 'eur')
@@ -270,10 +316,10 @@ describe('attribution du revenu (e2e)', () => {
       unattributed: { currency: string | null; amount: number }[];
     }) => euros(axis.rows) + euros(axis.direct) + euros(axis.unattributed);
 
-    expect(total(page.campaign)).toBe(5100);
-    expect(total(page.source)).toBe(5100);
-    expect(total(page.landing)).toBe(5100);
-    expect(total(page.country)).toBe(5100);
+    expect(total(page.campaign)).toBe(6480);
+    expect(total(page.source)).toBe(6480);
+    expect(total(page.referrer)).toBe(6480);
+    expect(total(page.landing)).toBe(6480);
   });
 
   it('range la page d’entrée de la première visite', async () => {
@@ -303,15 +349,30 @@ describe('attribution du revenu (e2e)', () => {
     ]);
   });
 
-  it('ne mélange jamais deux devises dans un total', async () => {
+  it('cumule les devises au taux de Stripe, sans en inventer un', async () => {
     const page = await lire();
 
-    expect(
-      page.campaign.rows.map((row) => [row.currency, row.amount]),
-    ).toEqual([
-      ['eur', 2900],
-      ['usd', 1500],
-    ]);
+    // La règle n'a pas changé de nature, seulement de colonne : on ne convertit
+    // toujours rien nous-mêmes. Ce qui est sommé est le montant **réglé**, que
+    // Stripe a converti pour se payer et qu'on a recopié — d'où une seule
+    // devise en sortie, et un total qui reste le sien.
+    expect(page.campaign.rows.map((row) => [row.currency, row.amount])).toEqual(
+      [['eur', 4280]],
+    );
+  });
+
+  it('compte les paiements non convertibles sans les fondre dans le total', async () => {
+    const page = await lire();
+
+    // Un paiement écrit avant que la recopie du règlement existe. Le ranger
+    // sous zéro euro le ferait disparaître ; le convertir nous-mêmes rendrait un
+    // chiffre que Stripe ne confirmerait pas. Il sort donc sans devise, avec son
+    // compte — « il existe, et cette lecture ne sait pas le convertir ».
+    expect(page.campaign.direct).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ currency: null, amount: 0, payments: 1 }),
+      ]),
+    );
   });
 
   it('accepte les filtres déclarés sans qu’ils changent quoi que ce soit', async () => {
@@ -360,10 +421,11 @@ describe('attribution du revenu (e2e)', () => {
     );
 
     // Toutes les visites de cette suite portent le même User-Agent : une seule
-    // ligne, et c'est la preuve que l'axe lit bien la colonne de la visite.
+    // ligne réglée, et c'est la preuve que l'axe lit bien la colonne de la
+    // visite. La seconde est le paiement non convertible, sans devise.
     expect(page.browser?.rows).toEqual([
       expect.objectContaining({ label: 'Chrome', currency: 'eur' }),
-      expect.objectContaining({ label: 'Chrome', currency: 'usd' }),
+      expect.objectContaining({ label: 'Chrome', currency: null, amount: 0 }),
     ]);
   });
 

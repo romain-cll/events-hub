@@ -301,6 +301,28 @@ const KIND_LABELS: Record<SourceKind, string> = {
   internal: 'Internal',
 };
 
+/**
+ * La nature d'un trafic, campagne comprise.
+ *
+ * `campaign` n'est **pas** une nature de referrer, et c'est pour ça qu'elle
+ * vit ici plutôt que dans `SourceKind` : une visite balisée arrive de
+ * `google.com` comme une visite organique, le referrer ne les distingue pas.
+ * C'est la présence des paramètres de campagne sur la visite qui tranche, et
+ * elle l'emporte — du trafic acheté n'est pas du `search` organique, et les
+ * confondre est l'erreur que la lecture par nature existe pour éviter.
+ *
+ * Deux types plutôt qu'un `SourceKind` élargi : `classifyReferrer` ne peut pas
+ * rendre `campaign`, n'ayant jamais vu la visite. Les fondre laisserait croire
+ * qu'elle le pourrait.
+ */
+export type TrafficNature = SourceKind | 'campaign';
+
+/** Le libellé d'une nature, y compris celle que le referrer ne connaît pas. */
+export const NATURE_LABELS: Record<TrafficNature, string> = {
+  ...KIND_LABELS,
+  campaign: 'Campaign',
+};
+
 export interface Source {
   kind: SourceKind;
   /**

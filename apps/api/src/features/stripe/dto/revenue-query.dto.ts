@@ -28,6 +28,7 @@ const MAX_LIMIT = 100;
 export const ATTRIBUTION_AXES = [
   'campaign',
   'source',
+  'referrer',
   'landing',
   'country',
   'browser',
@@ -40,16 +41,16 @@ export type AttributionAxis = (typeof ATTRIBUTION_AXES)[number];
 /**
  * Ce qu'on rend quand l'appelant ne demande rien : la carte Acquisition.
  *
- * Les trois axes d'audience — navigateur, système, appareil — ne sont pas du
- * défaut parce qu'ils appartiennent à une autre carte. Chaque groupement est une
+ * Les axes d'audience — pays, navigateur, système, appareil — ne sont pas du
+ * défaut parce qu'ils appartiennent à d'autres cartes. Chaque groupement est une
  * passe SQL de plus : les rendre tous par défaut ferait payer sept agrégations
  * à qui en affiche quatre.
  */
 const DEFAULT_AXES = [
   'campaign',
   'source',
+  'referrer',
   'landing',
-  'country',
 ] as const satisfies readonly AttributionAxis[];
 
 /**

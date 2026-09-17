@@ -50,18 +50,26 @@ export type {
 export type AttributionAxis =
   | 'campaign'
   | 'source'
+  | 'referrer'
   | 'landing'
   | 'country'
   | 'browser'
   | 'os'
   | 'device';
 
-/** Ce que la carte Acquisition montre. */
+/**
+ * Ce que la carte Acquisition montre.
+ *
+ * `source` et `referrer` sont deux grains du même classement, pas deux
+ * calculs : le premier répond « quelle **famille** de trafic me rapporte », le
+ * second « quel **site** ». Le pays n'y est plus — il a sa carte, avec son
+ * planisphère, et le laisser ici le faisait compter deux fois.
+ */
 export const ACQUISITION_AXES = [
-  'campaign',
   'source',
+  'campaign',
+  'referrer',
   'landing',
-  'country',
 ] as const satisfies readonly AttributionAxis[];
 
 /** Ce que la carte « Who they are » montre, en plus du pays qu'elle partage. */

@@ -38,6 +38,12 @@ const FENETRE = {
   to: '2026-09-01T00:00:00.000Z',
 };
 
+/** La devise du compte connecté : celle dans laquelle tout est réglé. */
+const REGLEMENT = 'eur';
+
+/** Le taux que « Stripe » aurait appliqué. Recopié, jamais recalculé. */
+const TAUX = 0.92;
+
 const NOUVEAU = 'stripe.subscription.started';
 const RENOUVELLEMENT = 'stripe.subscription.renewed';
 
@@ -48,6 +54,11 @@ describe('série de revenu (e2e)', () => {
   let projet: TestProject;
   let lecteur: SignedUpUser;
 
+  /**
+   * Le **règlement** est écrit à côté du montant facturé : c'est lui que la
+   * série somme, comme l'attribution, et c'est la condition pour que les deux
+   * lectures rendent le même total.
+   */
   const encaisser = (
     type: string,
     amount: number,
@@ -59,7 +70,14 @@ describe('série de revenu (e2e)', () => {
       type,
       occurredAt: new Date(occurredAt),
       attributes: {},
-      properties: { 'payment.amount': amount, 'payment.currency': currency },
+      properties: {
+        'payment.amount': amount,
+        'payment.currency': currency,
+        'payment.settled':
+          currency === REGLEMENT ? amount : Math.round(amount * TAUX),
+        'payment.settled_currency': REGLEMENT,
+        'payment.exchange_rate': currency === REGLEMENT ? null : TAUX,
+      },
       source: 'server',
     });
 
@@ -88,7 +106,8 @@ describe('série de revenu (e2e)', () => {
     // tomber dans le même pas.
     await encaisser(NOUVEAU, 2000, 'eur', '2026-08-03T09:00:00.000Z');
     await encaisser(RENOUVELLEMENT, 500, 'eur', '2026-08-03T21:00:00.000Z');
-    // Une autre devise, le même jour : deux points, jamais un total mêlé.
+    // Une autre devise, le même jour : elle rejoint le même point, parce que
+    // c'est le règlement qui est sommé et qu'il est dans une seule devise.
     await encaisser(NOUVEAU, 1500, 'usd', '2026-08-03T10:00:00.000Z');
     // Un mois plus loin dans la fenêtre, pour que `week` et `month` regroupent.
     await encaisser(NOUVEAU, 700, 'eur', '2026-08-20T12:00:00.000Z');
@@ -99,21 +118,18 @@ describe('série de revenu (e2e)', () => {
     await app.close();
   });
 
-  it('regroupe les paiements d’un même jour, sans mêler les devises', async () => {
+  it('regroupe les paiements d’un même jour, dans la devise du règlement', async () => {
     const page = await lire();
 
+    // 2000 + 500 encaissés en euros, 1500 en dollars réglés 1380 : un seul
+    // point. Rien n'est converti ici — le montant réglé est celui que Stripe a
+    // écrit sur sa transaction de solde.
     expect(page.points).toEqual([
       expect.objectContaining({
         start: '2026-08-03T00:00:00.000Z',
         currency: 'eur',
-        amount: 2500,
-        payments: 2,
-      }),
-      expect.objectContaining({
-        start: '2026-08-03T00:00:00.000Z',
-        currency: 'usd',
-        amount: 1500,
-        payments: 1,
+        amount: 3880,
+        payments: 3,
       }),
       expect.objectContaining({
         start: '2026-08-20T00:00:00.000Z',
@@ -126,10 +142,10 @@ describe('série de revenu (e2e)', () => {
   it('ne comble pas les pas vides', async () => {
     const page = await lire();
 
-    // Trente et un jours dans la fenêtre, trois points. Un jour sans paiement
+    // Trente et un jours dans la fenêtre, deux points. Un jour sans paiement
     // n'est pas à zéro : il est absent, et c'est au lecteur de compléter son
     // axe — il est le seul à savoir quelles bornes il affiche.
-    expect(page.points).toHaveLength(3);
+    expect(page.points).toHaveLength(2);
   });
 
   it('change de pas sans changer le total', async () => {
@@ -147,9 +163,9 @@ describe('série de revenu (e2e)', () => {
     // Moins de points à mesure que le pas grossit, et la même somme : c'est ce
     // qui prouve que le regroupement regroupe au lieu de perdre.
     expect(mois.points.length).toBeLessThan(jour.points.length);
-    expect(somme(semaine.points)).toBe(3200);
-    expect(somme(mois.points)).toBe(3200);
-    expect(somme(jour.points)).toBe(3200);
+    expect(somme(semaine.points)).toBe(4580);
+    expect(somme(mois.points)).toBe(4580);
+    expect(somme(jour.points)).toBe(4580);
   });
 
   it('rend le même total que l’attribution, devise par devise', async () => {

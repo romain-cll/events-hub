@@ -106,6 +106,7 @@ const number = new Intl.NumberFormat('en-US');
 const AXIS_LABELS: Record<AttributionAxis, string> = {
   campaign: 'Campaign',
   source: 'Source',
+  referrer: 'Referrer',
   landing: 'Landing page',
   country: 'Country',
   browser: 'Browser',

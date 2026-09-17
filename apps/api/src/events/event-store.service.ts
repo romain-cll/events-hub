@@ -286,7 +286,6 @@ export interface AmountPoint {
 }
 
 /**
- * Sur quel axe ranger les paiements — et où cet axe se lit./**
  * Sur quel axe ranger les paiements — et où cet axe se lit.
  *
  * ## Deux natures, une seule jointure de plus
@@ -314,7 +313,30 @@ export type EntrySessionColumn =
 
 export type EntryAxis =
   | { on: 'session'; column: EntrySessionColumn }
-  | { on: 'entry'; source: 'attributes' | 'properties'; key: string };
+  | { on: 'entry'; source: 'attributes' | 'properties'; key: string }
+  /**
+   * Les deux à la fois, groupés ensemble — et **rien de décidé ici**.
+   *
+   * Une colonne seule ne suffit pas quand la question porte sur ce que les deux
+   * disent *ensemble* : deux visites arrivées du même endroit peuvent n'avoir
+   * pas la même origine, et seule la colonne le dit. Les lire en deux passes ne
+   * rendrait pas le couple — deux classements séparés ne se recroisent pas.
+   *
+   * Le Core rend donc les deux valeurs côte à côte, dans les deux premiers
+   * emplacements, et **ne tranche pas** laquelle l'emporte : il ne sait pas ce
+   * qu'elles désignent. C'est l'appelant, dans `features/`, qui a le droit de
+   * le savoir.
+   *
+   * La campagne y tient en **une** valeur — sa source — là où l'axe `session`
+   * lui en donne trois. Savoir qu'il y en avait une suffit à cette question ;
+   * qui veut le triplet a son propre axe.
+   */
+  | {
+      on: 'both';
+      column: EntrySessionColumn;
+      source: 'attributes' | 'properties';
+      key: string;
+    };
 
 export interface EntrySelector extends AmountSelector {
   axis: EntryAxis;
@@ -1204,13 +1226,13 @@ export class EventStore {
     // les attributs du navigateur, le montant dans les propriétés d'un serveur.
     // Les confondre rendrait des colonnes vides sans rien faire échouer.
     const entryBag =
-      axis.on === 'entry' && axis.source === 'properties'
+      axis.on !== 'session' && axis.source === 'properties'
         ? entryEvent.properties
         : entryEvent.attributes;
     const firstEvent = this.db
       .select({
         value: sql<string | null>`${entryBag} ->> ${
-          axis.on === 'entry' ? axis.key : ''
+          axis.on === 'session' ? '' : axis.key
         }::text`.as('value'),
       })
       .from(entryEvent)
@@ -1232,22 +1254,32 @@ export class EventStore {
       browser: entry.browser,
       os: entry.os,
       device: entry.device,
+      // La campagne réduite à **une** valeur, pour la variante à deux
+      // emplacements où le second est déjà pris. Sa source suffit à savoir
+      // qu'il y en avait une ; l'axe `session` rend le triplet entier.
+      campaign: entry.campaignSource,
     } as const;
 
     const slots =
       axis.on === 'entry'
         ? [sql<string | null>`${firstEvent.value}`, nothing, nothing]
-        : axis.column === 'campaign'
+        : axis.on === 'both'
           ? [
-              sql<string | null>`${entry.campaignSource}`,
-              sql<string | null>`${entry.campaignMedium}`,
-              sql<string | null>`${entry.campaignName}`,
-            ]
-          : [
               sql<string | null>`${fromEntry[axis.column]}`,
+              sql<string | null>`${firstEvent.value}`,
               nothing,
-              nothing,
-            ];
+            ]
+          : axis.column === 'campaign'
+            ? [
+                sql<string | null>`${entry.campaignSource}`,
+                sql<string | null>`${entry.campaignMedium}`,
+                sql<string | null>`${entry.campaignName}`,
+              ]
+            : [
+                sql<string | null>`${fromEntry[axis.column]}`,
+                nothing,
+                nothing,
+              ];
 
     // Même raison que dans `topValues` : l'extraction est isolée pour que le
     // groupement porte sur des colonnes ordinaires, et non sur des expressions
@@ -1267,15 +1299,15 @@ export class EventStore {
     };
 
     // La seconde jointure n'est posée que si l'axe la demande : un `lateral`
-    // par ligne d'événement se paie, et l'axe campagne ou pays n'en a aucun
-    // besoin.
+    // par ligne d'événement se paie, et un axe qui ne lit que des colonnes de
+    // la visite n'en a aucun besoin.
     const joined = this.db
       .select(selection)
       .from(events)
       .leftJoinLateral(entry, sql`true`);
 
     const extracted = (
-      axis.on === 'entry' ? joined.leftJoinLateral(firstEvent, sql`true`) : joined
+      axis.on === 'session' ? joined : joined.leftJoinLateral(firstEvent, sql`true`)
     )
       .where(this.where(scope))
       .as('extracted');

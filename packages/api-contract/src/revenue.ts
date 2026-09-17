@@ -7,11 +7,23 @@ import { sourceSchema } from './analytics';
  *
  * ## La règle qui prime sur la forme
  *
- * **Les montants ne sont pas transformés.** Ils sortent en centimes, dans la
- * devise que Stripe a enregistrée, sans conversion ni arrondi ni mélange. Un
- * client qui verrait ici un total différent de son tableau de bord Stripe
- * conclurait que c'est le nôtre qui ment — et il aurait raison, puisqu'il n'a
- * aucun moyen de trancher.
+ * **Les montants ne sont pas transformés.** Ils sortent en centimes, sans
+ * conversion ni arrondi de notre fait. Un client qui verrait ici un total
+ * différent de son tableau de bord Stripe conclurait que c'est le nôtre qui
+ * ment — et il aurait raison, puisqu'il n'a aucun moyen de trancher.
+ *
+ * Les classements sont pourtant rendus dans **une seule devise**, et ce n'est
+ * pas une contradiction : c'est celle du **règlement**, telle que Stripe
+ * l'écrit sur la transaction de solde. Le montant converti est le sien, recopié
+ * comme le reste ; nous n'avons ni choisi de taux ni refait d'arrondi. Sans
+ * cela, une source qui encaisse dans deux devises occuperait deux rangs et le
+ * classement ne voudrait plus rien dire.
+ *
+ * Ce qui n'a pas de règlement connu — les paiements écrits avant que cette
+ * recopie existe, et ceux dont l'appel à Stripe a échoué — sort avec une devise
+ * `null` et un montant nul, mais un compte de paiements **non nul**. C'est
+ * l'aveu : « autant de paiements existent, et cette lecture ne sait pas les
+ * convertir ». Les fondre dans le total les ferait disparaître.
  *
  * C'est à l'affichage de diviser par cent, et seulement avec la devise sous les
  * yeux : toutes les devises n'ont pas deux décimales.
@@ -31,14 +43,14 @@ const revenueRow = {
   /** Le libellé de la ligne, tel qu'on l'affiche. */
   label: z.string(),
   /**
-   * La devise ISO telle que Stripe la donne, ou `null`.
+   * La devise du **règlement**, telle que Stripe l'écrit, ou `null`.
    *
-   * Elle **sépare** les lignes, elle ne les convertit pas : une campagne qui a
-   * encaissé des euros et des dollars produit deux lignes, et leur somme n'a
-   * aucun sens sans taux de change.
+   * Une seule pour tout un classement en pratique : c'est celle du compte
+   * connecté. `null` désigne les paiements dont le règlement n'est pas connu —
+   * voir l'en-tête de ce fichier.
    */
   currency: z.string().nullable(),
-  /** En **centimes**, tels que Stripe les écrit. Jamais divisé ici. */
+  /** En **centimes**, tels que Stripe les règle. Jamais divisé ici. */
   amount: z.number(),
   /** Nombre de paiements comptés — voir `eventTypes`. */
   payments: z.number(),
@@ -63,20 +75,50 @@ export const campaignRevenueSchema = z.object({
 export type CampaignRevenue = z.infer<typeof campaignRevenueSchema>;
 
 /**
- * Une provenance et ce qu'elle a rapporté.
+ * Une **nature** de trafic et ce qu'elle a rapporté.
  *
- * Les referrers bruts sont **repliés** : `google.fr` et `google.com` ne font
- * qu'une ligne. Le repli se faisant après le classement, `visitors` est un
- * **majorant** — quelqu'un vu derrière deux referrers du même moteur y compte
- * deux fois. `payments` et `amount`, eux, sont exacts : un paiement n'appartient
- * qu'à une ligne.
+ * Pas un referrer : la question posée par cet axe est « quelle famille de
+ * trafic me rapporte », à quoi `Search` répond et `google.fr` ne répond pas.
+ * Les hôtes ont leur propre axe, `referrer`, qui est le même classement un cran
+ * plus bas.
+ *
+ * `campaign` l'emporte sur tout le reste : une visite balisée arrive de
+ * `google.com` comme une visite organique, et les confondre ferait lire « la
+ * recherche m'apporte X » en y comptant du trafic acheté.
+ *
+ * Le repli se faisant après le classement, `visitors` est un **majorant** —
+ * quelqu'un vu derrière deux referrers de la même nature y compte deux fois.
+ * `payments` et `amount`, eux, sont exacts : un paiement n'appartient qu'à une
+ * ligne.
  */
-export const sourceRevenueSchema = z.object({
+export const natureRevenueSchema = z.object({
+  ...revenueRow,
+  nature: z.enum([
+    'direct',
+    'search',
+    'assistant',
+    'social',
+    'other',
+    'internal',
+    'campaign',
+  ]),
+});
+
+export type NatureRevenue = z.infer<typeof natureRevenueSchema>;
+
+/**
+ * Un hôte et ce qu'il a rapporté — le même classement, un cran plus bas.
+ *
+ * `source` porte la classification serveur pour que l'affichage n'ait pas à la
+ * refaire : le libellé propre d'un moteur (`DuckDuckGo`) et le domaine qui
+ * porte son icône sont une connaissance métier, pas de la mise en forme.
+ */
+export const referrerRevenueSchema = z.object({
   ...revenueRow,
   source: sourceSchema,
 });
 
-export type SourceRevenue = z.infer<typeof sourceRevenueSchema>;
+export type ReferrerRevenue = z.infer<typeof referrerRevenueSchema>;
 
 /** Le même total, pour ce qu'aucune valeur de l'axe ne revendique. */
 export const unsourcedRevenueSchema = z.object({
@@ -112,8 +154,8 @@ const breakdown = <Row extends z.ZodTypeAny>(row: Row) =>
  *
  * ## Les axes demandés, et eux seuls
  *
- * Les mêmes paiements rangés par campagne, provenance, page d'entrée, pays,
- * navigateur, système ou appareil — `?axes=` choisit lesquels. Une clé absente
+ * Les mêmes paiements rangés par campagne, nature de trafic, referrer, page
+ * d'entrée, pays, navigateur, système ou appareil — `?axes=` choisit lesquels. Une clé absente
  * veut dire « pas demandée », **jamais** « calculée et vide » : chaque
  * groupement est une passe SQL, et les rendre tous ferait payer sept
  * agrégations à qui en affiche quatre.
@@ -136,7 +178,8 @@ export const revenueAttributionPageSchema = z.object({
   /** Les types d'événement réellement additionnés. */
   eventTypes: z.array(z.string()),
   campaign: breakdown(campaignRevenueSchema).optional(),
-  source: breakdown(sourceRevenueSchema).optional(),
+  source: breakdown(natureRevenueSchema).optional(),
+  referrer: breakdown(referrerRevenueSchema).optional(),
   landing: breakdown(z.object(revenueRow)).optional(),
   country: breakdown(z.object(revenueRow)).optional(),
   browser: breakdown(z.object(revenueRow)).optional(),

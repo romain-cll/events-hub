@@ -7,11 +7,16 @@ import {
   type EntryTotals,
   type SeriesStep,
 } from '../../events/event-store.service';
-import { classifyReferrer, type Source } from '../analytics/entry-source';
 import {
-  AMOUNT_KEY,
-  CURRENCY_KEY,
+  classifyReferrer,
+  NATURE_LABELS,
+  type Source,
+  type TrafficNature,
+} from '../analytics/entry-source';
+import {
   REVENUE_TYPES,
+  SETTLED_CURRENCY_KEY,
+  SETTLED_KEY,
 } from './event-mapping';
 import type {
   AttributionAxis,
@@ -22,11 +27,15 @@ import type {
 /**
  * Ce qu'une valeur d'axe a rapporté sur la fenêtre.
  *
- * Les montants sont rendus **tels que Stripe les écrit** — en centimes, dans la
- * devise de la transaction. Ni conversion, ni arrondi, ni mélange de devises :
- * un client qui verrait ici un total différent de son tableau de bord Stripe
- * conclurait que c'est le nôtre qui ment, et il aurait raison de le conclure
- * puisqu'il n'a aucun moyen de trancher.
+ * Les montants sont ceux du **règlement**, recopiés de Stripe : en centimes,
+ * dans la devise du compte connecté, avec le taux que Stripe a appliqué pour se
+ * régler. On n'a ni choisi de taux ni refait d'arrondi — sans quoi un client
+ * verrait ici un total différent de son tableau de bord et conclurait que c'est
+ * le nôtre qui ment, avec raison puisqu'il n'a aucun moyen de trancher.
+ *
+ * Une devise `null` avec des `payments` non nuls n'est pas un groupe vide :
+ * c'est l'aveu qu'autant de paiements existent et que cette lecture ne sait pas
+ * les convertir. Voir `SETTLED_KEY`.
  */
 export interface RevenueRow {
   /** Le libellé de la ligne, tel qu'on l'affiche. */
@@ -50,8 +59,18 @@ export interface CampaignRevenue extends RevenueRow {
   };
 }
 
-/** Une provenance classée — moteur, site, réseau social, direct. */
-export interface SourceRevenue extends RevenueRow {
+/**
+ * Une **nature** de trafic — la famille, pas le site.
+ *
+ * La question posée est « quelle famille me rapporte », à quoi `Search` répond
+ * et `google.fr` ne répond pas. Les hôtes ont leur propre axe.
+ */
+export interface NatureRevenue extends RevenueRow {
+  nature: TrafficNature;
+}
+
+/** Un hôte classé — le même classement, un cran plus bas. */
+export interface ReferrerRevenue extends RevenueRow {
   source: Source;
 }
 
@@ -116,7 +135,8 @@ export interface RevenueAttributionPage {
    * quatre, et laisserait croire qu'un axe vide a été mesuré.
    */
   campaign?: RevenueBreakdown<CampaignRevenue>;
-  source?: RevenueBreakdown<SourceRevenue>;
+  source?: RevenueBreakdown<NatureRevenue>;
+  referrer?: RevenueBreakdown<ReferrerRevenue>;
   landing?: RevenueBreakdown<RevenueRow>;
   country?: RevenueBreakdown<RevenueRow>;
   browser?: RevenueBreakdown<RevenueRow>;
@@ -197,10 +217,13 @@ export class RevenueService {
     { from, to, axes, limit }: RevenueAttributionDto,
   ): Promise<RevenueAttributionPage> {
     const scope = { projectId, from, to, types: [...REVENUE_TYPES] };
+    // Le **règlement**, pas le montant facturé. C'est ce qui met les euros et
+    // les dollars sur la même ligne sans qu'on ait choisi de taux : la
+    // conversion est celle de Stripe, recopiée. Voir `SETTLED_KEY`.
     const money = {
       source: 'properties' as const,
-      amount: AMOUNT_KEY,
-      currency: CURRENCY_KEY,
+      amount: SETTLED_KEY,
+      currency: SETTLED_CURRENCY_KEY,
     };
 
     // Où chaque axe se lit. Les deux premiers vivent dans le sac du premier
@@ -209,7 +232,17 @@ export class RevenueService {
     // la clé qu'on lui nomme.
     const where: Record<AttributionAxis, EntryAxis> = {
       campaign: { on: 'session', column: 'campaign' },
-      source: { on: 'entry', source: 'attributes', key: REFERRER_KEY },
+      // La nature demande les **deux** : le referrer dit d'où vient le clic, la
+      // campagne dit si on l'a acheté, et seule la seconde distingue du trafic
+      // Google Ads d'un résultat organique. Le Core rend le couple, c'est ici
+      // qu'on tranche — lui ne sait pas ce que ces deux valeurs désignent.
+      source: {
+        on: 'both',
+        column: 'campaign',
+        source: 'attributes',
+        key: REFERRER_KEY,
+      },
+      referrer: { on: 'entry', source: 'attributes', key: REFERRER_KEY },
       landing: { on: 'entry', source: 'attributes', key: PATH_KEY },
       country: { on: 'session', column: 'country' },
       browser: { on: 'session', column: 'browser' },
@@ -253,7 +286,13 @@ export class RevenueService {
       }
 
       if (axis === 'source') {
-        page.source = this.folded(ranking, limit);
+        page.source = this.natures(ranking, limit);
+
+        return;
+      }
+
+      if (axis === 'referrer') {
+        page.referrer = this.hosts(ranking, limit);
 
         return;
       }
@@ -292,8 +331,12 @@ export class RevenueService {
       { projectId, from, to, types: [...REVENUE_TYPES] },
       {
         source: 'properties',
-        amount: AMOUNT_KEY,
-        currency: CURRENCY_KEY,
+        // La même clé que l'attribution, et c'est la condition de la propriété
+        // annoncée juste au-dessus : deux lectures qui ne sommeraient pas la
+        // même colonne rendraient deux totaux, et le graphique contredirait le
+        // tableau sous lui.
+        amount: SETTLED_KEY,
+        currency: SETTLED_CURRENCY_KEY,
         step,
       },
     );
@@ -331,35 +374,82 @@ export class RevenueService {
   }
 
   /**
-   * Replie les referrers bruts en provenances.
+   * Replie les referrers bruts en **natures**, la campagne l'emportant.
    *
-   * Le socle rend `google.fr`, `google.com`, `t.co`. Savoir que les deux
-   * premiers sont un moteur de recherche et le troisième un réseau social est
-   * une **interprétation**, et elle est déjà écrite une fois dans
-   * `features/analytics/entry-source.ts`. La réécrire ici créerait une seconde
+   * Le socle rend un couple : la source de campagne de la visite, et son
+   * referrer. Savoir que `google.fr` est un moteur et `t.co` un réseau est une
+   * **interprétation**, déjà écrite une fois dans
+   * `features/analytics/entry-source.ts` — la réécrire ici créerait une seconde
    * vérité, et les deux divergeraient au premier moteur ajouté.
    *
-   * Le repli se fait donc après coup, en mémoire, et par **devise** : deux
-   * referrers du même moteur qui ont encaissé des euros et des dollars restent
-   * deux lignes, parce qu'additionner deux devises ne veut rien dire.
+   * L'ordre, lui, se décide ici et nulle part ailleurs : une campagne présente
+   * gagne, quelle que soit la nature du referrer. Une visite Google Ads arrive
+   * de `google.com` comme une visite organique, et les fondre ferait lire « la
+   * recherche m'apporte X » en y comptant du trafic acheté.
    */
-  private folded(
+  private natures(
     ranking: EntryRanking,
     limit: number,
-  ): RevenueBreakdown<SourceRevenue> {
-    const merged = new Map<string, SourceRevenue>();
+  ): RevenueBreakdown<NatureRevenue> {
+    return this.merged(ranking, limit, (row) => {
+      const [campaign, referrer] = row.values;
 
-    for (const row of ranking.rows) {
       // L'URL de la page n'est pas passée, et c'est un écart connu : sans elle,
       // un referrer de notre propre site serait rangé en `other` plutôt qu'en
       // `internal`. Sur la **première** page de la **première** visite, le cas
       // est rare par construction — et la remonter obligerait à grouper sur
       // l'URL entière, ce qui ferait exploser le nombre de lignes pour une
       // information dont on ne garderait que l'hôte.
+      const nature: TrafficNature =
+        campaign === null ? classifyReferrer(referrer, null).kind : 'campaign';
+
+      return { key: nature, label: NATURE_LABELS[nature], extra: { nature } };
+    });
+  }
+
+  /** Le même classement un cran plus bas : un hôte par ligne, sa nature avec. */
+  private hosts(
+    ranking: EntryRanking,
+    limit: number,
+  ): RevenueBreakdown<ReferrerRevenue> {
+    return this.merged(ranking, limit, (row) => {
       const source = classifyReferrer(row.values[0], null);
 
-      const key = `${String(source.name)}|${String(row.currency)}`;
-      const seen = merged.get(key);
+      return {
+        key: String(source.name),
+        label: source.label,
+        extra: { source },
+      };
+    });
+  }
+
+  /**
+   * Regroupe des lignes du Core sous une clé que l'appelant invente.
+   *
+   * Extrait parce que les deux replis ne diffèrent **que** par cette clé, et
+   * qu'un second exemplaire du regroupement aurait divergé sur un détail —
+   * l'un dédupliquant par devise et l'autre non, par exemple — sans que rien ne
+   * le signale.
+   *
+   * La devise reste dans la clé même si elle est désormais presque toujours la
+   * même : c'est ce qui empêche un jour de mélanger le règlement connu et
+   * l'inconnu dans une seule ligne.
+   */
+  private merged<Extra>(
+    ranking: EntryRanking,
+    limit: number,
+    classify: (row: EntryTotals) => {
+      key: string;
+      label: string;
+      extra: Extra;
+    },
+  ): RevenueBreakdown<RevenueRow & Extra> {
+    const merged = new Map<string, RevenueRow & Extra>();
+
+    for (const row of ranking.rows) {
+      const { key, label, extra } = classify(row);
+      const at = `${key}|${String(row.currency)}`;
+      const seen = merged.get(at);
 
       if (seen) {
         seen.amount += row.amount;
@@ -370,16 +460,14 @@ export class RevenueService {
         // et c'est dit dans le contrat.
         seen.visitors += row.visitors;
       } else {
-        merged.set(key, { ...strip(row), label: source.label, source });
+        merged.set(at, { ...strip(row), label, ...extra });
       }
     }
 
-    const rows = [...merged.values()]
-      .sort((a, b) => b.amount - a.amount)
-      .slice(0, limit);
-
     return {
-      rows,
+      rows: [...merged.values()]
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, limit),
       direct: ranking.others.filter((row) => row.known).map(strip),
       unattributed: ranking.others.filter((row) => !row.known).map(strip),
     };
