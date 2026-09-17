@@ -61,6 +61,17 @@ import type { DayDeployments } from '#/lib/deployments';
 /** La réserve au-dessus du point le plus haut, en proportion. */
 const HEADROOM = 1.2;
 
+/**
+ * Celle du revenu est plus large, parce qu'une barre n'est pas une courbe.
+ *
+ * Une crête de courbe qui frôle le haut du cadre se lit encore comme une crête.
+ * Une barre qui monte jusqu'au bord se lit comme une barre **coupée** : rien ne
+ * dit que le dessin s'arrête là plutôt que la valeur. Sur une fenêtre à un seul
+ * paiement, cette barre unique occupait toute la hauteur du graphique et
+ * écrasait la courbe de trafic à côté.
+ */
+const REVENUE_HEADROOM = 1.3;
+
 /** Le nombre de graduations visé — indicatif, pas imposé. */
 const TICKS = 4;
 
@@ -216,15 +227,19 @@ export function TrafficRevenueChart({
   const trafficCeiling = chartCeiling(
     data.reduce((highest, day) => Math.max(highest, day.current), 0),
   );
-  const revenueCeiling = data.reduce(
+  // Le pic et le plafond sont deux choses : le pic porte les graduations, le
+  // plafond porte le vide au-dessus. Les confondre remettrait la barre la plus
+  // haute contre le bord.
+  const revenuePeak = data.reduce(
     (highest, day) => Math.max(highest, day.revenue),
     0,
   );
+  const revenueCeiling = Math.ceil(revenuePeak * REVENUE_HEADROOM);
 
   // Aucun paiement sur la fenêtre : l'axe de droite disparaît au lieu d'être
   // gradué à zéro. Un axe sans série est un axe qui ment — il promet une mesure
   // que le dessin ne porte pas.
-  const hasRevenue = revenueCeiling > 0;
+  const hasRevenue = revenuePeak > 0;
 
   return (
     <ChartContainer
@@ -239,6 +254,28 @@ export function TrafficRevenueChart({
         {/* `syncWithTicks` : sans lui, Recharts ajoute une ligne sur la borne
             du domaine en plus des graduations — un trait sans valeur en face,
             qui se lit comme une graduation dont on aurait perdu l'étiquette. */}
+        <defs>
+          {/* Le dégradé descend jusqu'à l'opacité nulle : une aire qui s'arrête
+              net en bas dessine une frontière que la donnée n'a pas.
+
+              Il part plus discret que sur l'ancien graphique — 0,45 au lieu de
+              0,7 — parce qu'il passe maintenant **par-dessus** les barres de
+              revenu. À pleine opacité il les noierait ; à celle-ci elles se
+              lisent au travers, et l'aire garde son volume. */}
+          <linearGradient id="traffic-area" x1="0" y1="0" x2="0" y2="1">
+            <stop
+              offset="5%"
+              stopColor="var(--color-current)"
+              stopOpacity={0.45}
+            />
+            <stop
+              offset="95%"
+              stopColor="var(--color-current)"
+              stopOpacity={0.02}
+            />
+          </linearGradient>
+        </defs>
+
         <CartesianGrid vertical={false} syncWithTicks />
         <XAxis
           dataKey="start"
@@ -294,7 +331,9 @@ export function TrafficRevenueChart({
             // Trois graduations et non quatre : l'axe de gauche en porte
             // davantage, et deux échelles également graduées invitent à lire
             // une correspondance ligne à ligne qui n'existe pas.
-            ticks={[0, Math.round(revenueCeiling / 2), revenueCeiling].filter(
+            // Graduées sur le **pic**, pas sur le plafond : la dernière dit
+            // « voici le plus gros jour », pas « voici le bord du cadre ».
+            ticks={[0, Math.round(revenuePeak / 2), revenuePeak].filter(
               (tick, index, all) => all.indexOf(tick) === index,
             )}
           />
@@ -334,10 +373,11 @@ export function TrafficRevenueChart({
           dataKey="current"
           type="natural"
           stroke="var(--color-current)"
-          // Pas de remplissage, contrairement au graphique d'avant : une aire
-          // par-dessus des barres se lit comme un empilement, et son dégradé les
-          // noierait. Le trait seul dit la même chose sans rien recouvrir.
-          fill="none"
+          fill="url(#traffic-area)"
+          // ⚠️ Recharts multiplie ce facteur avec les opacités du dégradé : le
+          // laisser à son défaut de 0,6 ramènerait le haut de l'aire à 0,27 et
+          // effacerait le volume qu'on vient d'y remettre.
+          fillOpacity={1}
           strokeWidth={2}
           // Le point au survol suffit ; en poser un sur chaque journée
           // encombrerait la courbe.
