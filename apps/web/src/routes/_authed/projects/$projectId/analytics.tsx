@@ -1253,15 +1253,16 @@ const ROWS = 10;
 const CARD_BODY = 'h-106';
 
 /**
- * Ce que la carte montre, et ce que le tiroir montre.
+ * Ce que la carte montre d'un coup.
  *
- * Huit sur la carte parce qu'un rang `roomy` mesure une fois et demie un rang
- * ordinaire : dix ne tiendraient plus dans la hauteur que les cartes voisines
- * partagent. Le tiroir pagine par quinze, assez pour que le classement se lise
- * d'un regard sans que la page défile.
+ * Huit parce qu'un rang `roomy` mesure une fois et demie un rang ordinaire :
+ * dix ne tiendraient plus dans la hauteur que les cartes voisines partagent.
+ *
+ * Le panneau, lui, n'a pas de chiffre : il mesure la place qu'on lui laisse et
+ * pagine en conséquence. Un nombre figé y laisserait un tiers de vide sur un
+ * grand moniteur et déborderait sur un portable.
  */
 const CARD_ROWS = 8;
-const DRAWER_ROWS = 15;
 
 /**
  * Le même corps, mais en **plancher**, pour les cartes de revenu.
@@ -2032,15 +2033,16 @@ function Acquisition({
 
   const columns = useMemo(() => acquisitionColumns(tab, rows), [tab, rows]);
 
-  const table = (pageSize: number, paginate: boolean) => (
+  const table = (size: number | 'fit') => (
     <DataTable
       columns={columns}
       rows={rows}
       rowKey={(row) => row.key}
       density="roomy"
       initialSort={{ key: 'visitors', descending: true }}
-      pageSize={pageSize}
-      paginate={paginate}
+      {...(size === 'fit'
+        ? { fit: true }
+        : { pageSize: size, paginate: false })}
       empty={{
         title: 'No traffic yet',
         description:
@@ -2066,10 +2068,19 @@ function Acquisition({
     </Tabs>
   );
 
+  /**
+   * Le contenu du panneau, à hauteur **imposée**.
+   *
+   * Les onglets gardent leur taille, le tableau prend le reste — `flex-1
+   * min-h-0`, sans quoi un enfant de flex refuse de descendre sous la hauteur
+   * de son contenu et déborderait. C'est cette boîte-là que le tableau mesure
+   * pour décider combien de rangs il pagine, et elle ne dépend pas de lui :
+   * c'est ce qui empêche la mesure de se remettre en cause elle-même.
+   */
   const full = (
     <>
       {tabs}
-      {table(DRAWER_ROWS, true)}
+      <div className="min-h-0 flex-1">{table('fit')}</div>
     </>
   );
 
@@ -2094,11 +2105,7 @@ function Acquisition({
           unités d'espacement, soit 373 px. C'est la même constante que les
           cartes à dix rangs ordinaires, où 10 + 90 = 100 laisse du mou. */}
       <CardContent className={CARD_BODY}>
-        {visits ? (
-          table(CARD_ROWS, false)
-        ) : (
-          <Skeleton className="h-full w-full" />
-        )}
+        {visits ? table(CARD_ROWS) : <Skeleton className="h-full w-full" />}
       </CardContent>
 
       {/* Toujours rendu, quel que soit l'onglet, et c'est le point : le
@@ -2129,7 +2136,7 @@ function Acquisition({
           qu'il montre. */}
       {isMobile ? (
         <Drawer open={open} onOpenChange={setOpen}>
-          <DrawerContent>
+          <DrawerContent className="h-[88vh]">
             <DrawerHeader className="text-left">
               <DrawerTitle>Acquisition</DrawerTitle>
               <DrawerDescription>
@@ -2137,14 +2144,18 @@ function Acquisition({
                 paid.
               </DrawerDescription>
             </DrawerHeader>
-            <div className="flex flex-col gap-3 overflow-y-auto px-4 pb-6">
+            <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 pb-6">
               {full}
             </div>
           </DrawerContent>
         </Drawer>
       ) : (
         <Dialog open={open} onOpenChange={setOpen}>
-          <DialogContent className="flex max-h-[85vh] flex-col gap-3 sm:max-w-4xl">
+          {/* Une hauteur **fixe**, pas un plafond : `max-h` laissait le panneau
+              se dimensionner sur son contenu, donc changer de taille d'un
+              onglet à l'autre — cinq natures contre onze referrers — et le
+              tableau n'avait alors aucune hauteur stable à mesurer. */}
+          <DialogContent className="flex h-[85vh] flex-col gap-3 sm:max-w-4xl">
             <DialogHeader>
               <DialogTitle>Acquisition</DialogTitle>
               <DialogDescription>
@@ -2152,7 +2163,7 @@ function Acquisition({
                 paid.
               </DialogDescription>
             </DialogHeader>
-            <div className="flex flex-col gap-3 overflow-y-auto">{full}</div>
+            <div className="flex min-h-0 flex-1 flex-col gap-3">{full}</div>
           </DialogContent>
         </Dialog>
       )}
