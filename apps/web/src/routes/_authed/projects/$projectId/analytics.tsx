@@ -79,6 +79,8 @@ import { ingestionQuery, projectsQuery } from '#/lib/projects';
 import {
   ACQUISITION_AXES,
   AUDIENCE_AXES,
+  LOCATION_AXES,
+  MAX_ATTRIBUTION_LIMIT,
   attributionQuery,
   revenueSeriesQuery,
   type AttributionAxis,
@@ -573,6 +575,25 @@ function Locations({
     locationsQuery(projectId, days, offset, 'country', 250),
   );
 
+  // Le revenu de la période rangé par pays. Il ne vient pas de l'appel
+  // d'attribution de la page : l'axe y était demandé sans que rien ne
+  // l'affiche, et il a déménagé ici — c'est une agrégation déplacée, pas une
+  // agrégation de plus.
+  //
+  // Le plafond de la route plutôt que dix, pour la raison qui vaut partout où
+  // deux classements se joignent : celui-ci trie par montant, le tableau d'à
+  // côté par visiteurs, et un pays qui encaisse sans être dans les dix
+  // premiers du revenu afficherait un tiret là où on connaît son chiffre.
+  const attribution = useQuery(
+    attributionQuery(
+      projectId,
+      days,
+      offset,
+      LOCATION_AXES,
+      MAX_ATTRIBUTION_LIMIT,
+    ),
+  );
+
   return (
     <Card>
       <CardHeader>
@@ -623,6 +644,8 @@ function Locations({
             hovered={hovered}
             onHover={setHovered}
             page={locations.data}
+            revenue={attribution.data?.country}
+            revenuePending={attribution.isPending}
           />
         ) : (
           <Skeleton className="h-[220px] w-full" />
@@ -833,10 +856,14 @@ interface WorldAtlas {
 
 function LocationRows({
   page,
+  revenue,
+  revenuePending,
   hovered,
   onHover,
 }: {
   page: LocationsPage;
+  revenue: RevenueAttributionPage['country'];
+  revenuePending: boolean;
   hovered: string | null;
   onHover: (code: string | null) => void;
 }) {
@@ -845,6 +872,35 @@ function LocationRows({
   // rail proportionnel au total serait la même chose écrite deux fois, et
   // resterait vide partout dès qu'une part des visiteurs n'est pas localisée.
   const highest = Math.max(page.rows[0]?.visitors ?? 0, 1);
+
+  // Le revenu ne se joint **qu'au grain pays**, parce que c'est le seul que
+  // l'attribution sache ranger — une région n'a pas d'axe côté serveur. La
+  // colonne disparaît donc sur les deux autres onglets plutôt que de s'y
+  // afficher vide : un tiret dit « rien encaissé », pas « rien demandé ».
+  const showRevenue = page.grain === 'country';
+
+  // Indexé sur le code ISO, qui est le libellé que l'attribution rend sur cet
+  // axe — c'est ce qui permet de joindre sans traduire des deux côtés.
+  //
+  // Une liste par pays et non un total : deux devises additionnées feraient un
+  // montant qui n'existe dans aucun compte. Le cas est rare — un classement ne
+  // porte en pratique que la devise du compte connecté — mais il se produit, et
+  // la ligne montre alors celle qui pèse le plus en le disant.
+  //
+  // Mémoïsé parce que le survol re-rend ce composant à chaque ligne pointée.
+  const earned = useMemo(() => {
+    const byCountry = new Map<string, NonNullable<typeof revenue>['rows']>();
+
+    for (const row of revenue?.rows ?? []) {
+      byCountry.set(row.label, [...(byCountry.get(row.label) ?? []), row]);
+    }
+
+    for (const rows of byCountry.values()) {
+      rows.sort((first, second) => second.amount - first.amount);
+    }
+
+    return byCountry;
+  }, [revenue]);
 
   return (
     // `min-h-100` : la hauteur d'un tableau plein — `h-10` d'en-tête plus dix
@@ -859,7 +915,21 @@ function LocationRows({
             head: GRAINS.find(({ value }) => value === page.grain)?.label ?? '',
           },
           { head: 'Visitors', width: '5.5rem', align: 'right' },
-          // À gauche, contrairement aux deux autres colonnes de chiffres : ce
+          ...(showRevenue
+            ? [
+                {
+                  head: 'Revenue',
+                  width: '6rem',
+                  align: 'right' as const,
+                  // Les deux colonnes ne parlent pas du même moment, et les
+                  // lire comme un taux de conversion par pays serait faux :
+                  // les visiteurs sont ceux d'ici, le revenu est celui des
+                  // clients dont la **première** visite venait d'ici.
+                  hint: 'Revenue from customers whose first visit came from this country — first touch, like Acquisition. Visitors, next to it, are the ones who connected from here over the period: someone can be counted in one country and pay in another.',
+                },
+              ]
+            : []),
+          // À gauche, contrairement aux autres colonnes de chiffres : ce
           // qu'elle coiffe est une barre, pas un nombre, et un en-tête aligné à
           // droite pointerait vers le pourcentage plutôt que vers le rail.
           { head: 'Share', width: '7rem' },
@@ -869,52 +939,80 @@ function LocationRows({
           description:
             'Visitors show up here once their address resolves to a place.',
         }}
-        rows={page.rows.map((row) => ({
-          // Le grain seul ne fait pas une clé : deux villes homonymes de deux
-          // pays sont deux lignes, et c'est le couple qui les distingue.
-          key: `${row.countryCode ?? ''}-${row.value}`,
-          // Le survol relie les deux moitiés dans les deux sens : pointer une
-          // ligne éclaire son pays, et inversement. Au grain région ou ville,
-          // plusieurs lignes partagent donc le même pays — c'est voulu, elles
-          // sont bien au même endroit.
-          onEnter: () => onHover(row.countryCode),
-          onLeave: () => onHover(null),
-          state:
-            hovered === null
-              ? undefined
-              : hovered === row.countryCode
-                ? ('active' as const)
-                : ('dimmed' as const),
-          cells: [
-            <span key="place" className="block truncate">
-              {page.grain === 'country'
-                ? countryName(row.countryCode)
-                : row.value}
-              {page.grain !== 'country' && (
-                <span className="text-muted-foreground ml-1.5 text-xs">
-                  {countryName(row.countryCode)}
-                </span>
-              )}
-            </span>,
-            number.format(row.visitors),
-            <span key="share" className="flex items-center gap-2">
-              {/* Le rail de la planche : 3,52 px de haut, le creux à
+        rows={page.rows.map((row) => {
+          const [top, ...others] = earned.get(row.countryCode ?? '') ?? [];
+
+          return {
+            // Le grain seul ne fait pas une clé : deux villes homonymes de deux
+            // pays sont deux lignes, et c'est le couple qui les distingue.
+            key: `${row.countryCode ?? ''}-${row.value}`,
+            // Le survol relie les deux moitiés dans les deux sens : pointer une
+            // ligne éclaire son pays, et inversement. Au grain région ou ville,
+            // plusieurs lignes partagent donc le même pays — c'est voulu, elles
+            // sont bien au même endroit.
+            onEnter: () => onHover(row.countryCode),
+            onLeave: () => onHover(null),
+            state:
+              hovered === null
+                ? undefined
+                : hovered === row.countryCode
+                  ? ('active' as const)
+                  : ('dimmed' as const),
+            cells: [
+              <span key="place" className="block truncate">
+                {page.grain === 'country'
+                  ? countryName(row.countryCode)
+                  : row.value}
+                {page.grain !== 'country' && (
+                  <span className="text-muted-foreground ml-1.5 text-xs">
+                    {countryName(row.countryCode)}
+                  </span>
+                )}
+              </span>,
+              number.format(row.visitors),
+              ...(showRevenue
+                ? [
+                    // Le tiret veut dire « aucun paiement rattaché à ce pays »,
+                    // et il doit pouvoir le dire : l'afficher pendant la lecture
+                    // le rendrait faux le temps qu'elle arrive.
+                    <span key="revenue">
+                      {revenuePending ? (
+                        <Skeleton className="ml-auto h-4 w-12" />
+                      ) : !top ? (
+                        '—'
+                      ) : others.length === 0 ? (
+                        money(top.amount, top.currency)
+                      ) : (
+                        <Hint
+                          title={[top, ...others]
+                            .map((paid) => money(paid.amount, paid.currency))
+                            .join(' · ')}
+                        >
+                          {money(top.amount, top.currency)}
+                        </Hint>
+                      )}
+                    </span>,
+                  ]
+                : []),
+              <span key="share" className="flex items-center gap-2">
+                {/* Le rail de la planche : 3,52 px de haut, le creux à
                   `--primary/20`, le remplissage plein. Pas d'ombre, pas de
                   dégradé — la proportion se lit sur la longueur. */}
-              <span className="bg-primary/20 h-1 flex-1 overflow-hidden rounded-full">
-                <span
-                  className="bg-primary block h-full rounded-full"
-                  style={{ width: `${(row.visitors / highest) * 100}%` }}
-                />
-              </span>
-              <span className="text-muted-foreground w-11 shrink-0 text-right text-xs tabular-nums">
-                {page.visitors === 0
-                  ? '—'
-                  : `${ratio.format((row.visitors / page.visitors) * 100)}%`}
-              </span>
-            </span>,
-          ],
-        }))}
+                <span className="bg-primary/20 h-1 flex-1 overflow-hidden rounded-full">
+                  <span
+                    className="bg-primary block h-full rounded-full"
+                    style={{ width: `${(row.visitors / highest) * 100}%` }}
+                  />
+                </span>
+                <span className="text-muted-foreground w-11 shrink-0 text-right text-xs tabular-nums">
+                  {page.visitors === 0
+                    ? '—'
+                    : `${ratio.format((row.visitors / page.visitors) * 100)}%`}
+                </span>
+              </span>,
+            ],
+          };
+        })}
       />
 
       {page.rows.length > 0 && (
@@ -1718,13 +1816,11 @@ function Audience({
             onValueChange={(value) => setTab(value as TechnologyGrain)}
           >
             <TabsList>
-              {AUDIENCE_AXES.filter((value) => value !== 'country').map(
-                (value) => (
-                  <TabsTrigger key={value} value={value}>
-                    {AXIS_LABELS[value]}
-                  </TabsTrigger>
-                ),
-              )}
+              {AUDIENCE_AXES.map((value) => (
+                <TabsTrigger key={value} value={value}>
+                  {AXIS_LABELS[value]}
+                </TabsTrigger>
+              ))}
             </TabsList>
           </Tabs>
         </CardAction>

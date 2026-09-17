@@ -60,15 +60,38 @@ export const ACQUISITION_AXES = [
   'landing',
 ] as const satisfies readonly AttributionAxis[];
 
-/** Ce que la carte « Who they are » montre, en plus du pays qu'elle partage. */
+/**
+ * Ce que la carte « Who they are » montre.
+ *
+ * Le pays en faisait partie, sans qu'aucun onglet ne l'affiche : il avait déjà
+ * déménagé dans Locations, l'axe était resté. Une agrégation SQL par axe, donc
+ * une passe payée à chaque ouverture pour une colonne que personne ne voyait.
+ */
 export const AUDIENCE_AXES = [
-  'country',
   'browser',
   'os',
   'device',
 ] as const satisfies readonly AttributionAxis[];
 
-/** L'union des deux : un seul appel sert la page entière. */
+/**
+ * Ce que la carte Locations joint à son classement de visiteurs.
+ *
+ * Elle le demande elle-même plutôt que de le recevoir de la page : sa lecture
+ * ne porte qu'un axe mais le veut **profond**, là où les deux tableaux d'en
+ * face en veulent sept et n'en montrent que dix lignes. Un seul appel pour les
+ * deux besoins servirait mal celui qu'il ne dimensionne pas.
+ */
+export const LOCATION_AXES = [
+  'country',
+] as const satisfies readonly AttributionAxis[];
+
+/**
+ * Le plafond que la route accepte sur `limit`, et qu'il faut connaître ici :
+ * au-delà elle rend 400, pas un classement tronqué.
+ */
+export const MAX_ATTRIBUTION_LIMIT = 100;
+
+/** L'union des deux tableaux : un seul appel les sert tous les deux. */
 export const PAGE_AXES = [
   ...new Set([...ACQUISITION_AXES, ...AUDIENCE_AXES]),
 ] as AttributionAxis[];
