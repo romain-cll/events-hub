@@ -2066,9 +2066,6 @@ function Acquisition({
     </Tabs>
   );
 
-  // Le tableau de la carte est coupé à dix lignes ; le tiroir les rend toutes.
-  const hidden = Math.max(rows.length - CARD_ROWS, 0);
-
   const full = (
     <>
       {tabs}
@@ -2086,11 +2083,17 @@ function Acquisition({
         <CardAction>{tabs}</CardAction>
       </CardHeader>
 
-      {/* Pas de hauteur plancher ici, contrairement aux cartes jumelées plus
-          bas : celle-ci occupe la largeur entière et n'a aucune voisine avec
-          qui s'aligner. Lui en imposer une creusait un trou blanc sous un
-          onglet qui n'a que cinq lignes. */}
-      <CardContent>
+      {/* Hauteur **fixe**, et pas un plancher. Les quatre onglets n'ont pas le
+          même nombre de lignes — cinq natures, onze referrers — et sans plafond
+          commun chaque bascule redimensionnait la carte sous le curseur du
+          lecteur qui compare. Un onglet est un changement de contenu, pas de
+          mise en page.
+
+          `h-106` tombe juste par une arithmétique qui vaut d'être écrite :
+          l'en-tête `h-10` plus huit rangs `roomy` `h-12` font 10 + 96 = 106
+          unités d'espacement, soit 373 px. C'est la même constante que les
+          cartes à dix rangs ordinaires, où 10 + 90 = 100 laisse du mou. */}
+      <CardContent className={CARD_BODY}>
         {visits ? (
           table(CARD_ROWS, false)
         ) : (
@@ -2098,26 +2101,28 @@ function Acquisition({
         )}
       </CardContent>
 
-      {/* En pied de carte et centré : le bouton ne prolonge pas la dernière
-          ligne du tableau, il ouvre autre chose. Aligné à gauche sous la
-          colonne des libellés, il se lisait comme un rang de plus. */}
-      {hidden > 0 && (
-        <CardFooter className="justify-center border-t pt-4">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setOpen(true);
-            }}
-          >
-            {/* L'icône dit **où** ça s'ouvre — un panneau par-dessus la page, pas
-                une ligne de plus dépliée en dessous. Sans elle, « See 7 more »
-                promet un « voir plus » qui déroulerait la carte. */}
-            <Maximize2Icon />
-            See {number.format(hidden)} more
-          </Button>
-        </CardFooter>
-      )}
+      {/* Toujours rendu, quel que soit l'onglet, et c'est le point : le
+          dialogue appartient à la **carte**, pas à l'onglet courant — il porte
+          les quatre. Le faire apparaître au gré du nombre de lignes ferait
+          sauter le pied de carte d'un onglet à l'autre, exactement ce que la
+          hauteur fixe au-dessus existe pour éviter.
+
+          Son libellé ne compte donc rien : « See 7 more » aurait changé à
+          chaque bascule, pour désigner la même chose. */}
+      <CardFooter className="justify-center border-t pt-4">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setOpen(true);
+          }}
+        >
+          {/* L'icône dit **où** ça s'ouvre — un panneau par-dessus la page, pas
+              une ligne de plus dépliée en dessous. */}
+          <Maximize2Icon />
+          See all
+        </Button>
+      </CardFooter>
 
       {/* Un tiroir par le bas sur mobile, un dialogue au centre sur bureau. Le
           même contenu : ce qui change est la façon dont l'écran l'ouvre, pas ce
