@@ -478,15 +478,23 @@ function Analytics() {
           {/* Quatre colonnes sur grand écran, deux sur moyen. Trois cartes
               plus une case vide ne se rangent pas en trois colonnes : la
               quatrième tomberait seule sur une seconde ligne. */}
-          {/* Six cartes en **deux rangées de trois**, et pas une ligne de six :
-              à six colonnes elles tombaient à 158 px, où l'évolution en haut à
-              droite chevauchait la valeur. Le graphique descend sous la ligne de
-              flottaison, et c'est le prix assumé d'un bandeau lisible.
+          {/* Six cartes sur une ligne, **mais seulement quand il y a la place**.
+              Le seuil n'est pas choisi au jugé : à `xl` (1 280 px) la barre et
+              les marges laissent 1 016 px de contenu, donc des cartes de 158 px
+              — exactement la largeur où « 14.9 pts » passait à la ligne et
+              chevauchait le taux de rebond. À `2xl` il reste 1 272 px, soit
+              200 px par carte, et tout tient.
+
+              En dessous on replie par deux : trois colonnes de la tablette au
+              portable, deux sur petit écran, une sur téléphone. Le bandeau
+              gagne une rangée et pousse le graphique, ce qui est le bon
+              arbitrage — un chiffre illisible ne vaut pas mieux qu'un
+              graphique plus bas.
 
               Le revenu et les paiements ne portent pas de comparaison avec la
               période précédente — il faudrait une seconde lecture d'attribution
               pour une flèche, et elle coûte quatre agrégations. */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
             <Metric
               label="Unique visitors"
               value={summary.data?.uniqueVisitors}
