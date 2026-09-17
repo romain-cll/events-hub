@@ -1814,9 +1814,14 @@ function acquisitionColumns(
           {/* La part du trafic, sous le libellé et non dans une colonne : elle
               répond à « combien, comparé aux autres ? », que la colonne
               Visitors seule laisse calculer de tête. */}
-          <span className="block h-1 w-full rounded-full bg-muted">
+          {/* La barre à pleine intensité, la gouttière dans la version atténuée
+              de la même couleur — celle que portait la barre jusqu'ici : la
+              piste dit « voici le maximum », le remplissage « voici cette
+              ligne ». Les deux dans deux teintes sans rapport se lisaient comme
+              deux mesures. */}
+          <span className="block h-1 w-full rounded-full bg-chart-1/40">
             <span
-              className="block h-1 rounded-full bg-primary/40"
+              className="block h-1 rounded-full bg-chart-1"
               style={{
                 width: `${String(busiest === 0 ? 0 : (row.visitors / busiest) * 100)}%`,
               }}
