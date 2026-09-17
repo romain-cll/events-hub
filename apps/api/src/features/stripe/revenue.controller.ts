@@ -17,14 +17,17 @@ import {
   revenueAttributionSchema,
   revenueCohortsSchema,
   revenueMovementsSchema,
+  revenueSeriesSchema,
   type RevenueAttributionDto,
   type RevenueCohortsDto,
   type RevenueMovementsDto,
+  type RevenueSeriesDto,
 } from './dto/revenue-query.dto';
 import { MovementsService, type MovementsPage } from './movements.service';
 import {
   RevenueService,
   type RevenueAttributionPage,
+  type RevenueSeriesPage,
 } from './revenue.service';
 import { StripeService, type SyncReport } from './stripe.service';
 
@@ -69,6 +72,22 @@ export class RevenueController {
     query: RevenueAttributionDto,
   ): Promise<RevenueAttributionPage> {
     return this.revenue.attribution(projectId, query);
+  }
+
+  /**
+   * `GET /v1/projects/:projectId/revenue/series` — le revenu dans le temps.
+   *
+   * Une route pour un calcul, et pas un repli côté client : une somme d'argent
+   * recalculée dans chaque page finit par diverger d'une page à l'autre. Son
+   * total égale celui d'`/attribution` sur la même fenêtre, par construction.
+   */
+  @Get('series')
+  series(
+    @Param('projectId', new ZodValidationPipe(z.uuid())) projectId: string,
+    @Query(new ZodValidationPipe(revenueSeriesSchema))
+    query: RevenueSeriesDto,
+  ): Promise<RevenueSeriesPage> {
+    return this.revenue.series(projectId, query);
   }
 
   /**

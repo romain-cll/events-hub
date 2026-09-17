@@ -1,6 +1,7 @@
 import type {
   AnalyticsSummary as WireAnalyticsSummary,
   RevenueAttributionPage as WireRevenueAttributionPage,
+  RevenueSeriesPage as WireRevenueSeriesPage,
   CohortsPage as WireCohortsPage,
   MovementsPage as WireMovementsPage,
   SyncReport as WireSyncReport,
@@ -32,7 +33,10 @@ import type { TechnologyPage } from './features/analytics/analytics.service';
 import type { EventsPage } from './features/events/events.service';
 import type { CohortsPage } from './features/stripe/cohorts.service';
 import type { MovementsPage } from './features/stripe/movements.service';
-import type { RevenueAttributionPage } from './features/stripe/revenue.service';
+import type {
+  RevenueAttributionPage,
+  RevenueSeriesPage,
+} from './features/stripe/revenue.service';
 import type { SyncReport } from './features/stripe/stripe.service';
 import type { OrganizationRow } from './organizations/organizations.service';
 import type { ProjectIngestion, ProjectRow } from './projects/projects.service';
@@ -162,6 +166,9 @@ export type TechnologyPageConforms = Assert<
 >;
 export type RevenueAttributionPageConforms = Assert<
   Conforms<Wire<RevenueAttributionPage>, WireRevenueAttributionPage>
+>;
+export type RevenueSeriesPageConforms = Assert<
+  Conforms<Wire<RevenueSeriesPage>, WireRevenueSeriesPage>
 >;
 export type SyncReportConforms = Assert<Conforms<Wire<SyncReport>, WireSyncReport>>;
 export type CohortsPageConforms = Assert<

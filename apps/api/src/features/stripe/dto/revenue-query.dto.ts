@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { SERIES_STEPS } from '../../../events/event-store.service';
+
 /** Fenêtre appliquée quand l'appelant n'en demande pas : les 30 derniers jours. */
 const DEFAULT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -194,3 +196,47 @@ export const revenueMovementsSchema = z
 
 /** Requête de mouvements d'abonnement, validée et résolue. */
 export type RevenueMovementsDto = z.output<typeof revenueMovementsSchema>;
+
+/**
+ * `GET /v1/projects/:projectId/revenue/series` — le revenu dans le temps.
+ *
+ * ## Un pas, pas une fenêtre prédéfinie
+ *
+ * `?from&to&step=day|week|month`. La fenêtre reste celle de toutes les autres
+ * routes — un `?period=30` aurait introduit une seconde façon de dire la
+ * période, et le décalage de la page ne s'y serait plus exprimé.
+ *
+ * Le pas dit la granularité : un graphique de trente jours demande `day`, une
+ * courbe d'un an demande `month`, et c'est la même route qui les sert. Le
+ * défaut est `day`, qui est ce que la page affiche.
+ *
+ * ## Pourquoi cette route existe, alors que le client sait replier
+ *
+ * Il sait replier un compte de sessions, parce qu'il les a déjà. Une **somme
+ * d'argent**, non : la redescendre entière ferait remonter tous les paiements
+ * de la fenêtre pour les additionner dans un navigateur, et deux pages qui
+ * referaient ce calcul finiraient par diverger. Le total de cette série égale
+ * celui d'`/attribution` sur la même fenêtre, par construction — les deux lisent
+ * les mêmes cinq types.
+ */
+export const revenueSeriesSchema = z
+  .strictObject({
+    from: instant.optional(),
+    to: instant.optional(),
+    step: z.enum(SERIES_STEPS).default('day'),
+  })
+  .transform(({ from, to, step }) => {
+    const upper = to ?? new Date();
+
+    return {
+      from: from ?? new Date(upper.getTime() - DEFAULT_WINDOW_MS),
+      to: upper,
+      step,
+    };
+  })
+  .refine(({ from, to }) => from <= to, {
+    message: '`from` doit être antérieur ou égal à `to`.',
+  });
+
+/** Requête de série de revenu, validée et résolue. */
+export type RevenueSeriesDto = z.output<typeof revenueSeriesSchema>;

@@ -148,6 +148,67 @@ export type RevenueAttributionPage = z.infer<
   typeof revenueAttributionPageSchema
 >;
 
+/** Les pas qu'une série de revenu peut prendre. */
+export const SERIES_STEPS = ['day', 'week', 'month'] as const;
+
+export const seriesStepSchema = z.enum(SERIES_STEPS);
+
+export type SeriesStep = z.infer<typeof seriesStepSchema>;
+
+/** Un point de la série : un pas, une devise, ce qui a été encaissé. */
+export const revenuePointSchema = z.object({
+  /**
+   * Le début du pas, en **UTC**.
+   *
+   * Une borne, pas un libellé : le fuseau d'affichage appartient au lecteur, et
+   * l'appliquer côté serveur ferait dépendre le contenu d'un point du pays de
+   * qui regarde.
+   */
+  start: z.iso.datetime({ offset: true }),
+  /** La devise ISO telle que Stripe la donne, ou `null`. */
+  currency: z.string().nullable(),
+  /** En **centimes**, dans cette devise seulement. Jamais divisé ici. */
+  amount: z.number(),
+  /** Nombre de paiements comptés dans le pas. */
+  payments: z.number(),
+});
+
+export type RevenuePoint = z.infer<typeof revenuePointSchema>;
+
+/**
+ * `GET /v1/projects/:projectId/revenue/series` — le revenu dans le temps.
+ *
+ * ## Le même total que l'attribution
+ *
+ * Les deux lectures visent les mêmes types sur la même fenêtre : la somme de
+ * `points` égale celle d'`/attribution`, devise par devise. C'est ce qui permet
+ * d'afficher un graphique et un tableau côte à côte sans qu'ils se contredisent
+ * — et c'est la raison pour laquelle ce calcul vit au serveur plutôt que dans
+ * chaque page.
+ *
+ * ## ⚠️ Les pas vides sont absents, pas à zéro
+ *
+ * Un jour sans paiement ne rend aucun point. Compléter l'axe appartient au
+ * lecteur : il est le seul à savoir quelles bornes il affiche, et un
+ * `group by` ne fabrique pas les lignes qu'il n'a pas.
+ *
+ * Deux devises font **deux points** sur le même pas. Les additionner
+ * demanderait un taux de change, donc une date de taux.
+ */
+export const revenueSeriesPageSchema = z.object({
+  /** Borne incluse. */
+  from: z.iso.datetime({ offset: true }),
+  /** Borne exclue. */
+  to: z.iso.datetime({ offset: true }),
+  /** Le pas demandé, en écho : le lecteur en a besoin pour dessiner son axe. */
+  step: seriesStepSchema,
+  /** Les types additionnés, comme pour l'attribution. */
+  eventTypes: z.array(z.string()),
+  points: z.array(revenuePointSchema),
+});
+
+export type RevenueSeriesPage = z.infer<typeof revenueSeriesPageSchema>;
+
 /**
  * `POST /v1/projects/:projectId/revenue/sync` — ce que le rattrapage a fait.
  *

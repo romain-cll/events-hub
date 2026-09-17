@@ -262,6 +262,31 @@ export interface AmountSelector {
 }
 
 /**
+ * Le pas d'une série temporelle.
+ *
+ * Ensemble **fermé**, et c'est la propriété de sécurité : la valeur vient d'une
+ * URL et finit dans un `date_trunc`, qui prend son unité en texte. La résoudre
+ * ici, par un objet dont les clés sont connues à la compilation, garantit
+ * qu'aucune chaîne d'appelant n'atteint le SQL.
+ */
+export const SERIES_STEPS = ['day', 'week', 'month'] as const;
+
+export type SeriesStep = (typeof SERIES_STEPS)[number];
+
+/** Un point de la série : un pas, une devise, un total. */
+export interface AmountPoint {
+  /** Le début du pas, en UTC. Une borne, pas un libellé. */
+  start: Date;
+  /** La devise telle que l'émetteur l'a écrite, ou `null`. */
+  currency: string | null;
+  /** Somme des montants entiers du pas, dans leur unité d'origine. */
+  amount: number;
+  /** Nombre d'événements du pas, montant ou pas. */
+  events: number;
+}
+
+/**
+ * Sur quel axe ranger les paiements — et où cet axe se lit./**
  * Sur quel axe ranger les paiements — et où cet axe se lit.
  *
  * ## Deux natures, une seule jointure de plus
@@ -1761,6 +1786,92 @@ export class EventStore {
       .where(and(...this.scoped(scope), eq(sessions.isBot, true)));
 
     return row.sessions;
+  }
+
+  /**
+   * Un montant, découpé dans le temps.
+   *
+   * ## Le pas est choisi par l'appelant, pas la fenêtre
+   *
+   * C'est le seul endroit du Core qui accepte une granularité temporelle, et
+   * c'est assumé. L'analytics a rendu son découpage au lecteur à l'étape 33 —
+   * il reçoit des sessions datées et les regroupe comme il l'entend — mais une
+   * somme n'est pas un compte de valeurs distinctes : la redescendre entière
+   * ferait remonter tous les paiements de la fenêtre pour en additionner les
+   * montants dans un navigateur, et deux pages qui referaient ce calcul
+   * finiraient par diverger.
+   *
+   * Le Core ne sait toujours pas ce qu'il additionne. Comme dans `topValues`,
+   * il lit la clé qu'on lui nomme, à l'endroit qu'on lui nomme.
+   *
+   * ## `date_trunc`, et le fuseau
+   *
+   * En **UTC**, comme le reste de la chaîne. Le fuseau d'affichage est une
+   * décision de lecteur, et l'appliquer ici ferait dépendre le contenu d'un
+   * point du pays de qui regarde.
+   *
+   * ## Les pas vides n'existent pas
+   *
+   * Un jour sans paiement ne rend aucune ligne : un `group by` ne fabrique pas
+   * de lignes absentes. C'est au lecteur de compléter son axe — il sait déjà le
+   * faire pour le trafic, et il est le seul à connaître les bornes qu'il
+   * affiche.
+   */
+  async amountSeries(
+    scope: EventScope,
+    { source, amount, currency, step }: AmountSelector & { step: SeriesStep },
+  ): Promise<AmountPoint[]> {
+    const bag = source === 'attributes' ? events.attributes : events.properties;
+
+    // Résolution par un objet gelé dont les clés sont connues à la compilation :
+    // `date_trunc` prend son unité en texte, et c'est exactement le genre
+    // d'endroit où une chaîne d'appelant ne doit pas arriver.
+    const unit = { day: sql`'day'`, week: sql`'week'`, month: sql`'month'` }[
+      step
+    ];
+
+    // Même isolation que dans `topValues` : le groupement porte sur des colonnes
+    // ordinaires de la sous-requête, et non sur des expressions que Drizzle
+    // qualifie différemment selon la clause.
+    const extracted = this.db
+      .select({
+        start: sql<Date>`date_trunc(${unit}, ${events.occurredAt} at time zone 'UTC') at time zone 'UTC'`.as(
+          'start',
+        ),
+        currency: sql<string | null>`${bag} ->> ${currency}::text`.as(
+          'currency',
+        ),
+        amount: sql<
+          string | null
+        >`case when ${bag} ->> ${amount}::text ~ '^-?[0-9]+$' then (${bag} ->> ${amount}::text)::bigint end`.as(
+          'amount',
+        ),
+      })
+      .from(events)
+      .where(this.where(scope))
+      .as('extracted');
+
+    // `coalesce` parce qu'une somme sans aucune valeur rend `null` : un pas dont
+    // aucun événement ne porte de montant existe, et il vaut zéro.
+    const total = sql<number>`coalesce(sum(${extracted.amount}), 0)`.mapWith(
+      Number,
+    );
+
+    return await this.db
+      .select({
+        // `mapWith` emprunte le convertisseur de la colonne d'origine : sans
+        // lui, Drizzle rend la chaîne brute de Postgres, que le contrat rejette
+        // — un `sql` n'hérite d'aucun type, c'est à l'appelant de le dire.
+        start: sql<Date>`${extracted.start}`.mapWith(events.occurredAt),
+        currency: extracted.currency,
+        amount: total,
+        events: sql<number>`count(*)`.mapWith(Number),
+      })
+      .from(extracted)
+      .groupBy(extracted.start, extracted.currency)
+      // Chronologique, puis la devise pour départager : sans le second critère,
+      // deux appels identiques rendraient les devises dans un ordre différent.
+      .orderBy(asc(extracted.start), asc(extracted.currency));
   }
 
   /**

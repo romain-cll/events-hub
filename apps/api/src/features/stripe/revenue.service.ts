@@ -5,6 +5,7 @@ import {
   type EntryAxis,
   type EntryRanking,
   type EntryTotals,
+  type SeriesStep,
 } from '../../events/event-store.service';
 import { classifyReferrer, type Source } from '../analytics/entry-source';
 import {
@@ -15,6 +16,7 @@ import {
 import type {
   AttributionAxis,
   RevenueAttributionDto,
+  RevenueSeriesDto,
 } from './dto/revenue-query.dto';
 
 /**
@@ -122,6 +124,50 @@ export interface RevenueAttributionPage {
   device?: RevenueBreakdown<RevenueRow>;
 }
 
+/** Un point de la série : un pas, une devise, ce qui a été encaissé. */
+export interface RevenuePoint {
+  /**
+   * Le début du pas, en **UTC**.
+   *
+   * Une borne, pas un libellé : le fuseau d'affichage est une décision de
+   * lecteur, et l'appliquer ici ferait dépendre le contenu d'un point du pays
+   * de qui regarde.
+   */
+  start: Date;
+  /** La devise ISO telle que Stripe la donne, ou `null`. */
+  currency: string | null;
+  /** Somme des montants du pas, **en centimes**, dans cette devise seulement. */
+  amount: number;
+  /** Nombre de paiements comptés dans le pas. */
+  payments: number;
+}
+
+/**
+ * `GET /v1/projects/:projectId/revenue/series` — le revenu dans le temps.
+ *
+ * Le total de `points` égale celui d'`/attribution` sur la même fenêtre, devise
+ * par devise : les deux lisent les mêmes types. C'est ce qui permet d'afficher
+ * un graphique et un tableau côte à côte sans qu'ils se contredisent.
+ */
+export interface RevenueSeriesPage {
+  /** Borne incluse. */
+  from: Date;
+  /** Borne exclue. */
+  to: Date;
+  /** Le pas demandé, en écho — le lecteur en a besoin pour dessiner son axe. */
+  step: SeriesStep;
+  /** Les types additionnés, comme pour l'attribution. */
+  eventTypes: string[];
+  /**
+   * Un point par pas **et par devise**, du plus ancien au plus récent.
+   *
+   * ⚠️ Les pas sans paiement sont **absents**, pas à zéro : un `group by` ne
+   * fabrique pas les lignes qu'il n'a pas. Compléter l'axe appartient au
+   * lecteur.
+   */
+  points: RevenuePoint[];
+}
+
 /**
  * Où le SDK range le referrer et le chemin d'entrée.
  *
@@ -219,6 +265,51 @@ export class RevenueService {
     });
 
     return page;
+  }
+
+  /**
+   * Le revenu encaissé, découpé dans le temps.
+   *
+   * ## Le même total que l'attribution, par construction
+   *
+   * Les deux lectures visent les **mêmes cinq types**, sur la même fenêtre :
+   * leurs totaux coïncident donc devise par devise, et c'est la propriété qui
+   * justifie d'avoir centralisé le calcul ici plutôt que de le refaire dans
+   * chaque page. Un e2e la vérifie — c'est le seul test qui prouve qu'on n'a
+   * pas créé d'écart.
+   *
+   * ## Les pas vides ne sont pas comblés
+   *
+   * Un jour sans paiement ne rend aucun point. Compléter l'axe appartient au
+   * lecteur : il le fait déjà pour le trafic, et il est le seul à savoir quelles
+   * bornes il affiche.
+   */
+  async series(
+    projectId: string,
+    { from, to, step }: RevenueSeriesDto,
+  ): Promise<RevenueSeriesPage> {
+    const points = await this.events.amountSeries(
+      { projectId, from, to, types: [...REVENUE_TYPES] },
+      {
+        source: 'properties',
+        amount: AMOUNT_KEY,
+        currency: CURRENCY_KEY,
+        step,
+      },
+    );
+
+    return {
+      from,
+      to,
+      step,
+      eventTypes: [...REVENUE_TYPES],
+      points: points.map(({ start, currency, amount, events }) => ({
+        start,
+        currency,
+        amount,
+        payments: events,
+      })),
+    };
   }
 
   /**

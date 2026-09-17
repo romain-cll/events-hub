@@ -223,6 +223,27 @@ du chiffre.
 n'auront de révision qu'à leur premier changement : la courbe partira plate, et
 ce n'est pas une panne. Le passé ne se rattraperait qu'en repartant des factures.
 
+## La série : `GET /revenue/series`
+
+Le revenu encaissé par pas de temps — `?from&to&step=day|week|month`. La fenêtre
+est celle de toutes les autres routes ; seul le pas change, si bien qu'un
+graphique de trente jours et une courbe d'un an sont servis par la même lecture.
+
+**Pourquoi une route plutôt qu'un repli côté client.** Le client sait replier un
+compte de sessions, parce qu'il les a déjà. Une somme d'argent, non : la
+redescendre entière ferait additionner tous les paiements de la fenêtre dans un
+navigateur, et deux pages qui referaient ce calcul finiraient par diverger.
+
+Son total **égale** celui d'`/attribution` sur la même fenêtre, devise par
+devise : les deux lisent les mêmes cinq types. Un e2e le vérifie — c'est le seul
+test qui prouve qu'on n'a pas créé l'écart qu'on voulait éviter.
+
+⚠️ **Les pas vides sont absents, pas à zéro.** Un jour sans paiement ne rend
+aucun point : un `group by` ne fabrique pas les lignes qu'il n'a pas. Compléter
+l'axe appartient au lecteur, qui est le seul à savoir quelles bornes il affiche.
+
+Deux devises font deux points sur le même pas, comme partout ailleurs.
+
 ## Les lectures de rétention
 
 `GET /revenue/cohorts` — la matrice triangulaire. Une ligne par mois de
