@@ -24,9 +24,26 @@ résiliations ✅ · **part du revenu attribuée** 🟡
 
 ## 2. Le temps
 
-Trafic par jour et par heure ✅ · revenu **à côté**, jamais superposé — le
-système de design interdit deux axes Y 🟡 · marqueurs de déploiement ✅ ·
-saisonnalité des renouvellements ✅
+Trafic et revenu sur **un seul graphique**, à deux échelles ✅ · marqueurs de
+déploiement ✅ · saisonnalité des renouvellements ✅
+
+⚠️ **Cette section disait le contraire, et la règle a été levée sciemment.** Elle
+posait « le revenu à côté, jamais superposé — jamais deux axes Y », et la raison
+tient toujours : deux échelles arbitraires laissent croire qu'un croisement des
+tracés veut dire quelque chose, alors que déplacer l'une des deux le déplace
+aussi.
+
+Les deux ont été réunis parce qu'un seul dessin répond mieux à la question qu'on
+vient poser — *ce pic de trafic a-t-il rapporté ?* — et quatre choix rendent la
+lecture honnête à défaut d'être neutre : des **barres** pour le revenu contre un
+**trait** pour le trafic, deux formes que l'œil ne compare pas point par point ;
+chaque axe de la couleur de sa série ; le revenu derrière ; et aucune aire
+dégradée, qui noierait les barres.
+
+La courbe de la période précédente est tombée avec : trois tracés sur un dessin
+qui porte deux échelles, c'était le tracé de trop. L'écart reste annoncé en
+chiffres par le bandeau. Voir `apps/web/src/components/traffic-revenue-chart.tsx`,
+où la décision vit.
 
 ## 3. Acquisition — la section qui porte la page
 

@@ -1,5 +1,6 @@
 import type {
   AnalyticsSummary,
+  RevenueSeriesPage,
   SessionRow,
   SessionsPage,
   Source,
@@ -562,4 +563,61 @@ export function visitorsByAxis(sessions: SessionRow[]): AxisVisitors {
     campaign: counted(seen.campaign),
     landing: counted(seen.landing),
   };
+}
+
+/**
+ * La devise qui pèse le plus dans la série.
+ *
+ * Le graphique n'en dessine qu'une : empiler des euros et des dollars
+ * demanderait un taux de change, donc une date de taux, donc une décision qui
+ * n'appartient pas à un dessin. Montrer la seconde par défaut ferait passer
+ * l'essentiel du revenu pour du vide.
+ *
+ * `null` quand la série est vide — le graphique n'affiche alors aucune barre, ce
+ * qui est exact. Les autres devises restent lisibles dans la carte de qualité de
+ * la mesure, en bas de page.
+ */
+export function dominantCurrency(
+  series: RevenueSeriesPage | undefined,
+): string | null {
+  const totals = new Map<string | null, number>();
+
+  for (const point of series?.points ?? []) {
+    totals.set(point.currency, (totals.get(point.currency) ?? 0) + point.amount);
+  }
+
+  const [top] = [...totals].sort(([, a], [, b]) => b - a);
+
+  return top?.[0] ?? null;
+}
+
+/**
+ * Le revenu d'une devise, aligné sur les journées du trafic.
+ *
+ * La route ne rend **pas** les pas vides : un jour sans paiement n'a aucun
+ * point, parce qu'un `group by` ne fabrique pas les lignes qu'il n'a pas.
+ * Combler appartient donc au lecteur — et c'est ici, parce que lui seul sait
+ * quelles journées il affiche.
+ *
+ * Un jour absent devient **zéro** et non une absence : les deux se ressemblent
+ * sur un graphique en barres, mais l'absence décalerait la série par rapport à
+ * la courbe du trafic, qui porte toutes les journées.
+ */
+export function revenueByDay(
+  starts: string[],
+  series: RevenueSeriesPage | undefined,
+  currency: string | null,
+): Map<string, { revenue: number; payments: number }> {
+  const byDay = new Map(
+    (series?.points ?? [])
+      .filter((point) => point.currency === currency)
+      .map((point) => [
+        new Date(point.start).toISOString(),
+        { revenue: point.amount, payments: point.payments },
+      ]),
+  );
+
+  return new Map(
+    starts.map((start) => [start, byDay.get(start) ?? { revenue: 0, payments: 0 }]),
+  );
 }
