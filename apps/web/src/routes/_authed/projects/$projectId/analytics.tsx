@@ -29,9 +29,6 @@ import {
 } from '#/components/ui/empty';
 import { Button } from '#/components/ui/button';
 import { Hint } from '#/components/hint';
-import { MeasurementQuality } from '#/components/measurement-quality';
-import { CohortsCard } from '#/components/revenue/cohorts-card';
-import { MovementsCard } from '#/components/revenue/movements-card';
 import { TrafficRevenueChart } from '#/components/traffic-revenue-chart';
 import { PeriodSelector } from '#/components/period-selector';
 import { Badge } from '#/components/ui/badge';
@@ -84,8 +81,6 @@ import {
   ACQUISITION_AXES,
   AUDIENCE_AXES,
   attributionQuery,
-  cohortsQuery,
-  movementsQuery,
   revenueSeriesQuery,
   type AttributionAxis,
   type RevenueAttributionPage,
@@ -253,11 +248,6 @@ function Analytics() {
   // Le second panneau du graphique. Un pas quotidien : il doit tomber sur les
   // mêmes journées que le trafic, qui est replié au jour.
   const series = useQuery(revenueSeriesQuery(projectId, days, offset, 'day'));
-  // Les deux seules lectures qui ne suivent pas le sélecteur de période : une
-  // cohorte et un mouvement d'abonnement se comptent au **mois**, et une fenêtre
-  // de sept jours n'en montrerait aucun. Voir `cohortsQuery`.
-  const cohorts = useQuery(cohortsQuery(projectId));
-  const movements = useQuery(movementsQuery(projectId));
   const projects = useQuery(projectsQuery());
   const ingestion = useQuery(ingestionQuery(projectId));
 
@@ -509,22 +499,6 @@ function Analytics() {
           </div>
 
           <Locations projectId={projectId} days={days} offset={offset} />
-
-          {/* Rétention et valeur. Les deux cartes lisent les mois, pas la
-              fenêtre du haut de page — elles le disent elles-mêmes. */}
-          <div className="grid items-start gap-4 lg:grid-cols-2">
-            <CohortsCard page={cohorts.data} />
-            <MovementsCard page={movements.data} />
-          </div>
-
-          {/* En pied de page, et jamais ailleurs : annoncer un revenu attribué
-              sans dire quelle part échappe à la mesure est un mensonge par
-              omission. La carte ferme la page parce qu'elle qualifie tout ce qui
-              précède, pas parce qu'elle compte moins. */}
-          <MeasurementQuality
-            attribution={attribution.data}
-            summary={summary.data}
-          />
         </>
       )}
     </div>

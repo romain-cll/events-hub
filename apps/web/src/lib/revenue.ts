@@ -1,28 +1,16 @@
 import {
-  cohortsPageSchema,
-  movementsPageSchema,
   revenueAttributionPageSchema,
   revenueSeriesPageSchema,
-  type CohortsPage,
-  type MovementsPage,
   type RevenueAttributionPage,
   type RevenueSeriesPage,
   type SeriesStep,
-  type UnsourcedRevenue,
 } from '@events-hub/api-contract';
 import { queryOptions } from '@tanstack/react-query';
 
 import { windowFor, type Period } from './analytics';
 import { apiJson } from './api';
 
-export type {
-  CohortsPage,
-  MovementsPage,
-  RevenueAttributionPage,
-  RevenueSeriesPage,
-  SeriesStep,
-  UnsourcedRevenue,
-};
+export type { RevenueAttributionPage, RevenueSeriesPage, SeriesStep };
 
 /**
  * L'accès aux lectures de revenu, et il n'y en a qu'une pour l'instant.
@@ -153,52 +141,6 @@ export function revenueSeriesQuery(
       apiJson(
         `/v1/projects/${projectId}/revenue/series?${params.toString()}`,
         revenueSeriesPageSchema,
-      ),
-  });
-}
-
-/**
- * Les cohortes d'acquisition, et ce qu'elles deviennent.
- *
- * ## Sa fenêtre n'est pas celle de la page
- *
- * Les autres lectures suivent le sélecteur de période ; celle-ci ne le peut
- * pas. Une cohorte se juge sur des **mois**, et la suivre sur sept jours ne
- * dirait rien — la matrice n'aurait qu'une colonne, et cette colonne serait le
- * mois en cours, donc non close.
- *
- * Elle prend donc les douze derniers mois, quelle que soit la période choisie
- * en haut de page, et la carte le dit dans son en-tête. C'est la seule lecture
- * de l'écran dans ce cas, et c'est assumé : le contraire ferait afficher une
- * matrice vide six fois sur sept.
- */
-export function cohortsQuery(projectId: string, depth = 6) {
-  const params = new URLSearchParams({ depth: String(depth) });
-
-  return queryOptions({
-    queryKey: ['revenue', projectId, 'cohorts', depth],
-    queryFn: () =>
-      apiJson(
-        `/v1/projects/${projectId}/revenue/cohorts?${params.toString()}`,
-        cohortsPageSchema,
-      ),
-  });
-}
-
-/**
- * Les entrées et les sorties d'abonnement, mois par mois.
- *
- * Même raison que les cohortes de ne pas suivre le sélecteur de période : un
- * mouvement d'abonnement se compte au mois, et une fenêtre de sept jours n'en
- * montrerait aucun. La route rend d'elle-même les douze derniers mois clos.
- */
-export function movementsQuery(projectId: string) {
-  return queryOptions({
-    queryKey: ['revenue', projectId, 'movements'],
-    queryFn: () =>
-      apiJson(
-        `/v1/projects/${projectId}/revenue/movements`,
-        movementsPageSchema,
       ),
   });
 }
