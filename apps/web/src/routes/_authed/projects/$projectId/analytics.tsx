@@ -478,23 +478,32 @@ function Analytics() {
           {/* Quatre colonnes sur grand écran, deux sur moyen. Trois cartes
               plus une case vide ne se rangent pas en trois colonnes : la
               quatrième tomberait seule sur une seconde ligne. */}
-          {/* Six cartes sur une ligne, **mais seulement quand il y a la place**.
-              Le seuil n'est pas choisi au jugé : à `xl` (1 280 px) la barre et
-              les marges laissent 1 016 px de contenu, donc des cartes de 158 px
-              — exactement la largeur où « 14.9 pts » passait à la ligne et
-              chevauchait le taux de rebond. À `2xl` il reste 1 272 px, soit
-              200 px par carte, et tout tient.
+          {/* Cinq cartes, et une seule ligne sur tout écran de bureau.
+              À six, le seuil tombait à `2xl` (1 536 px) : en dessous, un
+              portable de 1 440 px héritait de deux rangées, ce qu'un tableau de
+              bord ne mérite pas.
 
-              En dessous on replie par deux : trois colonnes de la tablette au
-              portable, deux sur petit écran, une sur téléphone. Le bandeau
-              gagne une rangée et pousse le graphique, ce qui est le bon
-              arbitrage — un chiffre illisible ne vaut pas mieux qu'un
-              graphique plus bas.
+              Le seuil est **mesuré, pas choisi dans la liste**. `xl` donnait des
+              cartes de 192 px, où « 16.3 pts » passait encore à la ligne sous le
+              taux de rebond — c'est le libellé le plus long du bandeau, et c'est
+              lui qui commande. À 1 400 px il reste 1 136 px de contenu, soit
+              216 px par carte, et tout tient. Aucun palier de Tailwind ne tombe
+              là, d'où `wide` — défini dans `styles.css`, et **pas** une variante
+              arbitraire : celles-ci sont émises avant les paliers nommés, donc
+              le `lg:` qui suit les écrase.
 
-              Le revenu et les paiements ne portent pas de comparaison avec la
-              période précédente — il faudrait une seconde lecture d'attribution
-              pour une flèche, et elle coûte quatre agrégations. */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+              La carte qui est partie est `Payments` : le compte des paiements
+              se relit dans la colonne du même nom d'Acquisition, et il ne
+              décidait rien en haut de page. Le revenu, lui, reste — c'est la
+              question du produit.
+
+              En dessous, le repli suit la place : trois colonnes sur tablette,
+              deux sur petit écran, une sur téléphone.
+
+              Le revenu ne porte pas de comparaison avec la période précédente —
+              il faudrait une seconde lecture d'attribution pour une flèche, et
+              elle coûte quatre agrégations. */}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 wide:grid-cols-5">
             <Metric
               label="Unique visitors"
               value={summary.data?.uniqueVisitors}
@@ -512,15 +521,6 @@ function Analytics() {
             />
             <BounceMetric summary={summary.data} previous={compareTo} />
             <RevenueMetric attribution={attribution.data} />
-            {/* `null` et non `undefined` : le second veut dire « on lit
-                encore » et laisse un squelette en place indéfiniment. Ici il n'y
-                aura jamais de comparaison — la mesurer demanderait une seconde
-                lecture d'attribution sur la période précédente. */}
-            <Metric
-              label="Payments"
-              value={paymentsOf(attribution.data)}
-              previous={null}
-            />
           </div>
 
           <Card>
@@ -2138,26 +2138,6 @@ function totalsByCurrency(
   return [...totals]
     .map(([currency, amount]) => ({ currency, amount }))
     .sort((a, b) => b.amount - a.amount);
-}
-
-/**
- * Le nombre de paiements de la période.
- *
- * Additif, contrairement aux visiteurs : un paiement appartient à une ligne et
- * une seule, alors qu'un visiteur peut apparaître derrière deux valeurs d'un
- * même axe. C'est pour ça que la carte compte des paiements et pas des clients.
- */
-function paymentsOf(
-  attribution: RevenueAttributionPage | undefined,
-): number | undefined {
-  const axis = attribution?.campaign;
-
-  if (!axis) return undefined;
-
-  return [...axis.rows, ...axis.direct, ...axis.unattributed].reduce(
-    (sum, row) => sum + row.payments,
-    0,
-  );
 }
 
 /**

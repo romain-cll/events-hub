@@ -13,6 +13,21 @@
   /* Densité : toute l'échelle Tailwind se resserre de 12 % */
   --spacing: 0.22rem;
 
+  /*
+   * Un palier de plus, entre `xl` (1 280) et `2xl` (1 536).
+   *
+   * Il existe pour les rangées d'agrégats, qui tombent exactement dans ce trou :
+   * à `xl` la barre latérale et les marges laissent 1 016 px de contenu — des
+   * cartes trop étroites, où l'évolution passe sous la valeur — et attendre
+   * `2xl` priverait tout portable de 1 440 px d'une ligne unique.
+   *
+   * Un palier nommé plutôt qu'une variante arbitraire (`min-[1400px]:`) : celles
+   * -ci sont émises **avant** les paliers nommés dans la feuille, donc un
+   * `lg:grid-cols-3` qui suit les écrase à spécificité égale. Le palier, lui,
+   * est trié à sa valeur.
+   */
+  --breakpoint-wide: 87.5rem;
+
   --font-sans: 'Plus Jakarta Sans', 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
 
