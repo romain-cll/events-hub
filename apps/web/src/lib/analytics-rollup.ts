@@ -577,9 +577,45 @@ export interface TrafficRow {
   /** Ce sur quoi la ligne se recoupe avec le revenu — voir `acquisitionTraffic`. */
   key: string;
   label: string;
+  /**
+   * Ce qui qualifie le libellé sans le remplacer, en retrait.
+   *
+   * Une campagne en a besoin et les autres axes non : un chemin d'entrée ou un
+   * hôte se suffisent, un nom de campagne ne dit pas d'où il vient.
+   */
+  note: string | null;
   /** Le domaine qui porte l'icône, quand la ligne en désigne un. */
   host: string | null;
   visitors: number;
+}
+
+/**
+ * Comment une campagne s'écrit sur une ligne.
+ *
+ * ## Le triplet joint ne se lit pas
+ *
+ * `google / cpc / brand-search` n'étiquette rien : impossible de savoir laquelle
+ * des trois valeurs est la source, laquelle le support, laquelle le nom. Et une
+ * campagne à deux parties décale tout — `bing / organic` peut être une source et
+ * un support, ou une source et un nom, sans qu'on puisse trancher.
+ *
+ * Le **nom** porte donc la ligne, parce que c'est lui qu'on a choisi en montant
+ * la campagne et lui qu'on cherche. La source et le support le qualifient, en
+ * retrait : ils répondent à « d'où » quand le nom répond à « laquelle ».
+ *
+ * Sans nom, la paire remonte en libellé — mieux vaut une ligne qui s'annonce
+ * incomplète qu'une ligne vide à côté d'une note qui porterait tout.
+ */
+export function campaignLabel(campaign: {
+  source: string | null;
+  medium: string | null;
+  name: string | null;
+}): { label: string; note: string | null } {
+  const from = [campaign.source, campaign.medium].filter(Boolean).join(' · ');
+
+  if (campaign.name) return { label: campaign.name, note: from || null };
+
+  return { label: from || '(unnamed)', note: null };
 }
 
 /** Les quatre axes de la carte Acquisition, dans l'ordre de ses onglets. */
@@ -646,15 +682,21 @@ export function acquisitionTraffic(
     count('source', {
       key: nature,
       label: NATURE_LABELS[nature],
+      note: null,
       host: null,
     });
 
     if (campaign) {
-      const label = [campaign.source, campaign.medium, campaign.name]
-        .filter(Boolean)
-        .join(' / ');
-
-      count('campaign', { key: label, label, host: null });
+      // La clé reste le triplet joint : c'est sous cette forme que le serveur
+      // libelle ses lignes de revenu, et les deux moitiés doivent se recouper.
+      // Seul l'affichage se sépare en deux étages.
+      count('campaign', {
+        key: [campaign.source, campaign.medium, campaign.name]
+          .filter(Boolean)
+          .join(' / '),
+        ...campaignLabel(campaign),
+        host: null,
+      });
     }
 
     // Ni `direct` ni `internal` : le premier n'a pas de site à nommer, le
@@ -668,12 +710,18 @@ export function acquisitionTraffic(
       count('referrer', {
         key: source.name,
         label: source.label,
+        note: null,
         host: source.host,
       });
     }
 
     if (entryPath) {
-      count('landing', { key: entryPath, label: entryPath, host: null });
+      count('landing', {
+        key: entryPath,
+        label: entryPath,
+        note: null,
+        host: null,
+      });
     }
   }
 

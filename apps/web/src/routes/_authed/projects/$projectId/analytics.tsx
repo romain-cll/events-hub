@@ -51,6 +51,7 @@ import {
 import {
   acquisitionTraffic,
   bounceRate,
+  campaignLabel,
   compareVisitors,
   dailyVisitors,
   entryPages,
@@ -1264,6 +1265,9 @@ const CARD_BODY = 'h-106';
  */
 const CARD_ROWS = 8;
 
+/** Le seul libellé de nature que cet écran ait à écrire lui-même. */
+const NATURE_LABEL_DIRECT = 'Direct';
+
 /**
  * Le même corps, mais en **plancher**, pour les cartes de revenu.
  *
@@ -1760,6 +1764,8 @@ function Audience({
 interface AcquisitionRow {
   key: string;
   label: string;
+  /** Ce qui qualifie le libellé sans le remplacer — voir `campaignLabel`. */
+  note: string | null;
   /** Le domaine qui porte l'icône, quand la ligne désigne un site. */
   host: string | null;
   visitors: number;
@@ -1804,12 +1810,20 @@ function acquisitionColumns(
     {
       key: 'label',
       head: AXIS_LABELS[axis],
-      sortBy: (row) => row.label.toLowerCase(),
+      sortBy: (row) => `${row.label} ${row.note ?? ''}`.toLowerCase(),
       cell: (row) => (
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="flex min-w-0 items-center gap-1.5">
+          <span className="flex min-w-0 items-baseline gap-1.5">
             {row.host && <Favicon host={row.host} />}
             <span className="truncate">{row.label}</span>
+            {/* Sur la même ligne et non dessous : le rang porte déjà la barre
+                de part, et un troisième étage ne tiendrait pas dans sa hauteur.
+                En retrait pour que le nom reste ce qu'on lit d'abord. */}
+            {row.note && (
+              <span className="truncate text-xs text-muted-foreground">
+                {row.note}
+              </span>
+            )}
           </span>
           {/* La part du trafic, sous le libellé et non dans une colonne : elle
               répond à « combien, comparé aux autres ? », que la colonne
@@ -1946,28 +1960,51 @@ function Acquisition({
     // qu'elles ont en commun, c'est-à-dire à rien de ce dont on a besoin.
     const earned = new Map<
       string,
-      { amount: number; visitors: number; currency: string | null }
+      {
+        amount: number;
+        visitors: number;
+        currency: string | null;
+        label: string;
+        note: string | null;
+      }
     >();
 
-    const keyed =
+    // Chaque branche rend la **même** forme, `note` comprise : laisser les
+    // formes de l'API remonter telles quelles réduisait l'union à ce qu'elles
+    // ont en commun, c'est-à-dire à rien de ce dont l'affichage a besoin.
+    const keyed: {
+      key: string;
+      label: string;
+      note: string | null;
+      amount: number;
+      visitors: number;
+      currency: string | null;
+    }[] =
       tab === 'source'
         ? (revenue?.source?.rows ?? []).map((row) => ({
-            key: row.nature,
             ...row,
+            key: row.nature,
+            note: null,
           }))
         : tab === 'referrer'
           ? (revenue?.referrer?.rows ?? []).map((row) => ({
-              key: row.source.name ?? row.label,
               ...row,
+              key: row.source.name ?? row.label,
+              note: null,
             }))
           : tab === 'campaign'
             ? (revenue?.campaign?.rows ?? []).map((row) => ({
-                key: row.label,
                 ...row,
+                // Le libellé joint du serveur reste la **clé** — c'est sur lui
+                // que le trafic se recoupe — mais l'affichage sépare le nom de
+                // ce qui le qualifie.
+                key: row.label,
+                ...campaignLabel(row.campaign),
               }))
             : (revenue?.landing?.rows ?? []).map((row) => ({
-                key: row.label,
                 ...row,
+                key: row.label,
+                note: null,
               }));
 
     // Sur l'axe des natures, l'ensemble `direct` du serveur **est** la ligne
@@ -1983,8 +2020,13 @@ function Acquisition({
         ? [
             ...keyed,
             ...(revenue?.source?.direct ?? []).map((row) => ({
-              key: 'direct',
               ...row,
+              key: 'direct',
+              // Le trafic porte déjà le libellé de cette ligne ; ceux-ci ne
+              // servent qu'au cas où aucune visite de la fenêtre ne la
+              // réclame.
+              label: NATURE_LABEL_DIRECT,
+              note: null,
             })),
           ]
         : keyed;
@@ -2000,6 +2042,8 @@ function Acquisition({
           amount: row.amount,
           visitors: row.visitors,
           currency: row.currency,
+          label: row.label,
+          note: row.note,
         });
       }
     }
@@ -2011,6 +2055,7 @@ function Acquisition({
       return {
         key: row.key,
         label: row.label,
+        note: row.note,
         host: row.host,
         visitors: row.visitors,
         customers: money?.visitors ?? 0,
@@ -2025,7 +2070,8 @@ function Acquisition({
     // le taire ferait mentir la colonne Revenue.
     const older = [...earned].map<AcquisitionRow>(([key, money]) => ({
       key,
-      label: key,
+      label: money.label,
+      note: money.note,
       host: null,
       visitors: 0,
       customers: money.visitors,
