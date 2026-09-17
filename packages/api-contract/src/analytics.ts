@@ -158,9 +158,22 @@ export const sourceSchema = z.object({
    * `assistant` est à part de `search`, et ce n'est pas un détail de rangement :
    * un moteur envoie vers une page, un assistant a **déjà répondu** et n'envoie
    * qu'accessoirement. Les fondre ferait lire « la recherche m'apporte X
-   * visites » en y comptant autre chose.
+   * visites » en y comptant autre chose. `social` est là pour la même raison.
+   *
+   * `other` est le fourre-tout, et il s'appelle ainsi exprès : il a porté le
+   * nom `referral` tant qu'il était la seule sortie pour un site externe, ce
+   * qui promettait une interprétation qu'il n'a pas. Ce qu'aucun ensemble
+   * connu ne revendique tombe dedans, **avec son hôte** — donc nommable, même
+   * si sa nature ne dit rien.
    */
-  kind: z.enum(['direct', 'search', 'assistant', 'referral', 'internal']),
+  kind: z.enum([
+    'direct',
+    'search',
+    'assistant',
+    'social',
+    'other',
+    'internal',
+  ]),
   name: z.string().nullable(),
   /**
    * Le même fait, écrit pour un humain : `Google`, `ChatGPT`, `Direct`,
@@ -178,7 +191,7 @@ export const sourceSchema = z.object({
    * À ne pas confondre avec `name`, et c'est toute la raison de ce champ :
    * `name` vaut `google` pour un moteur — un label d'hôte, que le relais de
    * favicons refuse parce que ce n'est pas un nom d'hôte. `host` vaut
-   * `google.com`. Sur un `referral` ou un `internal`, les deux coïncident.
+   * `google.com`. Sur un `other` ou un `internal`, les deux coïncident.
    *
    * Il vient du serveur pour la même raison que `label` : compléter `google` en
    * `google.com` côté client aurait recréé là-bas la liste des moteurs.

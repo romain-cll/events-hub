@@ -480,20 +480,26 @@ export function exits(sessions: SessionRow[]): ExitRow[] {
 }
 
 /**
- * Les sites qui nous envoient du monde, hors moteurs et assistants.
+ * Les sites qui nous envoient du monde, nommés par leur hôte.
  *
  * Un sous-ensemble de `trafficSources`, pas un second calcul : c'est la même
- * classification, filtrée sur `referral`. Les moteurs et les assistants ont
- * leur ligne dans l'onglet Sources, et les remettre ici les compterait deux
- * fois sous deux noms.
+ * classification, lue à un autre grain. Sources répond « quelle **nature** de
+ * trafic », Referrers « quel **site** » — et le second ne se restreint pas à
+ * ceux qu'on n'a pas su classer : Google et Reddit ont leur ligne ici comme
+ * ailleurs, parce que la question posée a changé, pas le périmètre.
  *
- * Les referrers **sans nom** — un referrer illisible — sont écartés : il n'y a
- * pas d'hôte à écrire, et une ligne vide dans un classement d'hôtes n'apprend
- * rien. Leur nombre reste visible dans l'onglet Sources, sous `Referral`.
+ * Deux natures en sortent, et pour deux raisons différentes. `direct` n'a pas
+ * de site à nommer. `internal`, si, mais ce n'est pas une provenance — c'est
+ * nous. L'inscrire ici le ferait passer pour un site qui nous envoie du monde.
+ *
+ * Les referrers **sans nom** — un referrer illisible — sont écartés aussi : il
+ * n'y a pas d'hôte à écrire, et une ligne vide dans un classement d'hôtes
+ * n'apprend rien. Leur nombre reste visible dans Sources, sous `Other`.
  */
 export function referrers(sessions: SessionRow[]): SourceRow[] {
   return trafficSources(sessions).rows.filter(
-    (row) => row.kind === 'referral' && row.name !== null,
+    (row) =>
+      row.name !== null && row.kind !== 'direct' && row.kind !== 'internal',
   );
 }
 

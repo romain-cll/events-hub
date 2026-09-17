@@ -210,7 +210,7 @@ Une session peut commencer avant `from` et n'exposer que sa fin. Elle est alors 
 | Un `page_view` d'un site **multi-pages**      | `internal`                         | Non. C'est précisément la catégorie « on n'a pas vu l'arrivée ». |
 | Un `page_view` d'une **application monopage** | la vraie provenance externe        | La source est juste. C'est le `path` qui n'est pas une landing.  |
 
-Aucune de ces branches ne produit de **fausse acquisition** : on ne peut pas inventer un `search` ou un `referral` qui n'a pas eu lieu. Le seul défaut résiduel est le `path` du troisième cas.
+Aucune de ces branches ne produit de **fausse acquisition** : on ne peut pas inventer un `search` ou un `social` qui n'a pas eu lieu. Le seul défaut résiduel est le `path` du troisième cas.
 
 On sait désormais **que** la session a été coupée : `Session.startedAt` porte le vrai début, et `startedAt < from` identifie exactement les sessions concernées. C'est ce que l'étape 28 exploite (voir juste en dessous). Ce qu'on ne sait toujours pas, c'est quelle page l'a ouverte.
 
@@ -228,10 +228,10 @@ Nuance qui a sa place ici : une vue de page arrivée **sans aucun attribut explo
 
 ### Les catégories
 
-Inchangées, et elles restent bonnes : `direct` / `search` / `referral` / `internal`.
+Six natures : `direct` / `search` / `assistant` / `social` / `other` / `internal`. `other` est le fourre-tout assumé — il a porté le nom `referral` tant qu'il était la seule sortie pour un site externe, ce qui promettait une interprétation qu'il n'a pas. On ne tiendra pas la liste des sites de la planète ; ce qu'aucun ensemble connu ne revendique y tombe **avec son hôte**, donc nommable.
 
 - **Additive** : non, quel que soit le niveau.
-- **Cas limite majeur** : `internal` n'est pas de l'acquisition. C'est un referrer pointant sur nous — rechargement, ancre, session attrapée après un changement de document. Il est **rendu plutôt qu'écarté** parce que sa part dit à quel point la lecture est polluée. L'acquisition, c'est `direct + search + referral`.
+- **Cas limite majeur** : `internal` n'est pas de l'acquisition. C'est un referrer pointant sur nous — rechargement, ancre, session attrapée après un changement de document. Il est **rendu plutôt qu'écarté** parce que sa part dit à quel point la lecture est polluée. L'acquisition, c'est `direct + search + assistant + social + other`.
 - **Cas limite majeur** : `direct` veut dire « aucune provenance connue », pas « quelqu'un a tapé l'URL ». Le navigateur ne donne pas de referrer sur une entrée directe, mais pas non plus avec une `Referrer-Policy` restrictive, en HTTPS → HTTP, ou depuis certaines apps natives.
 
 ---

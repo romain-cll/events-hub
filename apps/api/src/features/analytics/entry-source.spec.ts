@@ -182,13 +182,58 @@ describe('la nature d’un referrer', () => {
     });
   });
 
-  it('classe un site externe en referral, sans le www', () => {
+  it('classe un site inconnu en other, sans le www', () => {
     expect(referrerLu('https://www.blog.autre.test/a')).toEqual({
-      kind: 'referral',
+      kind: 'other',
       name: 'blog.autre.test',
       // Un hôte s'écrit déjà comme il se lit : le libellé le reprend tel quel.
       label: 'blog.autre.test',
       host: 'blog.autre.test',
+    });
+  });
+
+  it('classe un réseau social par son label d’hôte', () => {
+    expect(referrerLu('https://www.linkedin.com/feed/')).toEqual({
+      kind: 'social',
+      name: 'linkedin',
+      label: 'LinkedIn',
+      host: 'linkedin.com',
+    });
+  });
+
+  it('ramène le domaine court d’un réseau à sa marque', () => {
+    // Le piège de cet ensemble : `t.co` a pour label `t`, pas `twitter`, et
+    // c'est le domaine qui apparaît réellement dans un referrer. Les deux
+    // rendent « X » pour qu'un lien partagé depuis l'application et un lien
+    // collé à la main ne fassent pas deux lignes.
+    expect(referrerLu('https://t.co/xY3f')).toEqual({
+      kind: 'social',
+      name: 't',
+      label: 'X',
+      host: 'x.com',
+    });
+  });
+
+  it('classe YouTube en social, pas en moteur', () => {
+    // Le recouvrement se joue ici : Google l'opère, on y cherche, et pourtant
+    // c'est un réseau. Les réseaux passent donc avant les moteurs.
+    expect(referrerLu('https://www.youtube.com/watch?v=abc')).toEqual({
+      kind: 'social',
+      name: 'youtube',
+      label: 'YouTube',
+      host: 'youtube.com',
+    });
+  });
+
+  it('laisse un forum en other plutôt que de l’appeler social', () => {
+    // Étendre `social` à « tout ce qui a des commentaires » rendrait la
+    // catégorie inutilisable. Un forum est un site, et son hôte se lit très
+    // bien dans l'onglet Referrers.
+    expect(referrerLu('https://news.ycombinator.com/item?id=1')).toEqual({
+      kind: 'other',
+      name: 'news.ycombinator.com',
+      label: 'news.ycombinator.com',
+      host: 'news.ycombinator.com',
     });
   });
 
@@ -206,22 +251,22 @@ describe('la nature d’un referrer', () => {
     // que rien ne porte aujourd'hui. Une ligne visible vaut mieux qu'un
     // rapprochement silencieux et faux.
     expect(referrerLu('https://docs.shop.test/a')).toEqual({
-      kind: 'referral',
+      kind: 'other',
       name: 'docs.shop.test',
       label: 'docs.shop.test',
       host: 'docs.shop.test',
     });
   });
 
-  it('classe en referral sans nom un referrer illisible', () => {
+  it('classe en other sans nom un referrer illisible', () => {
     expect(referrerLu('pas une url')).toEqual({
-      kind: 'referral',
+      kind: 'other',
       name: null,
       // Pas de nom, donc le libellé retombe sur la nature. Inventer un nom
       // serait pire que de ne pas en donner ; ne rien écrire du tout
       // obligerait l'affichage à inventer son propre repli.
-      label: 'Referral',
-      // Le domaine, lui, ne retombe sur rien : `Referral` s'écrit, mais ne
+      label: 'Other',
+      // Le domaine, lui, ne retombe sur rien : `Other` s'écrit, mais ne
       // s'illustre pas.
       host: null,
     });
@@ -229,7 +274,7 @@ describe('la nature d’un referrer', () => {
 
   it('ne devine pas notre origine quand l’URL de la page manque', () => {
     // Sans `page.url`, un rechargement ressemble à une recommandation. On
-    // préfère une ligne `referral` qui se voit à un `internal` inventé.
+    // préfère une ligne `other` qui se voit à un `internal` inventé.
     const sansUrl = sourceOfOnly([
       event('s1', VIEW_TYPE, {
         'page.path': '/accueil',
@@ -238,7 +283,7 @@ describe('la nature d’un referrer', () => {
     ]);
 
     expect(sansUrl).toEqual({
-      kind: 'referral',
+      kind: 'other',
       name: 'shop.test',
       label: 'shop.test',
       host: 'shop.test',

@@ -506,7 +506,7 @@ describe('GET /v1/projects/:projectId/analytics/sessions (e2e)', () => {
         kind: 'internal',
         name: 'shop.test',
         label: 'shop.test',
-        // Pour un `internal` comme pour un `referral`, le nom *est* le domaine.
+        // Pour un `internal` comme pour un `other`, le nom *est* le domaine.
         host: 'shop.test',
       });
     });

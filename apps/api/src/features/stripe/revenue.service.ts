@@ -351,7 +351,7 @@ export class RevenueService {
 
     for (const row of ranking.rows) {
       // L'URL de la page n'est pas passée, et c'est un écart connu : sans elle,
-      // un referrer de notre propre site serait rangé en `referral` plutôt qu'en
+      // un referrer de notre propre site serait rangé en `other` plutôt qu'en
       // `internal`. Sur la **première** page de la **première** visite, le cas
       // est rare par construction — et la remonter obligerait à grouper sur
       // l'URL entière, ce qui ferait exploser le nombre de lignes pour une
