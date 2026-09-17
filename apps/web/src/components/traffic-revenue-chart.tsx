@@ -89,10 +89,10 @@ const NICE_STEPS = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
  *
  * ## Pourquoi une réserve, et pourquoi relative
  *
- * Deux raisons qui vont dans le même sens. Une courbe qui touche le haut de son
- * cadre paraît tassée et donne l'impression d'être coupée ; et `natural` dépasse
- * réellement au-dessus du point le plus haut, donc sans réserve la crête sort du
- * tracé et se fait rogner par le bord du SVG.
+ * Une courbe qui touche le haut de son cadre paraît tassée et donne
+ * l'impression d'être coupée. La réserve tenait aussi, un temps, au dépassement
+ * de la spline `natural` — ce motif-là est tombé avec elle, `monotone` ne sort
+ * pas de l'intervalle de ses points. Il reste le premier, qui suffit.
  *
  * Relative parce qu'elle doit suivre l'échelle au lieu de la subir : un pic à
  * 100 monte l'axe à 120, un pic à 1 000 le monte à 1 200, et le graphique se lit
@@ -371,7 +371,14 @@ export function TrafficRevenueChart({
         <Area
           yAxisId="traffic"
           dataKey="current"
-          type="natural"
+          // `monotone`, et surtout pas `natural`. Une spline naturelle ne passe
+          // pas seulement par les points, elle cherche une courbure continue :
+          // entre 0 et 3 elle plonge **sous** zéro avant de remonter, et
+          // dépasse le 3 avant de redescendre. Sur une série qui ne peut pas
+          // être négative, ce creux est un mensonge, en plus de sortir du
+          // cadre. `monotone` borne chaque tronçon aux deux points qui
+          // l'encadrent : arrondi là où la donnée l'est, jamais au-delà.
+          type="monotone"
           stroke="var(--color-current)"
           fill="url(#traffic-area)"
           // ⚠️ Recharts multiplie ce facteur avec les opacités du dégradé : le
