@@ -520,6 +520,21 @@ export function referrers(sessions: SessionRow[]): SourceRow[] {
  * sessions, il dirait qu'un visiteur fidèle convertit moins bien qu'un visiteur
  * de passage.
  *
+ * ## Le premier contact, et lui seul
+ *
+ * Un visiteur n'est compté que sur sa **première visite de la fenêtre**, pas
+ * sur chacune. Sans ça, quelqu'un venu par une campagne puis revenu en direct
+ * compterait dans les deux, les colonnes ne sommeraient plus le trafic total,
+ * et surtout le dénominateur cesserait de coïncider avec le numérateur : le
+ * revenu, lui, est attribué à la première visite et à elle seule. Deux modèles
+ * d'attribution dans une même ligne rendraient un taux de conversion faux sans
+ * que rien ne le signale.
+ *
+ * ⚠️ « Première de la fenêtre » n'est pas « première tout court » : une fenêtre
+ * de trente jours ne voit pas l'acquisition d'un visiteur arrivé l'an dernier.
+ * Le serveur, lui, remonte à la vraie première visite pour le revenu. L'écart
+ * est celui de la fenêtre, et il se referme en l'élargissant.
+ *
  * ⚠️ L'alias ne vaut que dans **une** réponse et ne franchit pas la journée :
  * deux fenêtres ne se recoupent pas, et c'est voulu. Voir `SessionRow`.
  */
@@ -527,6 +542,152 @@ export interface AxisVisitors {
   source: Map<string, number>;
   campaign: Map<string, number>;
   landing: Map<string, number>;
+}
+
+/** La nature d'un trafic telle que la carte Acquisition la range. */
+export type TrafficNature =
+  NonNullable<SessionRow['source']>['kind'] | 'campaign';
+
+/**
+ * Les libellés des natures.
+ *
+ * ## Pourquoi celui-ci est écrit ici alors que les autres viennent du serveur
+ *
+ * La règle qui interdit une table de libellés côté client vise la **casse d'un
+ * nom propre** : `duckduckgo` s'écrit `DuckDuckGo`, `chatgpt` s'écrit
+ * `ChatGPT`, et ça, c'est une connaissance métier qui divergerait au premier
+ * moteur ajouté. Voir `sourceSchema.label`.
+ *
+ * Une nature n'est pas un nom propre. C'est une énumération fermée de six mots
+ * anglais que le contrat publie déjà, et dont la présentation ne porte aucune
+ * connaissance. Le jour où une septième apparaît, le compilateur le dira ici.
+ */
+const NATURE_LABELS: Record<TrafficNature, string> = {
+  direct: 'Direct',
+  search: 'Search',
+  assistant: 'Assistant',
+  social: 'Social',
+  other: 'Other',
+  internal: 'Internal',
+  campaign: 'Campaign',
+};
+
+/** Une ligne de trafic, avant que le revenu ne s'y joigne. */
+export interface TrafficRow {
+  /** Ce sur quoi la ligne se recoupe avec le revenu — voir `acquisitionTraffic`. */
+  key: string;
+  label: string;
+  /** Le domaine qui porte l'icône, quand la ligne en désigne un. */
+  host: string | null;
+  visitors: number;
+}
+
+/** Les quatre axes de la carte Acquisition, dans l'ordre de ses onglets. */
+export type AcquisitionAxis = 'source' | 'campaign' | 'referrer' | 'landing';
+
+/**
+ * Le trafic de la fenêtre, rangé sur les quatre axes d'acquisition.
+ *
+ * ## Pourquoi le trafic pilote le tableau, et non le revenu
+ *
+ * La carte répondait jusqu'ici avec les lignes de l'attribution, donc
+ * uniquement celles qui avaient encaissé quelque chose. Une campagne qui amène
+ * cent quatre-vingts visiteurs et zéro euro n'y apparaissait pas — alors que
+ * c'est exactement la ligne qu'on vient chercher. Et trier par trafic n'aurait
+ * eu aucun sens sur un classement qui n'en contient qu'une partie.
+ *
+ * Le revenu se **joint** donc dessus, par la clé que chaque axe définit :
+ *
+ * - `source` : la nature, `campaign` l'emportant sur celle du referrer, comme
+ *   le serveur le fait pour le revenu. Les deux règles doivent coïncider, sans
+ *   quoi une ligne aurait des visiteurs d'un côté et du revenu de l'autre ;
+ * - `campaign` : les trois parties jointes par des barres, à l'identique ;
+ * - `referrer` : le **label d'hôte** que le serveur a normalisé, pas l'hôte
+ *   complet, parce que c'est lui que l'API rend dans `source.name` ;
+ * - `landing` : le chemin d'entrée.
+ */
+export function acquisitionTraffic(
+  sessions: SessionRow[],
+): Record<AcquisitionAxis, TrafficRow[]> {
+  const firsts = new Map<string, SessionRow>();
+
+  for (const session of sessions) {
+    const seen = firsts.get(session.visitorAlias);
+
+    if (!seen || session.startedAt < seen.startedAt) {
+      firsts.set(session.visitorAlias, session);
+    }
+  }
+
+  const axes: Record<AcquisitionAxis, Map<string, TrafficRow>> = {
+    source: new Map(),
+    campaign: new Map(),
+    referrer: new Map(),
+    landing: new Map(),
+  };
+
+  const count = (
+    axis: AcquisitionAxis,
+    row: Omit<TrafficRow, 'visitors'>,
+  ): void => {
+    const seen = axes[axis].get(row.key);
+
+    if (seen) seen.visitors += 1;
+    else axes[axis].set(row.key, { ...row, visitors: 1 });
+  };
+
+  for (const session of firsts.values()) {
+    const { campaign, source, entryPath } = session;
+
+    const nature: TrafficNature = campaign
+      ? 'campaign'
+      : (source?.kind ?? 'direct');
+
+    count('source', {
+      key: nature,
+      label: NATURE_LABELS[nature],
+      host: null,
+    });
+
+    if (campaign) {
+      const label = [campaign.source, campaign.medium, campaign.name]
+        .filter(Boolean)
+        .join(' / ');
+
+      count('campaign', { key: label, label, host: null });
+    }
+
+    // Ni `direct` ni `internal` : le premier n'a pas de site à nommer, le
+    // second en a un mais c'est le nôtre — l'inscrire le ferait passer pour un
+    // site qui nous envoie du monde.
+    if (
+      source?.name &&
+      source.kind !== 'direct' &&
+      source.kind !== 'internal'
+    ) {
+      count('referrer', {
+        key: source.name,
+        label: source.label,
+        host: source.host,
+      });
+    }
+
+    if (entryPath) {
+      count('landing', { key: entryPath, label: entryPath, host: null });
+    }
+  }
+
+  const ordered = (rows: Map<string, TrafficRow>): TrafficRow[] =>
+    [...rows.values()].sort(
+      (a, b) => b.visitors - a.visitors || a.label.localeCompare(b.label),
+    );
+
+  return {
+    source: ordered(axes.source),
+    campaign: ordered(axes.campaign),
+    referrer: ordered(axes.referrer),
+    landing: ordered(axes.landing),
+  };
 }
 
 export function visitorsByAxis(sessions: SessionRow[]): AxisVisitors {
@@ -544,7 +705,8 @@ export function visitorsByAxis(sessions: SessionRow[]): AxisVisitors {
   };
 
   for (const session of sessions) {
-    if (session.source) add('source', session.source.label, session.visitorAlias);
+    if (session.source)
+      add('source', session.source.label, session.visitorAlias);
 
     if (session.campaign) {
       const { source, medium, name } = session.campaign;
@@ -589,7 +751,10 @@ export function dominantCurrency(
   const totals = new Map<string | null, number>();
 
   for (const point of series?.points ?? []) {
-    totals.set(point.currency, (totals.get(point.currency) ?? 0) + point.amount);
+    totals.set(
+      point.currency,
+      (totals.get(point.currency) ?? 0) + point.amount,
+    );
   }
 
   const [top] = [...totals].sort(([, a], [, b]) => b - a);
@@ -624,6 +789,9 @@ export function revenueByDay(
   );
 
   return new Map(
-    starts.map((start) => [start, byDay.get(start) ?? { revenue: 0, payments: 0 }]),
+    starts.map((start) => [
+      start,
+      byDay.get(start) ?? { revenue: 0, payments: 0 },
+    ]),
   );
 }

@@ -122,6 +122,8 @@ export function DataTable<Row extends RowData>({
   empty,
   initialSort,
   pageSize,
+  paginate = true,
+  density = 'compact',
   onRowEnter,
   onRowLeave,
   rowState,
@@ -132,8 +134,32 @@ export function DataTable<Row extends RowData>({
   empty: { title: string; description: string };
   /** La colonne ordonnée au premier rendu, et son sens. */
   initialSort?: { key: string; descending?: boolean };
-  /** Absent, tout est rendu : c'est le cas de la carte, pas celui du dialogue. */
+  /**
+   * Combien de lignes sont rendues d'un coup. Absent, tout l'est.
+   *
+   * Il **coupe**, il ne trie pas : le classement porte toujours sur la totalité
+   * des lignes. Trier ce qui a déjà été coupé rendrait le premier rang d'un
+   * sous-ensemble, ce qui est faux et ne se voit pas.
+   */
   pageSize?: number;
+  /**
+   * Les boutons de page. `false` coupe sans les offrir.
+   *
+   * C'est le cas de la carte : elle montre les huit premières lignes et renvoie
+   * au tiroir pour le reste. Y ajouter « Précédent / Suivant » en plus du bouton
+   * « See more » donnerait deux façons de faire la même chose à dix pixels
+   * d'écart, dont une qui pagine dans une hauteur calibrée pour huit rangs.
+   */
+  paginate?: boolean;
+  /**
+   * `roomy` quand une cellule porte deux étages — un libellé et sa barre de
+   * part, par exemple.
+   *
+   * Deux valeurs et non une hauteur libre : les classes sont écrites en toutes
+   * lettres parce que le scanner de Tailwind lit les **littéraux** du source, et
+   * une classe composée à l'exécution ne serait jamais générée.
+   */
+  density?: 'compact' | 'roomy';
   /** Le survol croisé avec le planisphère — voir `Locations`. */
   onRowEnter?: (row: Row) => void;
   onRowLeave?: () => void;
@@ -182,6 +208,11 @@ export function DataTable<Row extends RowData>({
     // Un tri qui ne ramène pas à la première page laisse le lecteur devant la
     // page 4 d'un classement qu'il vient de retourner.
     autoResetPageIndex: true,
+    // Le troisième clic **n'annule pas** le tri. Par défaut il le retire, et la
+    // table retombe alors sur l'ordre des données — qui ressemble à un
+    // classement sans en être un : le lecteur croit avoir trié par une colonne
+    // et regarde l'ordre d'une autre. Deux sens suffisent, et ils se devinent.
+    enableSortingRemoval: false,
   });
 
   if (rows.length === 0) {
@@ -199,132 +230,142 @@ export function DataTable<Row extends RowData>({
     .map((column) => column.width ?? 'minmax(0,1fr)')
     .join(' ');
 
-  const paginated = pageSize !== undefined && rows.length > pageSize;
+  const paginated =
+    paginate && pageSize !== undefined && rows.length > pageSize;
   const pageIndex = table.state.pagination?.pageIndex ?? 0;
   const shown = table.getRowModel().rows.length;
 
   return (
-    <div className="flex w-full flex-col text-sm">
-      <div
-        className="grid h-10 items-center border-b border-border"
-        style={{ gridTemplateColumns: template }}
-      >
-        {table.getHeaderGroups()[0].headers.map((header, rank) => {
-          const column = columns[rank];
-          const sortable = header.column.getCanSort();
-          const direction = header.column.getIsSorted();
+    /* Six colonnes ne tiennent pas dans 390 px, et il n'y a rien à y faire :
+       les rétrécir rendrait les montants illisibles, en cacher ferait
+       disparaître la comparaison que le tableau existe pour porter. Il défile
+       donc **dans son cadre**, la page restant fixe — un tableau qui pousse la
+       page entière vers la droite emporte tout le reste avec lui. */
+    <div className="w-full overflow-x-auto">
+      <div className="flex min-w-[42rem] flex-col text-sm">
+        <div
+          className="grid h-10 items-center border-b border-border"
+          style={{ gridTemplateColumns: template }}
+        >
+          {table.getHeaderGroups()[0].headers.map((header, rank) => {
+            const column = columns[rank];
+            const sortable = header.column.getCanSort();
+            const direction = header.column.getIsSorted();
 
-          const label = column.hint ? (
-            <Hint title={column.hint}>{column.head}</Hint>
-          ) : (
-            column.head
-          );
+            const label = column.hint ? (
+              <Hint title={column.hint}>{column.head}</Hint>
+            ) : (
+              column.head
+            );
+
+            return (
+              <div
+                key={header.id}
+                className={`flex min-w-0 items-center gap-1 px-2 font-medium whitespace-nowrap ${
+                  column.align === 'right' ? 'justify-end' : ''
+                }`}
+              >
+                {sortable ? (
+                  <button
+                    type="button"
+                    onClick={header.column.getToggleSortingHandler()}
+                    className={`group flex min-w-0 items-center gap-1 ${
+                      column.align === 'right' ? 'flex-row-reverse' : ''
+                    }`}
+                  >
+                    <span className="truncate">{label}</span>
+                    {direction === 'asc' ? (
+                      <ChevronUpIcon className="size-3.5 shrink-0" />
+                    ) : direction === 'desc' ? (
+                      <ChevronDownIcon className="size-3.5 shrink-0" />
+                    ) : (
+                      // Invisible mais **présent** : sans lui, la largeur de
+                      // l'en-tête changerait au premier tri et toute la ligne
+                      // bougerait sous le curseur.
+                      <ChevronsUpDownIcon className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                    )}
+                  </button>
+                ) : (
+                  label
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {table.getRowModel().rows.map((row) => {
+          const state = rowState?.(row.original);
 
           return (
             <div
-              key={header.id}
-              className={`flex min-w-0 items-center gap-1 px-2 font-medium whitespace-nowrap ${
-                column.align === 'right' ? 'justify-end' : ''
+              key={row.id}
+              className={`grid items-center border-b border-border transition-opacity duration-100 last:border-b-0 ${
+                density === 'roomy' ? 'h-12' : 'h-9'
+              } ${
+                state === 'active'
+                  ? 'bg-muted/50'
+                  : state === 'dimmed'
+                    ? 'opacity-30'
+                    : ''
               }`}
+              onMouseEnter={
+                onRowEnter ? () => onRowEnter(row.original) : undefined
+              }
+              onMouseLeave={onRowLeave}
+              style={{ gridTemplateColumns: template }}
             >
-              {sortable ? (
-                <button
-                  type="button"
-                  onClick={header.column.getToggleSortingHandler()}
-                  className={`group flex min-w-0 items-center gap-1 ${
-                    column.align === 'right' ? 'flex-row-reverse' : ''
-                  }`}
+              {/* `getAllCells` et non `getVisibleCells` : masquer une colonne est
+                une fonctionnalité qu'on n'a pas activée, donc l'accesseur qui
+                la suppose n'existe pas. Les deux seraient identiques ici. */}
+              {row.getAllCells().map((cell, rank) => (
+                <div
+                  key={cell.id}
+                  // `overflow-hidden` et `whitespace-nowrap` ici, l'ellipse dans
+                  // la cellule : la cellule tient la ligne, ce qu'on y met décide
+                  // comment il se coupe.
+                  className={`min-w-0 overflow-hidden px-2 whitespace-nowrap ${
+                    columns[rank].align === 'right'
+                      ? 'text-right tabular-nums'
+                      : ''
+                  } ${columns[rank].dim ? 'text-muted-foreground' : ''}`}
                 >
-                  <span className="truncate">{label}</span>
-                  {direction === 'asc' ? (
-                    <ChevronUpIcon className="size-3.5 shrink-0" />
-                  ) : direction === 'desc' ? (
-                    <ChevronDownIcon className="size-3.5 shrink-0" />
-                  ) : (
-                    // Invisible mais **présent** : sans lui, la largeur de
-                    // l'en-tête changerait au premier tri et toute la ligne
-                    // bougerait sous le curseur.
-                    <ChevronsUpDownIcon className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-                  )}
-                </button>
-              ) : (
-                label
-              )}
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </div>
+              ))}
             </div>
           );
         })}
-      </div>
 
-      {table.getRowModel().rows.map((row) => {
-        const state = rowState?.(row.original);
-
-        return (
-          <div
-            key={row.id}
-            className={`grid h-9 items-center border-b border-border transition-opacity duration-100 last:border-b-0 ${
-              state === 'active'
-                ? 'bg-muted/50'
-                : state === 'dimmed'
-                  ? 'opacity-30'
-                  : ''
-            }`}
-            onMouseEnter={
-              onRowEnter ? () => onRowEnter(row.original) : undefined
-            }
-            onMouseLeave={onRowLeave}
-            style={{ gridTemplateColumns: template }}
-          >
-            {/* `getAllCells` et non `getVisibleCells` : masquer une colonne est
-                une fonctionnalité qu'on n'a pas activée, donc l'accesseur qui
-                la suppose n'existe pas. Les deux seraient identiques ici. */}
-            {row.getAllCells().map((cell, rank) => (
-              <div
-                key={cell.id}
-                // `overflow-hidden` et `whitespace-nowrap` ici, l'ellipse dans
-                // la cellule : la cellule tient la ligne, ce qu'on y met décide
-                // comment il se coupe.
-                className={`min-w-0 overflow-hidden px-2 whitespace-nowrap ${
-                  columns[rank].align === 'right'
-                    ? 'text-right tabular-nums'
-                    : ''
-                } ${columns[rank].dim ? 'text-muted-foreground' : ''}`}
-              >
-                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-              </div>
-            ))}
-          </div>
-        );
-      })}
-
-      {paginated && (
-        <div className="flex items-center justify-between gap-2 pt-3 text-xs text-muted-foreground">
-          {/* Les bornes plutôt qu'un numéro de page : « 11–20 sur 42 » dit
+        {paginated && (
+          <div className="flex items-center justify-between gap-2 pt-3 text-xs text-muted-foreground">
+            {/* Les bornes plutôt qu'un numéro de page : « 11–20 sur 42 » dit
               combien il reste, « page 2 sur 5 » demande de le calculer. */}
-          <span className="tabular-nums">
-            {pageIndex * (pageSize ?? 0) + 1}–
-            {pageIndex * (pageSize ?? 0) + shown} of {rows.length}
-          </span>
+            <span className="tabular-nums">
+              {pageIndex * (pageSize ?? 0) + 1}–
+              {pageIndex * (pageSize ?? 0) + shown} of {rows.length}
+            </span>
 
-          <div className="flex items-center gap-1">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => table.previousPage()}
-              disabled={!table.getCanPreviousPage()}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => table.nextPage()}
-              disabled={!table.getCanNextPage()}
-            >
-              Next
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => table.previousPage()}
+                disabled={!table.getCanPreviousPage()}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => table.nextPage()}
+                disabled={!table.getCanNextPage()}
+              >
+                Next
+              </Button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

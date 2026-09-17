@@ -47,15 +47,31 @@ où la décision vit.
 
 ## 3. Acquisition — la section qui porte la page
 
-Un seul tableau, une ligne par source / referrer / campagne UTM, et six
-colonnes : visiteurs ✅ · sessions ✅ · clients 🟡 · taux de conversion 🟡 ·
-revenu ✅ pour les campagnes, 🟡 pour les sources · **revenu par visiteur** 🟡 —
-c'est lui qui révèle la source à faible volume et forte valeur, que le revenu
-absolu enterre.
+Un seul tableau, quatre onglets, six colonnes : visiteurs ✅ · clients ✅ ·
+taux de conversion ✅ · revenu ✅ · **revenu par visiteur** ✅ — c'est lui qui
+révèle la source à faible volume et forte valeur, que le revenu absolu enterre.
 
-Plus : premier contact contre dernière visite, et **l'écart entre les deux**,
-qui est lui-même une lecture 🟡 · landing pages enrichies pareil 🟡 · pays et
-langue pareil 🟡
+**Les lignes viennent du trafic, le revenu s'y joint.** L'inverse — ce que la
+carte faisait — n'affichait que les sources ayant encaissé quelque chose : une
+campagne qui amène cent quatre-vingts visiteurs et zéro euro en était absente,
+alors que c'est la ligne qu'on vient chercher. C'est aussi ce qui rend le tri
+par trafic possible : trier un classement qui n'en contient qu'une partie n'a
+pas de sens.
+
+**Deux grains, pas deux calculs.** `Sources` rend la **nature** — Direct,
+Search, Social, Assistant, Campaign, Other — et `Referrers` les hôtes. La
+campagne l'emporte sur la nature du referrer : une visite balisée arrive de
+`google.com` comme une visite organique, et les confondre ferait lire « la
+recherche m'apporte X » en y comptant du trafic acheté.
+
+Le pays n'y est plus : il a sa carte, avec son planisphère.
+
+Le tableau se **trie** par colonne et se déplie dans un tiroir — dialogue au
+centre sur bureau, tiroir par le bas sous 768 px — qui pagine le classement
+entier. Voir `apps/web/src/components/data-table.tsx`.
+
+Reste : premier contact contre dernière visite, et **l'écart entre les deux**,
+qui est lui-même une lecture 🟡 · landing pages enrichies pareil 🟡 · langue 🟡
 
 ## 4. Conversion
 
