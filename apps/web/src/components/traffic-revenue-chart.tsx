@@ -69,8 +69,12 @@ const HEADROOM = 1.2;
  * dit que le dessin s'arrête là plutôt que la valeur. Sur une fenêtre à un seul
  * paiement, cette barre unique occupait toute la hauteur du graphique et
  * écrasait la courbe de trafic à côté.
+ *
+ * Quarante pour cent et non trente : la barre la plus haute doit passer **sous**
+ * la crête du trafic, sinon les deux séries se disputent le haut du cadre et on
+ * ne sait plus laquelle le graphique raconte.
  */
-const REVENUE_HEADROOM = 1.3;
+const REVENUE_HEADROOM = 1.4;
 
 /** Le nombre de graduations visé — indicatif, pas imposé. */
 const TICKS = 4;
