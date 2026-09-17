@@ -157,12 +157,16 @@ const chartConfig = {
   // La rampe de séries, et non `--success` : le vert du design system porte un
   // **jugement** — une variation qui va dans le bon sens — là où le revenu d'un
   // jour n'en porte aucun. Un montant n'est ni bon ni mauvais, il est.
-  revenue: { label: 'Revenue', color: 'var(--chart-3)' },
+  //
+  // L'orange plutôt que le turquoise, et c'est un arbitrage tranché à l'œil :
+  // complémentaire du bleu, il détache chaque barre du dégradé de la courbe, au
+  // prix d'une série d'accompagnement plus bruyante que la principale.
+  revenue: { label: 'Revenue', color: 'var(--chart-2)' },
   // Une troisième couleur, parce que les deux premières sont prises et qu'un
   // marqueur qui reprendrait l'une d'elles se lirait comme un point de mesure.
   // Elle est dans la légende pour la même raison : un rond isolé sur l'axe
   // n'explique pas ce qu'il marque.
-  deployments: { label: 'Deployment', color: 'var(--chart-2)' },
+  deployments: { label: 'Deployment', color: 'var(--chart-3)' },
 } satisfies ChartConfig;
 
 /**
