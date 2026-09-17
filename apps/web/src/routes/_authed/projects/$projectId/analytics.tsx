@@ -9,13 +9,14 @@ import type {
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, createFileRoute } from '@tanstack/react-router';
-import { TrendingDown, TrendingUp } from 'lucide-react';
+import { Maximize2Icon, TrendingDown, TrendingUp } from 'lucide-react';
 
 import {
   Card,
   CardAction,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from '#/components/ui/card';
@@ -87,7 +88,6 @@ import {
   revenueSeriesQuery,
   type AttributionAxis,
   type RevenueAttributionPage,
-  type UnsourcedRevenue,
 } from '#/lib/revenue';
 
 /**
@@ -1563,109 +1563,6 @@ function hostOf(origin: string): string {
  * depuis 2013. Il faudra brancher Search Console.
  */
 /**
- * Les ensembles qu'aucune valeur d'axe ne revendique, en pied de tableau.
- *
- * ## Pourquoi ils sont là et pas en note
- *
- * Parce que sans eux la colonne Revenue ne somme pas le chiffre du bandeau, et
- * qu'un tableau qui contredit l'agrégat au-dessus de lui fait perdre confiance
- * dans l'écran entier. C'est exactement ce qui s'est produit : le bandeau
- * annonçait 20 $, les deux cartes affichaient « No revenue yet », et tout le
- * revenu était là — non attribué.
- *
- * Avec ces lignes, la vérification se fait à l'œil : la colonne tombe juste, ou
- * il y a un bug.
- *
- * ## En pied, et non parmi les lignes
- *
- * Elles y étaient tant que le tableau n'était pas triable. Un tri les aurait
- * fait remonter au milieu du classement, où « Unattributed » se lirait comme
- * une source parmi les autres — ce qu'elle n'est justement pas.
- *
- * ## Deux libellés, deux causes, deux actions
- *
- * `direct` est un visiteur qu'on **connaît**, arrivé sans rien sur cet axe :
- * c'est une observation, pas un trou. `unattributed` est un paiement qu'aucun
- * parcours ne réclame — consentement refusé, identifiant jamais posé, client
- * antérieur à l'installation. Les fondre ferait passer un défaut d'intégration
- * pour du trafic direct.
- *
- * Une devise **nulle** est le troisième cas, et il n'a que faire d'un montant :
- * ce sont les paiements dont le règlement n'est pas connu, donc ceux que cette
- * lecture ne sait pas convertir. Les afficher à zéro euro les ferait
- * disparaître ; leur inventer un taux rendrait un chiffre que Stripe ne
- * confirmerait pas. On en donne donc le **compte**.
- *
- * Visiteurs et conversion restent tus : on ne sait pas combien de personnes se
- * cachent derrière un paiement non attribué, et leur inventer un dénominateur
- * produirait un taux faux.
- */
-function Unclassified({
-  breakdown,
-  hides = [],
-}: {
-  breakdown:
-    | {
-        direct: UnsourcedRevenue[];
-        unattributed: UnsourcedRevenue[];
-      }
-    | undefined;
-  /** Ce qu'une ligne du tableau porte déjà, et qu'il ne faut donc pas répéter. */
-  hides?: ('direct' | 'unattributed')[];
-}) {
-  const groups: {
-    key: 'direct' | 'unattributed';
-    label: string;
-    hint: string;
-    rows: UnsourcedRevenue[];
-  }[] = [
-    {
-      key: 'direct',
-      label: 'Direct',
-      hint: 'A visitor we know, who arrived with nothing on this axis. An observation, not a gap.',
-      rows: breakdown?.direct ?? [],
-    },
-    {
-      key: 'unattributed',
-      label: 'Unattributed',
-      hint: 'A payment no journey claims: consent refused, no identifier ever set, or a customer who predates the install.',
-      rows: breakdown?.unattributed ?? [],
-    },
-  ];
-
-  const lines = groups
-    .filter(({ key }) => !hides.includes(key))
-    .flatMap(({ key, label, hint, rows }) =>
-      rows.map((row, index) => ({
-        id: `${key}-${String(row.currency)}-${String(index)}`,
-        label,
-        hint,
-        row,
-      })),
-    );
-
-  if (lines.length === 0) return null;
-
-  return (
-    <div className="flex flex-col border-t border-border pt-2 text-sm text-muted-foreground">
-      {lines.map(({ id, label, hint, row }) => (
-        <div key={id} className="flex h-7 items-center justify-between gap-2">
-          <Hint title={hint}>{label}</Hint>
-          {/* Visiteurs et conversion restent tus : on ne sait pas combien de
-              personnes se cachent derrière un paiement non attribué, et leur
-              inventer un dénominateur produirait un taux faux. */}
-          <span className="tabular-nums">
-            {row.currency === null
-              ? `${number.format(row.payments)} not converted`
-              : money(row.amount, row.currency)}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/**
  * Le revenu de la période, dans la devise qui pèse le plus.
  *
  * ## Pourquoi une seule devise, et pas un total
@@ -1847,7 +1744,6 @@ function Audience({
         ) : (
           <Skeleton className="h-full w-full" />
         )}
-        <Unclassified breakdown={breakdown} />
       </CardContent>
     </Card>
   );
@@ -2032,8 +1928,6 @@ function Acquisition({
     [visits],
   );
 
-  const breakdown = revenue?.[tab];
-
   const rows = useMemo<AcquisitionRow[]>(() => {
     if (!traffic) return [];
 
@@ -2175,20 +2069,10 @@ function Acquisition({
   // Le tableau de la carte est coupé à dix lignes ; le tiroir les rend toutes.
   const hidden = Math.max(rows.length - CARD_ROWS, 0);
 
-  // `direct` a déjà rejoint sa ligne sur l'axe des natures : le répéter en pied
-  // ferait lire deux fois la même population.
-  const footer = (
-    <Unclassified
-      breakdown={breakdown}
-      hides={tab === 'source' ? ['direct'] : []}
-    />
-  );
-
   const full = (
     <>
       {tabs}
       {table(DRAWER_ROWS, true)}
-      {footer}
     </>
   );
 
@@ -2202,29 +2086,38 @@ function Acquisition({
         <CardAction>{tabs}</CardAction>
       </CardHeader>
 
-      <CardContent className={CARD_BODY_MIN}>
+      {/* Pas de hauteur plancher ici, contrairement aux cartes jumelées plus
+          bas : celle-ci occupe la largeur entière et n'a aucune voisine avec
+          qui s'aligner. Lui en imposer une creusait un trou blanc sous un
+          onglet qui n'a que cinq lignes. */}
+      <CardContent>
         {visits ? (
-          <>
-            {table(CARD_ROWS, false)}
-            {footer}
-            {hidden > 0 && (
-              <div className="pt-3">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setOpen(true);
-                  }}
-                >
-                  See {number.format(hidden)} more
-                </Button>
-              </div>
-            )}
-          </>
+          table(CARD_ROWS, false)
         ) : (
           <Skeleton className="h-full w-full" />
         )}
       </CardContent>
+
+      {/* En pied de carte et centré : le bouton ne prolonge pas la dernière
+          ligne du tableau, il ouvre autre chose. Aligné à gauche sous la
+          colonne des libellés, il se lisait comme un rang de plus. */}
+      {hidden > 0 && (
+        <CardFooter className="justify-center border-t pt-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setOpen(true);
+            }}
+          >
+            {/* L'icône dit **où** ça s'ouvre — un panneau par-dessus la page, pas
+                une ligne de plus dépliée en dessous. Sans elle, « See 7 more »
+                promet un « voir plus » qui déroulerait la carte. */}
+            <Maximize2Icon />
+            See {number.format(hidden)} more
+          </Button>
+        </CardFooter>
+      )}
 
       {/* Un tiroir par le bas sur mobile, un dialogue au centre sur bureau. Le
           même contenu : ce qui change est la façon dont l'écran l'ouvre, pas ce
