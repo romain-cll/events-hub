@@ -42,9 +42,8 @@ const DEFAULT_VIEW = { days: 7, offset: 0 } as const;
  *
  * ## Le `loader` est ce qui saute l'écran
  *
- * C'est la seule route du dashboard à en avoir un, et pour une raison précise :
- * la décision « faut-il montrer cette page ? » doit être prise **avant** de la
- * monter. Prise dans le composant, elle produirait un écran d'attente affiché
+ * Il existe pour une raison précise : la décision « faut-il montrer cette
+ * page ? » doit être prise **avant** de la monter. Prise dans le composant, elle produirait un écran d'attente affiché
  * une fraction de seconde à quelqu'un qui n'attend rien — la personne qui
  * revient sur un projet déjà installé verrait clignoter un état qui la
  * concerne encore moins qu'il n'est vrai.

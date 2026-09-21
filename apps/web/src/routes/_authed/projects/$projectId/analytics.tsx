@@ -75,6 +75,7 @@ import {
 import { useIsMobile } from '#/hooks/use-mobile';
 import { API_URL } from '#/lib/api';
 import { deploymentsQuery } from '#/lib/deployments';
+import { integrationsQuery } from '#/lib/integrations';
 import { ingestionQuery, projectsQuery } from '#/lib/projects';
 import {
   ACQUISITION_AXES,
@@ -103,6 +104,16 @@ export const Route = createFileRoute('/_authed/projects/$projectId/analytics')({
     // une erreur.
     offset: Math.max(0, Math.trunc(Number(search.offset)) || 0),
   }),
+  // Savoir si le projet encaisse décide de la **mise en page** — cinq cartes ou
+  // quatre, des colonnes de revenu ou non. Lu dans le composant, ce serait une
+  // carte Revenue en squelette qui disparaît sous les yeux de chaque projet
+  // sans Stripe, et le bandeau qui se recompose avec elle.
+  //
+  // `prefetchQuery` et non `ensureQueryData` : il ne lève jamais. Une panne de
+  // cette lecture ne doit pas coûter le tableau de bord — la page retombe alors
+  // sur l'affichage du revenu, dont les zéros restent vrais.
+  loader: ({ context, params }) =>
+    context.queryClient.prefetchQuery(integrationsQuery(params.projectId)),
   component: Analytics,
 });
 
@@ -235,9 +246,28 @@ function Analytics() {
   const before = useQuery(previousSessionsQuery(projectId, days, offset));
   const beforeSummary = useQuery(previousSummaryQuery(projectId, days, offset));
   const deployments = useQuery(deploymentsQuery(projectId, days, offset));
+  const integrations = useQuery(integrationsQuery(projectId));
+
+  // Un projet sans encaisseur — l'outil gratuit, le projet open source — n'a
+  // pas de revenu à montrer, et une carte à zéro ou des colonnes de tirets n'y
+  // seraient pas une mesure : du bruit, sur la moitié de la page. Tout ce qui
+  // parle d'argent s'efface donc, et ses lectures ne partent pas.
+  //
+  // Le fournisseur est nommé plutôt que de compter les connexions : une
+  // intégration qui n'encaisse pas — des déploiements, une sonde — ne doit pas
+  // faire apparaître une colonne Revenue.
+  //
+  // Faute de réponse, on montre le revenu. C'est l'écran d'avant, et ses zéros
+  // restent vrais ; le cacher affirmerait une absence qu'on n'a pas lue.
+  const withRevenue =
+    integrations.data?.some(({ provider }) => provider === 'stripe') ?? true;
+
   // Un seul appel pour les deux cartes du bas : des appels séparés laisseraient
   // leurs totaux diverger dès qu'un paiement arrive entre les deux.
-  const attribution = useQuery(attributionQuery(projectId, days, offset));
+  const attribution = useQuery({
+    ...attributionQuery(projectId, days, offset),
+    enabled: withRevenue,
+  });
   // Même clé que la carte Locations, donc servie par le cache : elle fournit le
   // dénominateur de l'onglet Country, que les sessions ne portent pas.
   const countries = useQuery(
@@ -245,7 +275,10 @@ function Analytics() {
   );
   // Le second panneau du graphique. Un pas quotidien : il doit tomber sur les
   // mêmes journées que le trafic, qui est replié au jour.
-  const series = useQuery(revenueSeriesQuery(projectId, days, offset, 'day'));
+  const series = useQuery({
+    ...revenueSeriesQuery(projectId, days, offset, 'day'),
+    enabled: withRevenue,
+  });
   const projects = useQuery(projectsQuery());
   const ingestion = useQuery(ingestionQuery(projectId));
 
@@ -312,7 +345,7 @@ function Analytics() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-semibold tracking-tight">
-            Audience &amp; revenue
+            {withRevenue ? 'Audience & revenue' : 'Audience'}
           </h1>
           <p className="text-muted-foreground text-sm">
             {project?.name ?? 'Loading…'}
@@ -427,7 +460,17 @@ function Analytics() {
               Le revenu ne porte pas de comparaison avec la période précédente —
               il faudrait une seconde lecture d'attribution pour une flèche, et
               elle coûte quatre agrégations. */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 wide:grid-cols-5">
+          {/* Sans revenu, quatre cartes : le palier à trois colonnes en
+              laisserait une seule sur la seconde rangée, donc deux jusqu'à
+              `wide`. Les deux listes de classes sont écrites en entier —
+              Tailwind ne génère que ce qu'il lit dans le source. */}
+          <div
+            className={
+              withRevenue
+                ? 'grid gap-4 sm:grid-cols-2 lg:grid-cols-3 wide:grid-cols-5'
+                : 'grid gap-4 sm:grid-cols-2 wide:grid-cols-4'
+            }
+          >
             <Metric
               label="Unique visitors"
               value={summary.data?.uniqueVisitors}
@@ -444,7 +487,12 @@ function Analytics() {
               previous={compareTo && compareTo.sessions}
             />
             <BounceMetric summary={summary.data} previous={compareTo} />
-            <RevenueMetric attribution={attribution.data} />
+            {withRevenue && (
+              <RevenueMetric
+                attribution={attribution.data}
+                failed={attribution.isError}
+              />
+            )}
           </div>
 
           {/* Un seul dessin, deux échelles. Ce que ça coûte et ce qui le rend
@@ -452,7 +500,9 @@ function Analytics() {
               là que la décision vit, pas ici. */}
           <Card>
             <CardHeader>
-              <CardTitle>Traffic and revenue</CardTitle>
+              <CardTitle>
+                {withRevenue ? 'Traffic and revenue' : 'Traffic'}
+              </CardTitle>
               <CardDescription>
                 {visitors && visitors.length > 0
                   ? `${dayLabel.format(new Date(visitors[0].start))} – ${dayLabel.format(
@@ -485,7 +535,11 @@ function Analytics() {
               la porte pas, et ses deux totaux sont déjà dans les agrégats du
               haut. Ce qui part avec, et qu'il faut savoir : le temps actif, et
               les deux mises en garde qui l'accompagnaient. */}
-          <Acquisition revenue={attribution.data} visits={sessions.data} />
+          <Acquisition
+            revenue={attribution.data}
+            visits={sessions.data}
+            withRevenue={withRevenue}
+          />
 
           <div className="grid items-start gap-4 lg:grid-cols-2">
             <Audience
@@ -493,12 +547,19 @@ function Analytics() {
               days={days}
               offset={offset}
               attribution={attribution.data}
+              attributionFailed={attribution.isError}
               locations={countries.data}
+              withRevenue={withRevenue}
             />
             <Pages summary={summary.data} sessions={sessions.data} />
           </div>
 
-          <Locations projectId={projectId} days={days} offset={offset} />
+          <Locations
+            projectId={projectId}
+            days={days}
+            offset={offset}
+            withRevenue={withRevenue}
+          />
         </>
       )}
     </div>
@@ -555,10 +616,12 @@ function Locations({
   projectId,
   days,
   offset,
+  withRevenue,
 }: {
   projectId: string;
   days: Period;
   offset: number;
+  withRevenue: boolean;
 }) {
   const [grain, setGrain] = useState<LocationGrain>('country');
   const [hovered, setHovered] = useState<string | null>(null);
@@ -584,15 +647,16 @@ function Locations({
   // deux classements se joignent : celui-ci trie par montant, le tableau d'à
   // côté par visiteurs, et un pays qui encaisse sans être dans les dix
   // premiers du revenu afficherait un tiret là où on connaît son chiffre.
-  const attribution = useQuery(
-    attributionQuery(
+  const attribution = useQuery({
+    ...attributionQuery(
       projectId,
       days,
       offset,
       LOCATION_AXES,
       MAX_ATTRIBUTION_LIMIT,
     ),
-  );
+    enabled: withRevenue,
+  });
 
   return (
     <Card>
@@ -646,6 +710,7 @@ function Locations({
             page={locations.data}
             revenue={attribution.data?.country}
             revenuePending={attribution.isPending}
+            withRevenue={withRevenue}
           />
         ) : (
           <Skeleton className="h-[220px] w-full" />
@@ -858,12 +923,14 @@ function LocationRows({
   page,
   revenue,
   revenuePending,
+  withRevenue,
   hovered,
   onHover,
 }: {
   page: LocationsPage;
   revenue: RevenueAttributionPage['country'];
   revenuePending: boolean;
+  withRevenue: boolean;
   hovered: string | null;
   onHover: (code: string | null) => void;
 }) {
@@ -877,7 +944,7 @@ function LocationRows({
   // l'attribution sache ranger — une région n'a pas d'axe côté serveur. La
   // colonne disparaît donc sur les deux autres onglets plutôt que de s'y
   // afficher vide : un tiret dit « rien encaissé », pas « rien demandé ».
-  const showRevenue = page.grain === 'country';
+  const showRevenue = withRevenue && page.grain === 'country';
 
   // Indexé sur le code ISO, qui est le libellé que l'attribution rend sur cet
   // axe — c'est ce qui permet de joindre sans traduire des deux côtés.
@@ -1654,8 +1721,14 @@ function hostOf(origin: string): string {
  */
 function RevenueMetric({
   attribution,
+  failed,
 }: {
   attribution: RevenueAttributionPage | undefined;
+  /**
+   * La lecture a échoué. Sans lui, la carte restait en squelette pour
+   * toujours : une panne se lisait comme un chargement lent.
+   */
+  failed: boolean;
 }) {
   const [top, second, ...rest] = totalsByCurrency(attribution);
 
@@ -1666,10 +1739,16 @@ function RevenueMetric({
         <CardTitle className="text-3xl tabular-nums">
           {attribution ? (
             money(top?.amount ?? 0, top?.currency ?? null)
+          ) : failed ? (
+            '—'
           ) : (
             <Skeleton className="h-8 w-24" />
           )}
         </CardTitle>
+
+        {!attribution && failed && (
+          <p className="text-destructive text-xs">Unavailable</p>
+        )}
 
         {/* La seconde devise **en clair**, et pas un badge « +1 more » : celui-ci
             ne disait rien à qui encaisse 2 000 $ et 1 400 €, et laissait lire le
@@ -1741,13 +1820,17 @@ function Audience({
   days,
   offset,
   attribution,
+  attributionFailed,
   locations,
+  withRevenue,
 }: {
   projectId: string;
   days: Period;
   offset: number;
   attribution: RevenueAttributionPage | undefined;
+  attributionFailed: boolean;
   locations: LocationsPage | undefined;
+  withRevenue: boolean;
 }) {
   const [tab, setTab] = useState<TechnologyGrain>('browser');
 
@@ -1799,16 +1882,33 @@ function Audience({
     };
   });
 
-  const rows = classified;
+  // Sans revenu, les lignes viennent du trafic. Pilotée par l'attribution, la
+  // carte n'aurait rien à ranger et resterait vide sur tout projet qui
+  // n'encaisse pas — alors que ses navigateurs, eux, sont connus.
+  const rows: TableRow[] = withRevenue
+    ? classified
+    : (technology.data?.rows ?? []).map((row) => ({
+        key: row.value,
+        cells: [
+          <span key="label" className="truncate">
+            {row.value || 'Unknown'}
+          </span>,
+          number.format(row.visitors),
+        ],
+      }));
+
+  const loaded = withRevenue ? attribution : technology.data;
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Who they are</CardTitle>
         <CardDescription>
-          {locations
-            ? 'The same payments, split by what the visitor brought with them.'
-            : 'Loading…'}
+          {!locations
+            ? 'Loading…'
+            : withRevenue
+              ? 'The same payments, split by what the visitor brought with them.'
+              : 'Visitors, split by what they brought with them.'}
         </CardDescription>
         <CardAction>
           <Tabs
@@ -1831,21 +1931,41 @@ function Audience({
           Le plancher garde l'alignement entre les deux cartes voisines sans
           imposer le vide. */}
       <CardContent className={CARD_BODY_MIN}>
-        {attribution ? (
+        {loaded ? (
           <LegacyTable
             columns={[
               { head: AXIS_LABELS[axis] },
               { head: 'Visitors', width: '5rem', align: 'right' },
-              { head: 'Customers', width: '5.5rem', align: 'right' },
-              { head: 'Revenue', width: '6rem', align: 'right' },
+              ...(withRevenue
+                ? [
+                    {
+                      head: 'Customers',
+                      width: '5.5rem',
+                      align: 'right' as const,
+                    },
+                    { head: 'Revenue', width: '6rem', align: 'right' as const },
+                  ]
+                : []),
             ]}
             rows={rows}
-            empty={{
-              title: 'No revenue yet',
-              description:
-                'Payments appear here once a Stripe account is connected and a first payment has been attributed.',
-            }}
+            empty={
+              withRevenue
+                ? {
+                    title: 'No revenue yet',
+                    description:
+                      'Payments appear here once one is attributed to a visitor.',
+                  }
+                : {
+                    title: 'No visitors yet',
+                    description:
+                      'Browsers, systems and devices show up with the first visit.',
+                  }
+            }
           />
+        ) : withRevenue && attributionFailed ? (
+          <Empty>
+            <EmptyTitle>Revenue unavailable</EmptyTitle>
+          </Empty>
         ) : (
           <Skeleton className="h-full w-full" />
         )}
@@ -1886,6 +2006,7 @@ interface AcquisitionRow {
 function acquisitionColumns(
   axis: AttributionAxis,
   rows: AcquisitionRow[],
+  withRevenue: boolean,
 ): DataColumn<AcquisitionRow>[] {
   const busiest = rows.reduce((most, row) => Math.max(most, row.visitors), 0);
 
@@ -1906,7 +2027,7 @@ function acquisitionColumns(
   const rate = (row: AcquisitionRow) =>
     row.visitors === 0 ? undefined : (row.customers / row.visitors) * 100;
 
-  return [
+  const columns: DataColumn<AcquisitionRow>[] = [
     {
       key: 'label',
       head: AXIS_LABELS[axis],
@@ -2006,6 +2127,12 @@ function acquisitionColumns(
       },
     },
   ];
+
+  // La conversion part avec le revenu : un client n'existe que par un
+  // paiement, et sans encaisseur le taux vaudrait zéro sur chaque ligne.
+  return withRevenue
+    ? columns
+    : columns.filter(({ key }) => key === 'label' || key === 'visitors');
 }
 
 /**
@@ -2035,9 +2162,11 @@ function Acquisition({
   // tableau de dépendances, s'y trompait aussi.
   revenue,
   visits,
+  withRevenue,
 }: {
   revenue: RevenueAttributionPage | undefined;
   visits: SessionsPage | undefined;
+  withRevenue: boolean;
 }) {
   const [tab, setTab] = useState<AcquisitionAxis>('source');
   const [open, setOpen] = useState(false);
@@ -2182,7 +2311,15 @@ function Acquisition({
     return [...merged, ...older];
   }, [traffic, revenue, tab]);
 
-  const columns = useMemo(() => acquisitionColumns(tab, rows), [tab, rows]);
+  const columns = useMemo(
+    () => acquisitionColumns(tab, rows, withRevenue),
+    [tab, rows, withRevenue],
+  );
+
+  // « Not the one that paid » n'a de sens que là où l'on paie.
+  const description = withRevenue
+    ? 'First touch — the first visit of the visitor, not the one that paid.'
+    : 'First touch — the first visit of the visitor.';
 
   const table = (size: number | 'fit') => (
     <DataTable
@@ -2239,9 +2376,7 @@ function Acquisition({
     <Card>
       <CardHeader>
         <CardTitle>Acquisition</CardTitle>
-        <CardDescription>
-          First touch — the first visit of the visitor, not the one that paid.
-        </CardDescription>
+        <CardDescription>{description}</CardDescription>
         <CardAction>{tabs}</CardAction>
       </CardHeader>
 
@@ -2290,10 +2425,7 @@ function Acquisition({
           <DrawerContent className="h-[88vh]">
             <DrawerHeader className="text-left">
               <DrawerTitle>Acquisition</DrawerTitle>
-              <DrawerDescription>
-                First touch — the first visit of the visitor, not the one that
-                paid.
-              </DrawerDescription>
+              <DrawerDescription>{description}</DrawerDescription>
             </DrawerHeader>
             <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 pb-6">
               {full}
@@ -2309,10 +2441,7 @@ function Acquisition({
           <DialogContent className="flex h-[85vh] flex-col gap-3 sm:max-w-4xl">
             <DialogHeader>
               <DialogTitle>Acquisition</DialogTitle>
-              <DialogDescription>
-                First touch — the first visit of the visitor, not the one that
-                paid.
-              </DialogDescription>
+              <DialogDescription>{description}</DialogDescription>
             </DialogHeader>
             <div className="flex min-h-0 flex-1 flex-col gap-3">{full}</div>
           </DialogContent>
