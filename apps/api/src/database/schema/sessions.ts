@@ -1,4 +1,5 @@
 import {
+  boolean,
   char,
   index,
   pgTable,
@@ -7,6 +8,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
+import type { DeviceType } from '../../user-agent/user-agent.service';
 import { projects } from './projects';
 
 /**
@@ -94,12 +96,130 @@ export const sessions = pgTable(
      */
     region: text(),
     city: text(),
+    /**
+     * ## Avec quoi il navigue — trois libellés et un drapeau
+     *
+     * Dérivés du User-Agent à l'ouverture de la session, exactement comme les
+     * trois colonnes géographiques le sont de l'IP, et pour les mêmes raisons :
+     * c'est un attribut de la visite, pas de chacun de ses gestes.
+     *
+     * ⚠️ **Le User-Agent, lui, n'est nulle part.** Il entre dans `CoreService`,
+     * sert à dériver ces libellés et la clé visiteur, et meurt avec la requête.
+     * Aucune version n'est conservée : la mineure est du bruit qui multiplie
+     * l'unicité, et celle du système est carrément fausse — Windows 11 se
+     * déclare « Windows NT 10.0 », macOS « 10_15_7 » depuis des années. Voir
+     * `UserAgentService` pour le détail de ce qui est écarté et pourquoi.
+     *
+     * `null` est le cas normal de la longue traîne : un navigateur qu'on ne sait
+     * pas nommer. Les lectures le comptent plutôt que de le taire.
+     *
+     * ⚠️ **Les tablettes sont sous-comptées, et c'est irrécupérable.** Depuis
+     * iPadOS 13, Safari envoie par défaut l'en-tête d'un Mac : la majorité des
+     * iPad est rangée en `desktop`. L'information n'est pas dans la chaîne.
+     */
+    browser: text(),
+    os: text(),
+    deviceType: text().$type<DeviceType>(),
+    /**
+     * Un robot **qui s'est déclaré**, jamais un visiteur qu'on a jugé suspect.
+     *
+     * `NOT NULL DEFAULT false`, et le défaut est permanent plutôt qu'un
+     * échafaudage de migration : une session dont le client n'est pas
+     * identifiable n'est pas un robot, aujourd'hui comme demain.
+     *
+     * Les lectures l'écartent structurellement — la condition vit dans
+     * `EventStore.where()`, que toutes traversent — mais jamais en silence : le
+     * résumé publie le nombre de sessions ainsi retirées. Un chiffre jeté sans
+     * le dire est un chiffre que personne ne sait manquant.
+     */
+    isBot: boolean().notNull().default(false),
+    /**
+     * ## Quelle campagne a amené la visite — trois colonnes, toutes facultatives
+     *
+     * Extraites de l'URL par le SDK, normalisées par le serveur
+     * (`normalizeCampaign`), et posées **à l'ouverture de la session seulement**.
+     *
+     * Par événement, une visite de trois pages dirait trois arrivées de la même
+     * campagne : les UTM restent dans l'URL après le premier chargement. L'erreur
+     * serait proportionnelle à la profondeur des visites — invisible, et d'autant
+     * plus grosse que le site est bon.
+     *
+     * **Minuscules**, parce que `Newsletter` et `newsletter` sont la même
+     * campagne et que personne ne le dirait à un classement qui les sépare. Le
+     * prix est un libellé en minuscules à l'affichage.
+     *
+     * ⚠️ **Ce que le serveur garantit ici, et ce qu'il ne garantit pas.** Il
+     * garantit la normalisation, le moment où la valeur est figée, et sa
+     * joignabilité. Il ne garantit **pas** que ces paramètres étaient dans la
+     * barre d'adresse : le SDK pourrait les inventer, comme il pourrait déjà
+     * inventer l'URL entière. La promesse est de forme et de moment, pas de
+     * provenance.
+     *
+     * Les deux autres paramètres de campagne — terme et contenu — ne sont pas
+     * ici : ils répondent à « quelle création », pas à « quelle campagne
+     * rapporte ». Ils restent entiers dans l'URL que le sac d'attributs
+     * transporte, et deux colonnes presque toujours nulles ne valent pas leur
+     * place.
+     */
+    /**
+     * Ce que le visiteur a répondu au sujet du **cookie de croisement**.
+     *
+     * ## Les trois états, et le plus fréquent est `null`
+     *
+     * `true` accepté, `false` refusé, `null` **rien demandé**. Le mode par
+     * défaut de la mesure d'audience ne pose aucune question — il ne dépose
+     * rien sur le terminal et repose sur l'intérêt légitime — donc `null` est
+     * le cas ordinaire et non un trou de mesure. Seul le croisement du revenu
+     * avec le parcours exige un consentement, parce que lui seul demande une
+     * identité qui traverse les jours.
+     *
+     * Confondre `null` et `false` ferait passer un site sans bandeau pour un
+     * site dont tous les visiteurs refusent. Ce n'est pas la même donnée, et
+     * ça n'appelle pas la même action.
+     *
+     * ## Ce que cette colonne n'est pas
+     *
+     * **Pas une preuve de consentement.** Aucune identité, aucun horodatage de
+     * l'acte, aucune trace de ce qui a été affiché : la preuve incombe au site,
+     * et la dupliquer ici nous ferait garder de la donnée que personne ne nous
+     * demande. Ce qu'on garde est un drapeau d'audience sur une visite anonyme,
+     * emporté avec sa ligne par la purge des 25 mois, dont le seul usage est de
+     * compter les refus.
+     *
+     * ## Elle bouge après l'ouverture, et c'est la seule avec `startedAt`
+     *
+     * Le bandeau se répond à la deuxième page aussi souvent qu'à la première,
+     * et le premier événement d'une visite précède toujours le clic. La figer à
+     * l'ouverture comme la position ou la campagne sous-estimerait les
+     * acceptations de façon structurelle. C'est le dernier signal connu qui
+     * gagne ; une absence n'efface jamais une réponse.
+     *
+     * ⚠️ Rupture de série, comme `isBot` : elle ne se remplit qu'à partir de
+     * sa mise en service. Les visites antérieures sont toutes à `null` — le
+     * signal existait sur le fil, il n'était rangé nulle part.
+     */
+    consent: boolean(),
+    campaignSource: text(),
+    campaignMedium: text(),
+    campaignName: text(),
   },
   (table) => [
     // La recherche de voisins part toujours d'un projet et d'une clé visiteur :
     // c'est l'index qui rend l'ingestion tenable, puisqu'elle interroge cette
     // table à chaque événement.
     index('sessions_project_visitor_idx').on(table.projectId, table.visitorKey),
+    // « Quelle campagne a amené quoi », la lecture qui porte l'acquisition
+    // payante. Cloisonnée par projet comme toutes les autres.
+    index('sessions_project_campaign_idx').on(
+      table.projectId,
+      table.campaignSource,
+    ),
+    // Le seul index **non cloisonné par projet** de la table, et c'est voulu :
+    // la purge balaie la plateforme, précisément pour qu'aucun projet ne puisse
+    // y échapper. Elle parcourt cette table de la plus ancienne visite à la plus
+    // récente et s'arrête à la borne de rétention — sans cet index, elle lirait
+    // toute la table chaque nuit pour découvrir qu'il n'y a rien à faire.
+    index('sessions_started_at_idx').on(table.startedAt),
   ],
 );
 

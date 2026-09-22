@@ -1,23 +1,20 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
-import { inArray } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { events, projects, sessions } from '../src/database/schema';
 import { analyticsSummarySchema } from '@events-hub/api-contract';
 
 import {
+  TEST_ORIGIN,
+  cleanupFixtures,
   createProject,
   expectMatchesContract,
   joinOrganization,
   organizationId,
   signUp,
-  TEST_ORIGIN,
 } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * Le module Analytics, éprouvé par sa route.
@@ -66,6 +63,8 @@ interface SummaryResponse {
   uniqueVisitors: number;
   bounces: number;
   settledSessions: number;
+  consentGranted: number;
+  consentDeclined: number;
   topPages: TopPage[];
 }
 
@@ -83,15 +82,12 @@ describe('GET /v1/projects/:projectId/analytics — topPages (e2e)', () => {
   let apiKey: string;
   /** Le compte qui lit : membre de l'organisation des projets de test. */
   let cookies: string[];
-  /** Tous les projets créés ici, pour un nettoyage qui n'en oublie aucun. */
-  const created: string[] = [];
 
   const newProject = async (label: string) => {
     const project = await createProject(db, {
       name: `e2e analytics ${label} ${new Date().toISOString()}`,
     });
 
-    created.push(project.id);
     return project;
   };
 
@@ -148,13 +144,7 @@ describe('GET /v1/projects/:projectId/analytics — topPages (e2e)', () => {
   ): Promise<TopPage[]> => (await summarize(query, project)).topPages;
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
 
     db = app.get<DrizzleDatabase>(DRIZZLE);
 
@@ -191,9 +181,7 @@ describe('GET /v1/projects/:projectId/analytics — topPages (e2e)', () => {
   });
 
   afterAll(async () => {
-    await db.delete(events).where(inArray(events.projectId, created));
-    await db.delete(sessions).where(inArray(sessions.projectId, created));
-    await db.delete(projects).where(inArray(projects.id, created));
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -219,12 +207,20 @@ describe('GET /v1/projects/:projectId/analytics — topPages (e2e)', () => {
       expect(second).toEqual(premier);
     });
 
-    it('rend exactement les huit champs promis, et pas de série', async () => {
+    it('rend exactement les onze champs promis, et pas de série', async () => {
       // `interval` et `timeseries` ont existé jusqu'à l'étape 33. Le découpage
       // dans le temps appartient au lecteur, qui reçoit des sessions datées par
       // la route voisine — cette route-ci ne rend que des agrégats de période.
       expect(Object.keys(await summarize(FENETRE)).sort()).toEqual([
+        // Les sessions de robots, retirées de tous les autres compteurs par
+        // `EventStore.where()`. Rendu pour que le retrait ne soit pas muet.
+        'botSessions',
         'bounces',
+        // Ce que les visiteurs ont répondu au sujet du cookie de croisement.
+        // Leur somme ne fait pas `sessions`, et l'écart est le nombre de
+        // visites auxquelles on n'a rien demandé.
+        'consentDeclined',
+        'consentGranted',
         'from',
         'pageViews',
         'sessions',
@@ -233,6 +229,17 @@ describe('GET /v1/projects/:projectId/analytics — topPages (e2e)', () => {
         'topPages',
         'uniqueVisitors',
       ]);
+    });
+
+    it('compte les réponses au bandeau sans les confondre avec le silence', async () => {
+      const resume = await summarize(FENETRE);
+
+      // Les fixtures de cette suite n'envoient aucun signal de consentement :
+      // les deux compteurs sont donc à zéro, et surtout pas `sessions`. Un
+      // défaut qui compterait le silence comme un refus se verrait ici.
+      expect(resume.consentGranted).toBe(0);
+      expect(resume.consentDeclined).toBe(0);
+      expect(resume.sessions).toBeGreaterThan(0);
     });
 
     it('refuse `interval`, qui n’existe plus', async () => {

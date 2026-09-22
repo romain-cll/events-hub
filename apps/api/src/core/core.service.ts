@@ -8,19 +8,47 @@ import { DRIZZLE, type DrizzleDatabase } from '../database/database.module';
 import { isForeignKeyViolation } from '../database/postgres-errors';
 import type { EventSource } from '../database/schema';
 import { EventTypeRegistry } from '../event-types/event-type-registry.service';
-import { EventStore, type PublicEvent } from '../events/event-store.service';
+import {
+  EventStore,
+  type EntryVisit,
+  type PublicEvent,
+} from '../events/event-store.service';
 import { GeoIpService } from '../geoip/geoip.service';
 import {
   VisitorKeyService,
   type VisitorIdentity,
 } from '../privacy/visitor-key.service';
+import { normalizeCampaign, type RawCampaign } from '../sessions/campaign';
 import {
   SESSION_GAP_MS,
   SessionAssigner,
 } from '../sessions/session-assigner.service';
+import { UserAgentService } from '../user-agent/user-agent.service';
 
 /** Ce qu'une requête HTTP apporte du réseau, et qui ne sort jamais d'ici. */
 export type NetworkIdentity = Omit<VisitorIdentity, 'projectId'>;
+
+/**
+ * L'événement écrit, plus la visite à laquelle il appartient.
+ *
+ * ## Pourquoi la session ressort, alors que la clé visiteur ne ressort pas
+ *
+ * Parce que les deux ne disent pas la même chose. La clé visiteur désigne
+ * *quelqu'un* à travers ses visites ; la session désigne *une visite*. Elle
+ * s'éteint après trente minutes d'inactivité, et la clé dont elle est née tourne
+ * chaque nuit — un site qui la conserve ne tient donc rien qui traverse le
+ * lendemain.
+ *
+ * C'est ce qui la rend rendable, et c'est aussi tout ce qu'elle vaut : elle
+ * permet à un site de rattacher son paiement à la visite qui l'a produit, sans
+ * que rien n'ait été inscrit sur le terminal du visiteur. Là où le mode consenti
+ * achète l'attribution des renouvellements et de la valeur vie, celle-ci n'achète
+ * que l'achat immédiat — mais elle l'achète sans rien demander à personne.
+ *
+ * `null` sur le chemin serveur, qui n'a pas de visite. Ce n'est pas une valeur
+ * manquante, c'est la réponse.
+ */
+export type IngestedEvent = PublicEvent & { sessionId: string | null };
 
 /** Ce que tout événement porte, quelle que soit sa provenance. */
 interface IngestBase {
@@ -29,6 +57,20 @@ interface IngestBase {
   occurredAt: Date;
   attributes: Record<string, unknown>;
   properties: Record<string, unknown>;
+  /**
+   * L'identité durable du visiteur que cet événement concerne, s'il y en a une.
+   *
+   * Opaque ici : le socle ne sait ni d'où elle vient, ni comment elle voyage, ni
+   * ce qui autorise à la poser. Il constate qu'il y en a une.
+   *
+   * **Sur les deux branches**, et c'est le point. Un événement navigateur la
+   * tient d'un cookie ; un paiement rapporté par un serveur la tient de la
+   * charge utile du fournisseur de paiement. Ce second cas n'a pas de visite —
+   * il peut survenir des mois après la dernière — mais il désigne bel et bien
+   * quelqu'un. La réserver au chemin navigateur rendrait ce revenu-là
+   * inattribuable.
+   */
+  visitorId?: string;
 }
 
 /**
@@ -53,8 +95,72 @@ interface IngestBase {
  * recevoir d'IP, donc il ne peut pas en faire quelque chose.
  */
 export type IngestCommand =
-  | (IngestBase & { source: 'browser'; network: NetworkIdentity })
-  | (IngestBase & { source: 'server' });
+  | (IngestBase & {
+      source: 'browser';
+      network: NetworkIdentity;
+      /**
+       * Vrai sur le **seul** événement qui vient de poser cet identifiant.
+       *
+       * Ce n'est pas une redite de `visitorId` : c'est ce qui distingue la
+       * bascule du régime établi, et les deux n'appellent pas le même repli.
+       */
+      visitorIdJustGranted?: boolean;
+      /**
+       * L'identifiant durable que cet événement même vient de retirer.
+       *
+       * Il n'est plus en vigueur — l'identité repasse au réseau dès celui-ci —
+       * mais il a encore servi il y a quelques secondes.
+       */
+      retiredVisitorId?: string;
+      /**
+       * Les paramètres de campagne lus dans l'URL par le SDK, **bruts**.
+       *
+       * Sur la branche navigateur seulement : une campagne décrit d'où vient une
+       * visite, et une source serveur n'en a pas. L'union discriminée fait
+       * échouer la compilation si quelqu'un tente de lui en donner une.
+       *
+       * La normalisation est faite ici, à l'entrée du socle, et la valeur n'est
+       * écrite qu'à l'ouverture de la session — voir `SessionCandidate`.
+       */
+      campaign?: RawCampaign;
+      /**
+       * Ce que le visiteur a répondu au sujet du cookie de croisement.
+       *
+       * `true` accepté, `false` refusé, **absent** : on ne lui a rien demandé —
+       * et c'est le cas ordinaire. Le mode par défaut de la mesure d'audience
+       * ne pose aucune question, donc l'absence n'est ni un refus ni un trou.
+       *
+       * Le socle reçoit ce signal **en plus** de sa conséquence. Les deux ne
+       * disent pas la même chose : `visitorId` dit ce qu'on a le droit
+       * d'écrire, `consent` dit ce qui a été répondu. Sans lui, un visiteur qui
+       * refuse et un visiteur à qui personne n'a rien demandé sont
+       * indiscernables — ils n'ont ni l'un ni l'autre d'identité durable.
+       *
+       * Branche navigateur seulement : une source serveur n'a personne à qui
+       * demander.
+       */
+      consent?: boolean;
+    })
+  | (IngestBase & {
+      source: 'server';
+      /**
+       * La visite à laquelle rattacher cet événement, quand la source en
+       * désigne une.
+       *
+       * Opaque ici, comme `visitorId` : le socle constate qu'on lui en donne
+       * une, sans savoir par quel chemin elle est revenue au client.
+       *
+       * `sessionId` à `null` disait « cet événement n'a pas de visite », et
+       * c'est encore vrai d'un deploy ou d'une sonde. Un paiement, lui, peut en
+       * avoir une — celle pendant laquelle l'achat a été conclu — et c'est le
+       * seul rattachement possible pour un visiteur qui n'a pas consenti.
+       *
+       * Elle n'est **pas** offerte à la branche navigateur : là, la visite est
+       * découpée par `SessionAssigner`, et laisser un client la choisir
+       * reviendrait à lui laisser fusionner deux visites étrangères.
+       */
+      sessionId?: string;
+    });
 
 /**
  * Le socle d'ingestion, et il ne fait que ça.
@@ -84,6 +190,7 @@ export class CoreService {
     @Inject(DRIZZLE) private readonly db: DrizzleDatabase,
     private readonly visitorKeys: VisitorKeyService,
     private readonly geoIp: GeoIpService,
+    private readonly userAgents: UserAgentService,
     private readonly sessionAssigner: SessionAssigner,
     private readonly eventTypes: EventTypeRegistry,
     private readonly eventStore: EventStore,
@@ -105,17 +212,31 @@ export class CoreService {
    * Le chemin serveur n'a pas ce besoin, mais il partage la transaction pour que
    * l'inscription du type et l'écriture de l'événement restent solidaires.
    */
-  async ingest(command: IngestCommand): Promise<PublicEvent> {
+  async ingest(command: IngestCommand): Promise<IngestedEvent> {
     try {
       return await this.db.transaction(async (tx) => {
+        // Résolue une fois, pour les deux usages qui suivent : l'identité de la
+        // session, et la corrélation persistée sur l'événement. Le chemin
+        // serveur n'a que le second — il n'a pas de visite à rattacher.
+        const visitorKey = command.visitorId
+          ? this.visitorKeys.computeStable(
+              command.projectId,
+              command.visitorId,
+            )
+          : null;
+
+        // Deux origines, jamais deux chemins : le navigateur fait découper sa
+        // visite, le serveur en désigne une qu'il a reçue. La seconde est
+        // vérifiée avant d'être écrite — la clé étrangère la refuserait, mais
+        // trop tard et pour la mauvaise raison (voir `sessionOfProject`).
         const sessionId =
           command.source === 'browser'
-            ? await this.assignSession(tx, command.projectId, command)
-            : null;
+            ? await this.assignSession(tx, command, visitorKey)
+            : await this.sessionOfProject(tx, command);
 
         await this.eventTypes.register(tx, command.projectId, command.type);
 
-        return await this.eventStore.insert(tx, {
+        const written = await this.eventStore.insert(tx, {
           projectId: command.projectId,
           type: command.type,
           occurredAt: command.occurredAt,
@@ -123,7 +244,12 @@ export class CoreService {
           properties: command.properties,
           source: command.source,
           sessionId,
+          visitorKey,
         });
+
+        // Recomposée ici plutôt que relue : `EventStore.insert` ne la rend pas,
+        // et n'a pas à le faire — la valeur est celle qu'on vient de lui passer.
+        return { ...written, sessionId };
       });
     } catch (error) {
       if (isForeignKeyViolation(error)) {
@@ -137,34 +263,208 @@ export class CoreService {
   }
 
   /**
+   * Rattache après coup des événements déjà écrits à un visiteur.
+   *
+   * ## Pourquoi ici et pas dans `EventStore`
+   *
+   * Parce que dériver la clé est le travail de ce service, et de lui seul.
+   * `EventStore` écrit ce qu'on lui donne ; c'est le Core qui tient
+   * `VisitorKeyService`, et donc qui décide ce qu'une identité *devient* une fois
+   * en base. La dérivation est exactement la même qu'à l'ingestion — deux
+   * chemins qui produiraient des clés différentes pour le même visiteur seraient
+   * pires que pas d'attribution du tout.
+   *
+   * ## Ce que l'appelant passe, et ce qu'il ne voit jamais
+   *
+   * Un identifiant durable **opaque** et des ids d'événements. Jamais une clé :
+   * c'est cette signature qui permet à un module métier de rattacher son revenu
+   * à un parcours sans jamais nommer, ni pouvoir fabriquer, une clé visiteur.
+   *
+   * Rend le nombre de lignes réellement rattachées — celles qui n'avaient pas
+   * déjà une identité, `EventStore.attribute` n'écrasant rien.
+   */
+  async attribute(
+    projectId: string,
+    eventIds: string[],
+    visitorId: string,
+  ): Promise<number> {
+    return await this.eventStore.attribute(
+      eventIds,
+      this.visitorKeys.computeStable(projectId, visitorId),
+    );
+  }
+
+  /**
+   * La première visite de chacun de ces visiteurs, pour qui sait déjà qui ils
+   * sont.
+   *
+   * ## Le pendant en lecture d'`attribute`
+   *
+   * Même signature morale : un module arrive avec des identifiants durables
+   * **opaques** — ceux que le site lui a donnés — et repart avec des faits. La
+   * dérivation de la clé se fait ici, comme à l'ingestion et comme au
+   * rattachement, parce que trois chemins qui dériveraient différemment
+   * seraient pires que pas de corrélation du tout.
+   *
+   * C'est ce qui permet à un module de bâtir des cohortes d'acquisition sans
+   * jamais nommer, ni pouvoir fabriquer, une clé visiteur.
+   *
+   * ## Ce que l'absence veut dire
+   *
+   * Un identifiant qui ne ressort pas de la carte n'a **aucune visite connue** :
+   * client antérieur à l'installation, ou consentement refusé jusqu'au jour du
+   * paiement. Ce n'est pas un trou à combler — c'est un fait, et c'est à
+   * l'appelant de le montrer plutôt que de le répartir.
+   */
+  async firstVisits(
+    projectId: string,
+    visitorIds: string[],
+  ): Promise<Map<string, EntryVisit>> {
+    // La clé ne quitte pas cette méthode : elle sert d'index le temps de la
+    // requête, et la carte rendue est réindexée sur ce que l'appelant connaît.
+    const byKey = new Map(
+      visitorIds.map((visitorId) => [
+        this.visitorKeys.computeStable(projectId, visitorId),
+        visitorId,
+      ]),
+    );
+
+    const visits = await this.eventStore.entryVisits(projectId, [
+      ...byKey.keys(),
+    ]);
+
+    return new Map(
+      [...visits].flatMap(([key, visit]) => {
+        const visitorId = byKey.get(key);
+
+        return visitorId ? [[visitorId, visit] as const] : [];
+      }),
+    );
+  }
+
+  /**
    * Le chemin navigateur, isolé pour que le chemin serveur ne puisse pas
    * l'emprunter par distraction.
    *
    * L'IP et le User-Agent s'arrêtent ici : ils ne sont ni écrits, ni
-   * journalisés, ni renvoyés. Seuls en sortent la clé visiteur et trois libellés
-   * géographiques grossiers, tous non réversibles, et tous sur la ligne
-   * `sessions`. `network` sort de portée avec la requête.
+   * journalisés, ni renvoyés. Seuls en sortent la clé visiteur, trois libellés
+   * géographiques grossiers et trois libellés de client — tous non réversibles,
+   * et tous sur la ligne `sessions`. `network` sort de portée avec la requête.
+   *
+   * Les deux dérivations sont symétriques et volontairement voisines : une
+   * donnée identifiante entre, des libellés d'audience sortent, l'entrée ne
+   * survit pas. Ce n'est ni `GeoIpService` ni `UserAgentService` qui protègent
+   * quoi que ce soit — c'est cette ligne-ci, et le fait que rien en aval ne
+   * reçoive `network`.
+   *
+   * Les deux modes d'identification se rejoignent ici, et nulle part ailleurs.
+   * En sortie il n'y a qu'une clé opaque : `SessionAssigner`, `EventStore` et
+   * tout ce qui lit ensuite ignorent lequel des deux l'a produite, et c'est ce
+   * qui permet d'en changer en cours de route sans rien reconstruire.
    */
+  /**
+   * La visite qu'une source serveur désigne, une fois vérifiée.
+   *
+   * Rend `null` dans les trois cas où il n'y a rien à rattacher : aucune visite
+   * désignée (un deploy, une sonde), une visite qui n'existe pas, une visite
+   * qui appartient à un autre projet. Les trois se valent du point de vue de
+   * l'écriture — l'événement est enregistré sans visite — et aucun ne fait
+   * échouer l'ingestion : un paiement non attribué reste un paiement, et le
+   * perdre pour une metadata mal posée serait bien pire que de l'écrire nu.
+   */
+  private async sessionOfProject(
+    tx: Parameters<typeof this.sessionAssigner.belongsToProject>[0],
+    command: Extract<IngestCommand, { source: 'server' }>,
+  ): Promise<string | null> {
+    const { sessionId, projectId } = command;
+
+    if (!sessionId) return null;
+
+    return (await this.sessionAssigner.belongsToProject(
+      tx,
+      sessionId,
+      projectId,
+    ))
+      ? sessionId
+      : null;
+  }
+
   private async assignSession(
     tx: Parameters<typeof this.sessionAssigner.assign>[0],
-    projectId: string,
-    { network, occurredAt }: { network: NetworkIdentity; occurredAt: Date },
+    command: Extract<IngestCommand, { source: 'browser' }>,
+    durableKey: string | null,
   ): Promise<string> {
+    const { projectId, network, occurredAt } = command;
     const identity = { projectId, ...network };
     const now = new Date();
-    const visitorKey = this.visitorKeys.compute(identity, now);
+    const derivedKey = this.visitorKeys.compute(identity, now);
 
     return await this.sessionAssigner.assign(tx, {
       projectId,
-      visitorKey,
-      fallbackKey: this.previousKey(identity, now, visitorKey),
+      // Tout l'aiguillage entre les deux modes d'identification tient dans ce
+      // `??`, parce que rien en aval ne les distingue : la clé est opaque, la
+      // session l'est aussi.
+      visitorKey: durableKey ?? derivedKey,
+      fallbackKey: this.chooseFallback(identity, now, derivedKey, command),
       occurredAt,
       // Résolue à chaque événement, écrite seulement à l'ouverture d'une
       // session — c'est l'assigneur qui le sait, pas nous. Le lookup est en
       // mémoire et synchrone : le tester ici demanderait de savoir si une
       // session existe déjà, donc de dupliquer sa décision.
       location: this.geoIp.locate(network.ip),
+      client: this.userAgents.describe(network.userAgent),
+      campaign: normalizeCampaign(command.campaign),
+      // Seule valeur de la candidate qui ait le droit de changer en cours de
+      // visite : le bandeau se répond à la deuxième page aussi souvent qu'à la
+      // première. Voir `SessionCandidate.consent`.
+      consent: command.consent,
     });
+  }
+
+  /**
+   * La seconde clé sous laquelle `SessionAssigner` cherchera un voisin.
+   *
+   * Il n'y a qu'un repli, et le mode décide qui l'occupe. Les quatre cas
+   * s'excluent, et trois d'entre eux ne se produisent jamais en régime établi.
+   *
+   * ## Pourquoi le régime établi durable n'a aucun repli
+   *
+   * C'est le seul cas qui mérite d'être justifié. Y laisser la clé dérivée
+   * ferait chercher un voisin sous une clé que **plusieurs personnes
+   * partagent** : deux visiteurs derrière la même sortie réseau, avec le même
+   * navigateur, produisent la même. Le voisin trouvé pourrait alors ne pas
+   * être le bon, et l'assigneur fusionnerait deux visites étrangères l'une à
+   * l'autre — à chaque événement, indéfiniment.
+   *
+   * Le même risque existe à la bascule, mais il y est **borné à un seul
+   * événement**, et c'est ce qui le rend acceptable : sans lui, toute visite
+   * en cours au moment de l'acceptation serait coupée en deux, et une visite
+   * de deux pages compterait pour deux visites d'une page.
+   */
+  private chooseFallback(
+    identity: VisitorIdentity,
+    now: Date,
+    derivedKey: string,
+    {
+      visitorId,
+      visitorIdJustGranted,
+      retiredVisitorId,
+    }: Extract<IngestCommand, { source: 'browser' }>,
+  ): string | undefined {
+    // Il vient d'accepter : ce qu'il a laissé juste avant porte la clé dérivée.
+    if (visitorIdJustGranted) return derivedKey;
+
+    // Il vient de se rétracter : symétrie exacte, l'identifiant ne vaut plus
+    // mais le voisin d'il y a dix secondes le porte encore.
+    if (retiredVisitorId)
+      return this.visitorKeys.computeStable(
+        identity.projectId,
+        retiredVisitorId,
+      );
+
+    if (visitorId) return undefined;
+
+    return this.previousKey(identity, now, derivedKey);
   }
 
   /**

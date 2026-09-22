@@ -8,6 +8,7 @@ import {
 import {
   FolderIcon,
   KeyRoundIcon,
+  PlugIcon,
   Settings2Icon,
   SlidersHorizontalIcon,
   UsersIcon,
@@ -34,7 +35,7 @@ import { cn } from '#/lib/utils';
  *
  * ## Pourquoi une colonne et pas des onglets
  *
- * Cinq panneaux répartis en deux familles. Un `Tabs` les mettrait à plat et
+ * Six panneaux répartis en deux familles. Un `Tabs` les mettrait à plat et
  * perdrait exactement l'information qui compte : que renommer le projet et
  * renommer l'organisation ne touchent pas le même monde ni les mêmes gens.
  *
@@ -96,6 +97,10 @@ function SettingsLayout() {
               <KeyRoundIcon />
               API keys
             </NavLink>
+            <NavLink to="/projects/$projectId/settings/integrations">
+              <PlugIcon />
+              Integrations
+            </NavLink>
           </NavGroup>
         </nav>
 
@@ -147,7 +152,8 @@ function NavLink({
     | '/projects/$projectId/settings/members'
     | '/projects/$projectId/settings/projects'
     | '/projects/$projectId/settings/project'
-    | '/projects/$projectId/settings/keys';
+    | '/projects/$projectId/settings/keys'
+    | '/projects/$projectId/settings/integrations';
   children: ReactNode;
 }) {
   const { projectId } = Route.useParams();

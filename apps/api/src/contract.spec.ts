@@ -1,6 +1,12 @@
 import type {
   AnalyticsSummary as WireAnalyticsSummary,
+  RevenueAttributionPage as WireRevenueAttributionPage,
+  RevenueSeriesPage as WireRevenueSeriesPage,
+  CohortsPage as WireCohortsPage,
+  MovementsPage as WireMovementsPage,
+  SyncReport as WireSyncReport,
   EventsPage as WireEventsPage,
+  Integration as WireIntegration,
   Invitation as WireInvitation,
   InvitationDetail as WireInvitationDetail,
   LocationsPage as WireLocationsPage,
@@ -11,9 +17,11 @@ import type {
   EventType as WireEventType,
   ProjectKey as WireProjectKey,
   SessionsPage as WireSessionsPage,
+  TechnologyPage as WireTechnologyPage,
 } from '@events-hub/api-contract';
 
 import type { Auth } from './auth/auth';
+import type { PublicIntegration } from './integrations/integrations.controller';
 import type { ProjectEventType } from './event-types/event-type-registry.service';
 import type { ListedProjectKey } from './projects/project-keys.service';
 import type {
@@ -21,7 +29,15 @@ import type {
   LocationsPage,
   SessionsPage,
 } from './features/analytics/analytics.service';
+import type { TechnologyPage } from './features/analytics/analytics.service';
 import type { EventsPage } from './features/events/events.service';
+import type { CohortsPage } from './features/stripe/cohorts.service';
+import type { MovementsPage } from './features/stripe/movements.service';
+import type {
+  RevenueAttributionPage,
+  RevenueSeriesPage,
+} from './features/stripe/revenue.service';
+import type { SyncReport } from './features/stripe/stripe.service';
 import type { OrganizationRow } from './organizations/organizations.service';
 import type { ProjectIngestion, ProjectRow } from './projects/projects.service';
 
@@ -139,8 +155,27 @@ export type EventsPageConforms = Assert<
 export type EventTypeConforms = Assert<
   Conforms<Wire<ProjectEventType>, WireEventType>
 >;
+export type IntegrationConforms = Assert<
+  Conforms<Wire<PublicIntegration>, WireIntegration>
+>;
 export type LocationsPageConforms = Assert<
   Conforms<Wire<LocationsPage>, WireLocationsPage>
+>;
+export type TechnologyPageConforms = Assert<
+  Conforms<Wire<TechnologyPage>, WireTechnologyPage>
+>;
+export type RevenueAttributionPageConforms = Assert<
+  Conforms<Wire<RevenueAttributionPage>, WireRevenueAttributionPage>
+>;
+export type RevenueSeriesPageConforms = Assert<
+  Conforms<Wire<RevenueSeriesPage>, WireRevenueSeriesPage>
+>;
+export type SyncReportConforms = Assert<Conforms<Wire<SyncReport>, WireSyncReport>>;
+export type CohortsPageConforms = Assert<
+  Conforms<Wire<CohortsPage>, WireCohortsPage>
+>;
+export type MovementsPageConforms = Assert<
+  Conforms<Wire<MovementsPage>, WireMovementsPage>
 >;
 
 /**

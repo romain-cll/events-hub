@@ -1,23 +1,22 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
-import { eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { events, projects, sessions } from '../src/database/schema';
+import { events, sessions } from '../src/database/schema';
 import { sessionsPageSchema } from '@events-hub/api-contract';
 
 import {
+  TEST_ORIGIN,
+  cleanupFixtures,
   createProject,
   expectMatchesContract,
   joinOrganization,
   organizationId,
   signUp,
-  TEST_ORIGIN,
 } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * `GET /v1/projects/:projectId/analytics/sessions`, éprouvée par sa route.
@@ -88,14 +87,12 @@ describe('GET /v1/projects/:projectId/analytics/sessions (e2e)', () => {
   let apiKey: string;
   /** Le compte qui lit : membre de l'organisation des projets de test. */
   let cookies: string[];
-  const created: string[] = [];
 
   const newProject = async (label: string) => {
     const project = await createProject(db, {
       name: `e2e sessions route ${label} ${new Date().toISOString()}`,
     });
 
-    created.push(project.id);
     return project;
   };
 
@@ -177,13 +174,7 @@ describe('GET /v1/projects/:projectId/analytics/sessions (e2e)', () => {
   };
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
 
     db = app.get<DrizzleDatabase>(DRIZZLE);
 
@@ -222,9 +213,7 @@ describe('GET /v1/projects/:projectId/analytics/sessions (e2e)', () => {
   });
 
   afterAll(async () => {
-    await db.delete(events).where(inArray(events.projectId, created));
-    await db.delete(sessions).where(inArray(sessions.projectId, created));
-    await db.delete(projects).where(inArray(projects.id, created));
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -240,11 +229,12 @@ describe('GET /v1/projects/:projectId/analytics/sessions (e2e)', () => {
       expect(body.sessions).toHaveLength(3);
     });
 
-    it('une ligne porte exactement les dix champs promis', async () => {
+    it('une ligne porte exactement les onze champs promis', async () => {
       const [alice] = (await lire()).sessions;
 
       expect(Object.keys(alice).sort()).toEqual([
         'activeMs',
+        'campaign',
         'endedAt',
         'entryPath',
         'exit',
@@ -317,9 +307,8 @@ describe('GET /v1/projects/:projectId/analytics/sessions (e2e)', () => {
         .query(FENETRE)
         .expect(200);
 
-      const distincts = new Set(
-        detail.sessions.map((row) => row.visitorAlias),
-      ).size;
+      const distincts = new Set(detail.sessions.map((row) => row.visitorAlias))
+        .size;
 
       expect(distincts).toBe(
         (resume.body as { uniqueVisitors: number }).uniqueVisitors,
@@ -351,9 +340,9 @@ describe('GET /v1/projects/:projectId/analytics/sessions (e2e)', () => {
       const premier = await lire();
       const second = await lire();
 
-      expect(new Set(premier.sessions.map((row) => row.visitorAlias)).size).toBe(
-        new Set(second.sessions.map((row) => row.visitorAlias)).size,
-      );
+      expect(
+        new Set(premier.sessions.map((row) => row.visitorAlias)).size,
+      ).toBe(new Set(second.sessions.map((row) => row.visitorAlias)).size);
     });
 
     it('n’a pas la forme de la clé qu’il remplace', async () => {
@@ -378,7 +367,9 @@ describe('GET /v1/projects/:projectId/analytics/sessions (e2e)', () => {
       const page = await lire(FENETRE, revenant.id);
 
       expect(page.sessions).toHaveLength(2);
-      expect(new Set(page.sessions.map((row) => row.visitorAlias)).size).toBe(1);
+      expect(new Set(page.sessions.map((row) => row.visitorAlias)).size).toBe(
+        1,
+      );
 
       await db.delete(events).where(eq(events.projectId, revenant.id));
       await db.delete(sessions).where(eq(sessions.projectId, revenant.id));
@@ -515,7 +506,7 @@ describe('GET /v1/projects/:projectId/analytics/sessions (e2e)', () => {
         kind: 'internal',
         name: 'shop.test',
         label: 'shop.test',
-        // Pour un `internal` comme pour un `referral`, le nom *est* le domaine.
+        // Pour un `internal` comme pour un `other`, le nom *est* le domaine.
         host: 'shop.test',
       });
     });
@@ -720,9 +711,15 @@ describe('GET /v1/projects/:projectId/analytics/sessions (e2e)', () => {
       // des deux côtés — d'où on est parti, et vers où.
       await poser('parti', 'page_view', '09:00', { 'page.path': '/parti' });
       await poser('parti', 'page_view', '09:05', { 'page.path': '/panier' });
-      await poser('parti', 'outbound_click', '09:06', {}, {
-        'link.origin': 'https://checkout.stripe.com',
-      });
+      await poser(
+        'parti',
+        'outbound_click',
+        '09:06',
+        {},
+        {
+          'link.origin': 'https://checkout.stripe.com',
+        },
+      );
 
       // `reste` s'éteint sur place : on sait sur quelle page, pas vers où.
       await poser('reste', 'page_view', '09:10', { 'page.path': '/reste' });

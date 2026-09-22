@@ -4,6 +4,8 @@ import { and, asc, desc, eq, gt, inArray, lte, sql } from 'drizzle-orm';
 import type { DrizzleTransaction } from '../database/database.module';
 import { events, sessions } from '../database/schema';
 import type { Location } from '../geoip/geoip.service';
+import type { Client } from '../user-agent/user-agent.service';
+import type { Campaign } from './campaign';
 
 /**
  * L'inactivité maximale à l'intérieur d'une session.
@@ -47,6 +49,55 @@ export interface SessionCandidate {
    * à la troisième page ».
    */
   location?: Location;
+  /**
+   * Avec quoi il navigue, dérivé de son User-Agent par `UserAgentService`.
+   *
+   * **Utilisée à l'ouverture seulement**, comme `location` et pour la même
+   * raison : c'est un attribut de la visite. La réécrire à chaque événement la
+   * ferait osciller au fil d'une mise à jour de navigateur, pour un gain nul —
+   * aucune lecture ne demande « avec quoi naviguait-il à la troisième page ».
+   *
+   * Le cas ne se présente d'ailleurs presque jamais : en mode dérivé, le
+   * User-Agent entre dans la clé visiteur, donc deux en-têtes différents
+   * ouvrent deux sessions. Seul un visiteur consenti peut changer de navigateur
+   * en cours de visite — le premier gagne.
+   */
+  client?: Client;
+  /**
+   * D'où vient la visite, quand une campagne l'a amenée.
+   *
+   * **Utilisée à l'ouverture seulement**, comme `location` et `client`, et c'est
+   * ici que ça compte le plus. Par événement, une visite de trois pages dirait
+   * trois arrivées de la même campagne : les UTM restent dans l'URL après le
+   * premier chargement, et sur une application monopage ils y restent tant que
+   * personne n'a réécrit l'historique. L'erreur serait exactement
+   * proportionnelle à la profondeur des visites — invisible, et d'autant plus
+   * grosse que le site est bon.
+   *
+   * Ce que ça coûte : un visiteur déjà présent qui clique une publicité dans un
+   * second onglet moins de trente minutes plus tard ne change pas la campagne de
+   * sa session. C'est le prix exact de « posé à l'ouverture », le même que pour
+   * la position géographique.
+   */
+  campaign?: Campaign | null;
+  /**
+   * Ce que le visiteur a répondu au sujet du cookie de croisement.
+   *
+   * **La seule valeur de cette candidate qui ait le droit de changer en cours
+   * de visite**, et la seule colonne de `sessions` à bouger après l'ouverture
+   * avec `startedAt`. Le bandeau se répond à la deuxième page aussi souvent
+   * qu'à la première, et le premier événement d'une visite précède toujours le
+   * clic : la figer à l'ouverture, comme la position ou la campagne,
+   * sous-estimerait les acceptations de façon structurelle.
+   *
+   * C'est donc le **dernier signal connu** qui gagne. `undefined` n'efface
+   * rien : on n'a rien demandé à ce chargement-là, ce qui ne retire pas ce qui
+   * a été répondu au précédent.
+   *
+   * Ça ne coûte aucune requête : `extend` écrit déjà à chaque événement qui
+   * rejoint une session.
+   */
+  consent?: boolean;
 }
 
 /** Un voisin : son instant et la session à laquelle il appartient. */
@@ -133,6 +184,38 @@ export class SessionAssigner {
    * ne protège que jusqu'au `COMMIT`, et relâcher entre l'attribution et
    * l'insertion rouvrirait exactement la course qu'il empêche.
    */
+  /**
+   * La visite existe-t-elle, et appartient-elle bien à ce projet ?
+   *
+   * Pour les sources qui **désignent** une visite au lieu d'en faire découper
+   * une — un paiement rapporté par un serveur, qui rend l'identifiant reçu du
+   * site. La valeur vient donc du dehors, et rien ne garantit qu'elle veuille
+   * dire quelque chose.
+   *
+   * La clé étrangère refuserait déjà une visite inexistante, mais elle
+   * n'attraperait pas celle d'un *autre projet* — et elle ne le ferait qu'en
+   * faisant échouer l'écriture, donc en faisant rejouer le webhook
+   * indéfiniment pour une metadata qui ne se corrigera pas toute seule. Ici on
+   * constate, on écrit `null`, et le paiement est enregistré sans visite plutôt
+   * que perdu.
+   *
+   * Le cloisonnement par projet n'est pas une précaution de principe : sans
+   * lui, un site pourrait rattacher son revenu aux visites d'un autre.
+   */
+  async belongsToProject(
+    tx: DrizzleTransaction,
+    sessionId: string,
+    projectId: string,
+  ): Promise<boolean> {
+    const [found] = await tx
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(and(eq(sessions.id, sessionId), eq(sessions.projectId, projectId)))
+      .limit(1);
+
+    return found !== undefined;
+  }
+
   async assign(
     tx: DrizzleTransaction,
     {
@@ -141,6 +224,9 @@ export class SessionAssigner {
       fallbackKey,
       occurredAt,
       location,
+      client,
+      campaign,
+      consent,
     }: SessionCandidate,
   ): Promise<string> {
     // Triées, et c'est la seule chose qui compte : deux requêtes du même
@@ -170,14 +256,32 @@ export class SessionAssigner {
     if (joinsPrevious && joinsNext) {
       // Les deux voisins sont assez proches : l'événement fait le pont.
       return previous.sessionId === next.sessionId
-        ? this.extend(tx, previous.sessionId, occurredAt)
-        : this.merge(tx, previous.sessionId, next.sessionId, occurredAt);
+        ? this.extend(tx, previous.sessionId, occurredAt, consent)
+        : this.merge(
+            tx,
+            previous.sessionId,
+            next.sessionId,
+            occurredAt,
+            consent,
+          );
     }
 
-    if (joinsPrevious) return this.extend(tx, previous.sessionId, occurredAt);
-    if (joinsNext) return this.extend(tx, next.sessionId, occurredAt);
+    if (joinsPrevious) {
+      return this.extend(tx, previous.sessionId, occurredAt, consent);
+    }
 
-    return this.open(tx, projectId, visitorKey, occurredAt, location);
+    if (joinsNext) return this.extend(tx, next.sessionId, occurredAt, consent);
+
+    return this.open(
+      tx,
+      projectId,
+      visitorKey,
+      occurredAt,
+      location,
+      client,
+      campaign,
+      consent,
+    );
   }
 
   /** L'écart entre un voisin et l'événement tient-il dans une session ? */
@@ -256,6 +360,9 @@ export class SessionAssigner {
     visitorKey: string,
     occurredAt: Date,
     location?: Location,
+    client?: Client,
+    campaign?: Campaign | null,
+    consent?: boolean,
   ): Promise<string> {
     const [session] = await tx
       .insert(sessions)
@@ -266,6 +373,16 @@ export class SessionAssigner {
         countryCode: location?.countryCode,
         region: location?.region,
         city: location?.city,
+        browser: client?.browser,
+        os: client?.os,
+        deviceType: client?.deviceType,
+        isBot: client?.isBot,
+        campaignSource: campaign?.source,
+        campaignMedium: campaign?.medium,
+        campaignName: campaign?.name,
+        // `undefined` laisse la colonne à `null` : personne n'a rien demandé à
+        // ce visiteur, ce qui n'est pas un refus. Voir `sessions.consent`.
+        consent,
       })
       .returning({ id: sessions.id });
 
@@ -284,10 +401,17 @@ export class SessionAssigner {
     tx: DrizzleTransaction,
     sessionId: string,
     occurredAt: Date,
+    consent?: boolean,
   ): Promise<string> {
     await tx
       .update(sessions)
-      .set({ startedAt: sql`least(${sessions.startedAt}, ${occurredAt})` })
+      .set({
+        startedAt: sql`least(${sessions.startedAt}, ${occurredAt})`,
+        // La clé n'est posée que s'il y a un signal : une absence n'efface pas
+        // une réponse donnée au chargement précédent. C'est ce qui fait du
+        // consentement une valeur « dernier connu » et non « dernier vu ».
+        ...(consent === undefined ? {} : { consent }),
+      })
       .where(eq(sessions.id, sessionId));
 
     return sessionId;
@@ -316,6 +440,7 @@ export class SessionAssigner {
     first: string,
     second: string,
     occurredAt: Date,
+    consent?: boolean,
   ): Promise<string> {
     const bornes = await tx
       .select({ id: sessions.id, startedAt: sessions.startedAt })
@@ -336,6 +461,11 @@ export class SessionAssigner {
       .update(sessions)
       .set({
         startedAt: sql`least(${sessions.startedAt}, ${absorbee.startedAt}, ${occurredAt})`,
+        // Même règle qu'à l'extension : l'événement qui fait le pont apporte le
+        // dernier signal connu, et son absence ne défait pas celui de la
+        // survivante. Celui de l'absorbée disparaît avec sa ligne, comme sa
+        // position et sa campagne.
+        ...(consent === undefined ? {} : { consent }),
       })
       .where(eq(sessions.id, survivante.id));
 

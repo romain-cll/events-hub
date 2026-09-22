@@ -19,6 +19,8 @@ import {
   type SQL,
 } from 'drizzle-orm';
 
+import { alias } from 'drizzle-orm/pg-core';
+
 import {
   DRIZZLE,
   type DrizzleDatabase,
@@ -32,6 +34,7 @@ import {
   type EventSource,
   type NewEvent,
 } from '../database/schema';
+import { retentionCutoff } from '../retention/cutoff';
 
 /**
  * Combien de valeurs distinctes `topValues` rend par défaut.
@@ -133,20 +136,28 @@ export const SESSION_COLUMNS = {
   countryCode: sessions.countryCode,
   region: sessions.region,
   city: sessions.city,
+  browser: sessions.browser,
+  os: sessions.os,
+  deviceType: sessions.deviceType,
 } as const;
 
 export type SessionColumn = keyof typeof SESSION_COLUMNS;
 
-/** Une ligne de classement géographique. */
+/** Une ligne de classement par attribut de session. */
 export interface SessionValueCount {
   /**
-   * Toujours rendu, quel que soit le grain.
+   * La seconde colonne qui départage, quand l'appelant en demande une.
    *
-   * Sans lui, deux villes homonymes dans deux pays fusionneraient en une ligne
-   * — et le planisphère n'aurait rien sur quoi se joindre.
+   * Elle existe pour la géographie : sans elle, deux villes homonymes dans deux
+   * pays fusionneraient en une ligne, et le planisphère n'aurait rien sur quoi
+   * se joindre. Un classement par navigateur n'a rien à départager — l'appelant
+   * n'en demande pas, et le champ vaut `null`.
+   *
+   * Le nom est neutre exprès : c'est le socle, et rien ici ne sait ce qu'est un
+   * pays.
    */
-  countryCode: string | null;
-  /** La valeur du grain demandé. Égale à `countryCode` au grain pays. */
+  qualifier: string | null;
+  /** La valeur du grain demandé. */
   value: string;
   visitors: number;
   sessions: number;
@@ -169,6 +180,15 @@ export interface SessionValueRanking {
 /** Sur quelle colonne de session porte le classement, et jusqu'où. */
 export interface SessionValueSelector {
   column: SessionColumn;
+  /**
+   * La colonne qui départage les homonymes, quand il y en a.
+   *
+   * Absente, le classement ne groupe que sur `column` et `qualifier` vaut
+   * `null`. C'est le cas par défaut : la plupart des grains n'ont rien à
+   * départager, et rendre un champ qui ne veut rien dire obligerait chaque
+   * lecture à l'expliquer.
+   */
+  qualifier?: SessionColumn;
   /** Nombre de lignes rendues. Défaut : 10. */
   limit?: number;
 }
@@ -207,6 +227,203 @@ export interface ValueCount {
  * intéresse l'appelant ; lui en laisser choisir une reviendrait à lui demander
  * ce qu'il cherche, donc à commencer à le savoir.
  */
+/**
+ * La campagne d'une session, telle que la lecture la rend.
+ *
+ * Le socle ne sait pas ce qu'une campagne *signifie* — il rend trois libellés
+ * qu'il a lui-même normalisés et figés, et c'est tout ce qu'il en dit.
+ */
+export interface SessionCampaign {
+  source: string | null;
+  medium: string | null;
+  name: string | null;
+}
+
+/**
+ * Où lire un montant, et dans quelle devise il est libellé.
+ *
+ * Deux clés plutôt qu'une, et la seconde n'est pas un ornement : sans devise, un
+ * total additionne des euros et des yens en silence. Le Core ne convertit rien —
+ * il **sépare**, ce qui est la seule chose qu'une base de données puisse faire
+ * honnêtement sans taux de change ni date de taux.
+ *
+ * Comme pour `ValueSelector`, le Core ne sait pas ce que ces clés désignent : il
+ * additionne ce qu'il trouve à l'endroit qu'on lui nomme, dans l'unité où
+ * l'émetteur l'a écrit.
+ */
+export interface AmountSelector {
+  source: 'attributes' | 'properties';
+  /** La clé du montant. Seules les valeurs entières sont additionnées. */
+  amount: string;
+  /** La clé de la devise. Elle sépare les totaux, elle ne les convertit pas. */
+  currency: string;
+  /** Nombre de lignes classées. Défaut : 10. */
+  limit?: number;
+}
+
+/**
+ * Le pas d'une série temporelle.
+ *
+ * Ensemble **fermé**, et c'est la propriété de sécurité : la valeur vient d'une
+ * URL et finit dans un `date_trunc`, qui prend son unité en texte. La résoudre
+ * ici, par un objet dont les clés sont connues à la compilation, garantit
+ * qu'aucune chaîne d'appelant n'atteint le SQL.
+ */
+export const SERIES_STEPS = ['day', 'week', 'month'] as const;
+
+export type SeriesStep = (typeof SERIES_STEPS)[number];
+
+/** Un point de la série : un pas, une devise, un total. */
+export interface AmountPoint {
+  /** Le début du pas, en UTC. Une borne, pas un libellé. */
+  start: Date;
+  /** La devise telle que l'émetteur l'a écrite, ou `null`. */
+  currency: string | null;
+  /** Somme des montants entiers du pas, dans leur unité d'origine. */
+  amount: number;
+  /** Nombre d'événements du pas, montant ou pas. */
+  events: number;
+}
+
+/**
+ * Sur quel axe ranger les paiements — et où cet axe se lit.
+ *
+ * ## Deux natures, une seule jointure de plus
+ *
+ * Certains axes sont des **colonnes de la première visite** : la campagne y a
+ * été rangée à l'ouverture, le pays aussi. D'autres vivent dans le **sac du
+ * premier événement** de cette visite — le referrer et le chemin d'entrée n'ont
+ * jamais eu de colonne, et n'en auront pas : les recopier créerait une seconde
+ * vérité là où la donnée existe déjà.
+ *
+ * ## Le Core ne nomme rien
+ *
+ * `column` est un ensemble **fermé à la compilation**, comme `SESSION_COLUMNS` :
+ * aucune chaîne d'appelant n'atteint le SQL. `key`, elle, est libre et part en
+ * paramètre lié — le Core ignore ce qu'elle désigne, exactement comme dans
+ * `topValues`. C'est ce qui lui permet de grouper un referrer sans savoir ce
+ * qu'est un referrer.
+ */
+export type EntrySessionColumn =
+  | 'campaign'
+  | 'country'
+  | 'browser'
+  | 'os'
+  | 'device';
+
+export type EntryAxis =
+  | { on: 'session'; column: EntrySessionColumn }
+  | { on: 'entry'; source: 'attributes' | 'properties'; key: string }
+  /**
+   * Les deux à la fois, groupés ensemble — et **rien de décidé ici**.
+   *
+   * Une colonne seule ne suffit pas quand la question porte sur ce que les deux
+   * disent *ensemble* : deux visites arrivées du même endroit peuvent n'avoir
+   * pas la même origine, et seule la colonne le dit. Les lire en deux passes ne
+   * rendrait pas le couple — deux classements séparés ne se recroisent pas.
+   *
+   * Le Core rend donc les deux valeurs côte à côte, dans les deux premiers
+   * emplacements, et **ne tranche pas** laquelle l'emporte : il ne sait pas ce
+   * qu'elles désignent. C'est l'appelant, dans `features/`, qui a le droit de
+   * le savoir.
+   *
+   * La campagne y tient en **une** valeur — sa source — là où l'axe `session`
+   * lui en donne trois. Savoir qu'il y en avait une suffit à cette question ;
+   * qui veut le triplet a son propre axe.
+   */
+  | {
+      on: 'both';
+      column: EntrySessionColumn;
+      source: 'attributes' | 'properties';
+      key: string;
+    };
+
+export interface EntrySelector extends AmountSelector {
+  axis: EntryAxis;
+}
+
+/** Ce qu'un groupe de paiements pèse, et ce qui l'a amené. */
+export interface EntryTotals {
+  /**
+   * Les libellés de l'axe, bruts, dans l'ordre où le Core les a groupés.
+   *
+   * Un seul pour la plupart des axes ; **trois** pour la campagne, qui est un
+   * triplet et dont « source seule » ne désigne rien. Tous nuls veut dire « pas
+   * de valeur sur cet axe », jamais « valeur vide ».
+   */
+  values: (string | null)[];
+  /**
+   * A-t-on retrouvé une première visite pour ce visiteur ?
+   *
+   * `false` veut dire qu'aucun parcours ne porte ce paiement — pas de
+   * consentement, pas d'identifiant, ou un client antérieur à l'installation.
+   * `true` avec des valeurs nulles est tout autre chose : on connaît la visite,
+   * elle n'a simplement rien sur cet axe. Confondre les deux ferait passer un
+   * trou de mesure pour du trafic direct.
+   */
+  known: boolean;
+  /** La devise telle que l'émetteur l'a écrite, ou `null` s'il n'en donne pas. */
+  currency: string | null;
+  /** Somme des montants entiers trouvés, dans leur unité d'origine. */
+  amount: number;
+  /** Nombre d'événements du groupe, montant ou pas. */
+  events: number;
+  /** Visiteurs distincts derrière ces événements. */
+  visitors: number;
+}
+
+/**
+ * Le classement, et ce qu'il ne montre pas.
+ *
+ * `others` n'est pas un reste décoratif : c'est la part de revenu qu'aucune
+ * valeur de cet axe ne revendique, et elle doit rester visible à côté du
+ * classement. L'annoncer séparément est ce qui empêche de lire « 12 k€ venus de
+ * Google » comme « 12 k€ sur 12 k€ ».
+ */
+export interface EntryRanking {
+  /** Les valeurs de l'axe, du plus gros total au plus petit, coupées à `limit`. */
+  rows: EntryTotals[];
+  /** Tout ce qui n'a pas de valeur sur cet axe, jamais coupé. */
+  others: EntryTotals[];
+}
+
+/**
+ * La **première visite** d'un visiteur, telle que la lecture la rend.
+ *
+ * Ce qu'une cohorte demande, et rien de plus : quand il est arrivé, et par où.
+ * Le reste de son parcours ne la regarde pas — c'est un axe d'acquisition, pas
+ * un profil.
+ */
+export interface EntryVisit {
+  /** Le début de sa toute première session, sans borne de fenêtre. */
+  startedAt: Date;
+  campaign: SessionCampaign | null;
+  /** Le pays de cette première visite, `null` si la base GeoIP n'a rien dit. */
+  countryCode: string | null;
+}
+
+/**
+ * Aplatit les trois emplacements en une liste.
+ *
+ * Le Core ne recompose rien : il rend les libellés dans l'ordre où il les a
+ * groupés, et c'est à l'appelant — qui a choisi l'axe — de savoir si le
+ * deuxième et le troisième veulent dire quelque chose.
+ */
+function toTotals(row: {
+  first: string | null;
+  second: string | null;
+  third: string | null;
+  known: boolean;
+  currency: string | null;
+  amount: number;
+  events: number;
+  visitors: number;
+}): EntryTotals {
+  const { first, second, third, ...totals } = row;
+
+  return { ...totals, values: [first, second, third] };
+}
+
 export interface EventRow {
   /**
    * La session à laquelle l'événement appartient.
@@ -221,6 +438,16 @@ export interface EventRow {
    * sessions. La page brute, elle, les montre : voir `EventEntry`.
    */
   sessionId: string;
+  /**
+   * La campagne qui a amené la visite, quand il y en a une.
+   *
+   * Identique sur tous les événements d'une même session — elle est figée à son
+   * ouverture — donc le premier vu fait foi, comme pour `sessionStartedAt`.
+   *
+   * `null` est le cas courant : la plupart des visites n'arrivent par aucune
+   * campagne, et la plupart des sites n'en posent jamais.
+   */
+  campaign: SessionCampaign | null;
   /**
    * L'instant du **premier événement de la session**, tel que la table le porte.
    *
@@ -286,9 +513,14 @@ export interface EventRow {
  * un fil d'une page à l'autre. Il est persisté, donc stable, là où l'alias ne
  * l'est jamais.
  */
+/*
+ * `campaign` en est retiré aussi : le journal brut montre des événements, pas
+ * des visites. La campagne est un attribut de la session, et une ligne de
+ * journal en porte déjà l'identifiant pour qui veut la suivre.
+ */
 export type EventEntry = Omit<
   EventRow,
-  'visitorAlias' | 'sessionId' | 'sessionStartedAt'
+  'visitorAlias' | 'sessionId' | 'sessionStartedAt' | 'campaign'
 > & {
   /**
    * `null` quand l'événement n'a **pas de visiteur** — un deploy, un webhook de
@@ -389,14 +621,34 @@ function isOlder({ occurredAt, id }: { occurredAt: Date; id: string }): SQL {
 }
 
 /**
- * Événement tel qu'il est rendu au client : tout sauf `sessionId`.
+ * Ce que l'Event Store rend d'une ligne qu'il vient d'écrire.
  *
- * La session est une infrastructure serveur, pas une donnée du site appelant. La
- * renvoyer donnerait à n'importe quelle page un identifiant stable pour son
- * visiteur — exactement le cookie qu'on cherche à ne pas poser. La clé visiteur,
- * elle, n'est même plus sur cette table : elle vit sur `sessions`.
+ * ## `visitorKey` est hors de ce type, et le restera
+ *
+ * C'est une infrastructure serveur, pas une donnée du site appelant. La rendre
+ * donnerait à n'importe quelle page un identifiant stable pour son visiteur —
+ * exactement ce qu'on prend soin de ne concéder que sous consentement, et sous
+ * une autre forme.
+ *
+ * ## `sessionId` est hors de ce type pour une autre raison, bien plus faible
+ *
+ * Parce que `insert` ne le relit pas de Postgres : l'appelant vient de le lui
+ * passer, le redemander serait payer une colonne qu'on tient déjà. Ce n'est pas
+ * une règle de confidentialité, et il ne faut pas lire l'exclusion des deux
+ * colonnes comme un seul argument — elles ne sont pas de la même nature.
+ *
+ * La session **est** rendue au site, une ligne plus haut dans la chaîne :
+ * `CoreService.ingest` la recompose depuis la valeur qu'il détient. Voir
+ * `IngestedEvent` là-bas pour ce qui l'autorise — une visite n'est pas un
+ * visiteur.
+ *
+ * ## Les colonnes sont listées une à une
+ *
+ * `insert` ne rend pas la ligne entière : ce type décrit ce que cette liste
+ * contient, et les deux doivent rester d'accord. C'est pour ça qu'une colonne
+ * ajoutée au schéma ne s'expose pas toute seule.
  */
-export type PublicEvent = Omit<Event, 'sessionId'>;
+export type PublicEvent = Omit<Event, 'sessionId' | 'visitorKey'>;
 
 /**
  * L'Event Store : le seul accès à la table `events`, en lecture comme en
@@ -456,6 +708,69 @@ export class EventStore {
     });
 
     return event;
+  }
+
+  /**
+   * Rattache des événements déjà écrits à un visiteur.
+   *
+   * ## Pourquoi une écriture après coup existe
+   *
+   * Une source de paiement n'annonce pas toujours son visiteur au moment où elle
+   * annonce le paiement. Le lien se découvre parfois quelques secondes plus tard,
+   * parfois des mois — un client qui existait avant l'installation, un abonnement
+   * dont l'identité n'a été posée qu'après le premier encaissement. Sans cette
+   * écriture, ce revenu-là resterait à jamais hors de portée alors qu'on finit par
+   * savoir d'où il vient.
+   *
+   * ## Elle n'écrase jamais
+   *
+   * `isNull` dans la condition, et c'est le cœur de la méthode : une identité
+   * **affirmée à l'ingestion** l'emporte sur une identité **déduite après coup**.
+   * L'inverse laisserait une déduction tardive et faillible réécrire ce qu'une
+   * source avait dit d'elle-même — et le ferait en silence, sur des lignes que
+   * personne ne relit.
+   *
+   * Elle est donc idempotente : la rejouer ne déplace rien.
+   *
+   * ## Elle ne ré-identifie jamais ce que la purge a anonymisé
+   *
+   * C'est la borne de rétention, et sans elle le lot de purge ne servirait à
+   * rien. Un événement anonymisé a **exactement la forme** que cette méthode
+   * cherche — une ligne écrite, sans clé visiteur. La première paire client
+   * apprise après coup ré-identifierait donc un paiement de vingt-six mois, et
+   * la purge et le rattrapage rétroactif se contrediraient en silence, chacun
+   * défaisant le travail de l'autre à son rythme.
+   *
+   * La condition vit **ici** plutôt que chez l'appelant pour la raison qui fait
+   * vivre `where()` dans ce fichier : une règle posée dans un module de
+   * `features/` sera oubliée par le suivant. Celle-ci vaut pour tout appelant,
+   * présent et futur, et c'est le seul endroit d'où elle peut le garantir.
+   *
+   * Le seuil est un fragment SQL, donc évalué par Postgres à chaque appel, sur
+   * la même horloge que les lignes qu'il compare — voir `retentionCutoff`.
+   *
+   * ## Ce qu'elle ne prend pas
+   *
+   * Ni période, ni projet, ni type : des **ids**, que l'appelant a obtenus
+   * autrement. C'est ce qui permet à un module métier de s'en servir sans jamais
+   * nommer la clé qu'elle écrit, ni décider ce qu'est une identité.
+   */
+  async attribute(eventIds: string[], visitorKey: string): Promise<number> {
+    if (eventIds.length === 0) return 0;
+
+    const attributed = await this.db
+      .update(events)
+      .set({ visitorKey })
+      .where(
+        and(
+          inArray(events.id, eventIds),
+          isNull(events.visitorKey),
+          gte(events.occurredAt, retentionCutoff()),
+        ),
+      )
+      .returning({ id: events.id });
+
+    return attributed.length;
   }
 
   /** Nombre d'événements dans le périmètre. */
@@ -752,7 +1067,7 @@ export class EventStore {
    */
   async topSessionValues(
     scope: EventScope,
-    { column, limit = DEFAULT_TOP_LIMIT }: SessionValueSelector,
+    { column, qualifier, limit = DEFAULT_TOP_LIMIT }: SessionValueSelector,
   ): Promise<SessionValueRanking> {
     if (!Number.isInteger(limit) || limit < 1) {
       throw new RangeError(
@@ -767,9 +1082,16 @@ export class EventStore {
     // Même sous-requête que `topValues`, et pour la même raison : le groupement
     // porte ensuite sur des colonnes ordinaires, au lieu de dépendre de la façon
     // dont Drizzle qualifie une référence selon la clause.
+    // Un `null` constant quand personne ne demande de départage : le groupement
+    // porte alors sur une seule valeur, ce qui ne change rien au résultat et
+    // évite une seconde requête presque identique.
+    const secondary = qualifier
+      ? sql<string | null>`${SESSION_COLUMNS[qualifier]}`
+      : sql<string | null>`null`;
+
     const extracted = this.db
       .select({
-        countryCode: sessions.countryCode,
+        qualifier: secondary.as('qualifier'),
         value: sql<string | null>`${value}`.as('value'),
         visitorKey: sessions.visitorKey,
         sessionId: events.sessionId,
@@ -784,14 +1106,14 @@ export class EventStore {
     const [rows, [missing]] = await Promise.all([
       this.db
         .select({
-          countryCode: extracted.countryCode,
+          qualifier: extracted.qualifier,
           value: sql<string>`${extracted.value}`,
           visitors,
           sessions: countDistinct(extracted.sessionId),
         })
         .from(extracted)
         .where(isNotNull(extracted.value))
-        .groupBy(extracted.countryCode, extracted.value)
+        .groupBy(extracted.qualifier, extracted.value)
         // Le second critère départage à égalité : sans lui, la coupe du `limit`
         // serait non déterministe et deux appels identiques ne rendraient pas
         // le même classement.
@@ -807,6 +1129,326 @@ export class EventStore {
     ]);
 
     return { rows, unresolved: missing.count };
+  }
+
+  /**
+   * Ce que chaque paiement doit à la **première visite** de son visiteur.
+   *
+   * ## Pourquoi le Core, et pas un module
+   *
+   * Parce que la jointure porte sur la clé visiteur, et qu'aucun module n'a le
+   * droit de la nommer. C'est la même frontière que partout ailleurs : un module
+   * dit « ces types-là, cette fenêtre-là, ce montant-là », le Core sait seul par
+   * quelle colonne on relie un paiement à un parcours.
+   *
+   * ## La première visite est **lue**, jamais figée
+   *
+   * On aurait pu recopier la campagne sur l'événement de paiement au moment de
+   * l'écrire. Ç'aurait été faux : `CoreService.attribute` rattache des paiements
+   * **rétroactivement**, des mois après, quand un site pose enfin l'identifiant
+   * sur ses clients. « La première visite de ce visiteur » devient donc
+   * légitimement connaissable après coup, et une valeur gelée serait restée
+   * vide pour toujours.
+   *
+   * Le `left join lateral` prend la session la plus ancienne du visiteur —
+   * `sessions_project_visitor_idx` le sert — sans borne de fenêtre : la fenêtre
+   * choisit les *paiements* comptés, pas l'ancienneté de l'acquisition qu'on
+   * leur reconnaît.
+   *
+   * ## Ce que le Core additionne, et ce qu'il ignore
+   *
+   * Une clé fournie par l'appelant, dont il ne sait rien : ni l'unité, ni ce
+   * qu'elle mesure. Seules les valeurs **entières** entrent dans la somme — un
+   * `::numeric` sur une chaîne quelconque ferait échouer la requête entière, et
+   * un total qui tombe est pire qu'un total incomplet.
+   *
+   * La devise **sépare** les totaux, elle ne les convertit pas. Additionner deux
+   * devises demanderait un taux de change, donc une date de taux, donc une
+   * décision qui n'appartient pas à une base de données.
+   *
+   * ## Deux ensembles, et le `limit` ne porte que sur le premier
+   *
+   * `rows` est un classement, donc coupé. `others` ne l'est pas : il porte ce
+   * qui n'a pas de campagne — visiteur connu venu sans, ou paiement rattaché à
+   * personne — et c'est précisément ce qu'un classement tronqué ferait
+   * disparaître. Une part d'attribution qu'on ne peut pas voir est une part
+   * d'attribution qu'on croit nulle.
+   */
+  async entryDimension(
+    scope: EventScope,
+    { axis, source, amount, currency, limit = DEFAULT_TOP_LIMIT }: EntrySelector,
+  ): Promise<EntryRanking> {
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new RangeError(
+        `[EventStore] limit doit être un entier positif, reçu ${String(limit)}.`,
+      );
+    }
+
+    const bag = source === 'attributes' ? events.attributes : events.properties;
+    const nothing = sql<string | null>`null`;
+
+    // La plus ancienne visite du visiteur, quelle que soit sa date. `marker`
+    // n'est là que pour distinguer « aucune visite » de « une visite sans
+    // valeur » : sans lui, les deux rendraient des colonnes nulles.
+    const entry = this.db
+      .select({
+        id: sessions.id,
+        campaignSource: sessions.campaignSource,
+        campaignMedium: sessions.campaignMedium,
+        campaignName: sessions.campaignName,
+        country: sessions.countryCode,
+        browser: sessions.browser,
+        os: sessions.os,
+        device: sessions.deviceType,
+        marker: sql<number>`1`.as('marker'),
+      })
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.projectId, events.projectId),
+          eq(sessions.visitorKey, events.visitorKey),
+        ),
+      )
+      .orderBy(asc(sessions.startedAt), asc(sessions.id))
+      .limit(1)
+      .as('entry');
+
+    // Le premier événement de cette première visite, et lui seul. C'est là que
+    // vivent le referrer et le chemin d'entrée — dans un sac que le Core ne sait
+    // pas lire, mais qu'il sait grouper à la clé qu'on lui nomme. Rien n'est
+    // recopié nulle part : on lit la donnée là où elle est déjà.
+    //
+    // `events` est joint à lui-même, d'où l'alias. L'ordre est le même que
+    // partout ailleurs — instant, puis `id` pour départager — et
+    // `events_session_occurred_idx` le sert.
+    const entryEvent = alias(events, 'entry_event');
+    // Le sac de l'axe, qui n'est **pas** celui du montant : le referrer vit dans
+    // les attributs du navigateur, le montant dans les propriétés d'un serveur.
+    // Les confondre rendrait des colonnes vides sans rien faire échouer.
+    const entryBag =
+      axis.on !== 'session' && axis.source === 'properties'
+        ? entryEvent.properties
+        : entryEvent.attributes;
+    const firstEvent = this.db
+      .select({
+        value: sql<string | null>`${entryBag} ->> ${
+          axis.on === 'session' ? '' : axis.key
+        }::text`.as('value'),
+      })
+      .from(entryEvent)
+      .where(eq(entryEvent.sessionId, entry.id))
+      .orderBy(asc(entryEvent.occurredAt), asc(entryEvent.id))
+      .limit(1)
+      .as('first_event');
+
+    // Trois emplacements, toujours : la forme du `select` est figée à la
+    // compilation, et la campagne est le seul axe qui en occupe plus d'un. Les
+    // autres laissent deux `null` constants, que Postgres groupe sans frais.
+    // Les colonnes de la première visite sur lesquelles un classement peut
+    // porter, résolues par un objet dont les clés sont connues à la
+    // compilation : aucune chaîne d'appelant n'atteint le SQL. Même propriété
+    // que `SESSION_COLUMNS`. La campagne n'y est pas — elle occupe trois
+    // emplacements et se traite à part.
+    const fromEntry = {
+      country: entry.country,
+      browser: entry.browser,
+      os: entry.os,
+      device: entry.device,
+      // La campagne réduite à **une** valeur, pour la variante à deux
+      // emplacements où le second est déjà pris. Sa source suffit à savoir
+      // qu'il y en avait une ; l'axe `session` rend le triplet entier.
+      campaign: entry.campaignSource,
+    } as const;
+
+    const slots =
+      axis.on === 'entry'
+        ? [sql<string | null>`${firstEvent.value}`, nothing, nothing]
+        : axis.on === 'both'
+          ? [
+              sql<string | null>`${fromEntry[axis.column]}`,
+              sql<string | null>`${firstEvent.value}`,
+              nothing,
+            ]
+          : axis.column === 'campaign'
+            ? [
+                sql<string | null>`${entry.campaignSource}`,
+                sql<string | null>`${entry.campaignMedium}`,
+                sql<string | null>`${entry.campaignName}`,
+              ]
+            : [
+                sql<string | null>`${fromEntry[axis.column]}`,
+                nothing,
+                nothing,
+              ];
+
+    // Même raison que dans `topValues` : l'extraction est isolée pour que le
+    // groupement porte sur des colonnes ordinaires, et non sur des expressions
+    // que Drizzle qualifie différemment selon la clause.
+    const selection = {
+      first: slots[0].as('first'),
+      second: slots[1].as('second'),
+      third: slots[2].as('third'),
+      known: sql<boolean>`${entry.marker} is not null`.as('known'),
+      currency: sql<string | null>`${bag} ->> ${currency}::text`.as('currency'),
+      amount: sql<
+        string | null
+      >`case when ${bag} ->> ${amount}::text ~ '^-?[0-9]+$' then (${bag} ->> ${amount}::text)::bigint end`.as(
+        'amount',
+      ),
+      visitorKey: events.visitorKey,
+    };
+
+    // La seconde jointure n'est posée que si l'axe la demande : un `lateral`
+    // par ligne d'événement se paie, et un axe qui ne lit que des colonnes de
+    // la visite n'en a aucun besoin.
+    const joined = this.db
+      .select(selection)
+      .from(events)
+      .leftJoinLateral(entry, sql`true`);
+
+    const extracted = (
+      axis.on === 'session' ? joined : joined.leftJoinLateral(firstEvent, sql`true`)
+    )
+      .where(this.where(scope))
+      .as('extracted');
+
+    // `coalesce` parce qu'une somme sans aucune valeur rend `null` : un groupe
+    // dont aucun événement ne porte de montant existe, et il vaut zéro.
+    const total = sql<number>`coalesce(sum(${extracted.amount}), 0)`.mapWith(
+      Number,
+    );
+    const payments = sql<number>`count(*)`.mapWith(Number);
+
+    const columns = {
+      first: extracted.first,
+      second: extracted.second,
+      third: extracted.third,
+      known: extracted.known,
+      currency: extracted.currency,
+      amount: total,
+      events: payments,
+      visitors: countDistinct(extracted.visitorKey),
+    };
+
+    const grouped = [
+      extracted.first,
+      extracted.second,
+      extracted.third,
+      extracted.known,
+      extracted.currency,
+    ];
+
+    const named = or(
+      isNotNull(extracted.first),
+      isNotNull(extracted.second),
+      isNotNull(extracted.third),
+    );
+
+    // Écrit en positif plutôt qu'en `not(named)` : les deux requêtes se
+    // relisent alors côte à côte, et leur complémentarité se vérifie à l'œil.
+    const unnamed = and(
+      isNull(extracted.first),
+      isNull(extracted.second),
+      isNull(extracted.third),
+    );
+
+    const [ranked, rest] = await Promise.all([
+      this.db
+        .select(columns)
+        .from(extracted)
+        .where(named)
+        .groupBy(...grouped)
+        // Le second critère départage à égalité : sans lui, la coupe du `limit`
+        // serait non déterministe, comme pour les autres classements.
+        .orderBy(desc(total), asc(extracted.first))
+        .limit(limit),
+      this.db
+        .select(columns)
+        .from(extracted)
+        .where(unnamed)
+        .groupBy(...grouped)
+        .orderBy(desc(total)),
+    ]);
+
+    return { rows: ranked.map(toTotals), others: rest.map(toTotals) };
+  }
+
+  /**
+   * La première visite de chacun de ces visiteurs, quand on en a une.
+   *
+   * ## Pourquoi le Core, encore
+   *
+   * Parce que la table `sessions` porte la clé, et qu'aucun module n'a le droit
+   * de la nommer. L'appelant arrive avec des clés qu'il n'a pas fabriquées — le
+   * Core les a dérivées pour lui — et repart avec des dates et des libellés.
+   *
+   * ## Sans fenêtre, délibérément
+   *
+   * Une cohorte d'acquisition demande **quand quelqu'un est arrivé**, pas s'il
+   * est arrivé pendant la période qu'on regarde. Borner ici ferait entrer dans
+   * la cohorte de mars un visiteur de janvier, au motif que la lecture commence
+   * en mars — et la rétention mesurée serait celle d'une population qui n'existe
+   * pas.
+   *
+   * ## Ce que `distinct on` garantit
+   *
+   * Une ligne par visiteur, la plus ancienne, départagée par `id` quand deux
+   * sessions partagent l'instant. C'est le même ordre total que partout
+   * ailleurs : deux appels rendent la même première visite.
+   *
+   * Les visiteurs sans aucune visite ne sont **pas** dans la carte rendue.
+   * L'absence est une réponse — un client qui n'a jamais été vu par le
+   * navigateur n'a pas de cohorte, et lui en inventer une fausserait toutes
+   * celles qui l'entourent.
+   */
+  async entryVisits(
+    projectId: string,
+    visitorKeys: string[],
+  ): Promise<Map<string, EntryVisit>> {
+    if (visitorKeys.length === 0) return new Map();
+
+    const rows = await this.db
+      .selectDistinctOn([sessions.visitorKey], {
+        visitorKey: sessions.visitorKey,
+        startedAt: sessions.startedAt,
+        countryCode: sessions.countryCode,
+        campaignSource: sessions.campaignSource,
+        campaignMedium: sessions.campaignMedium,
+        campaignName: sessions.campaignName,
+      })
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.projectId, projectId),
+          inArray(sessions.visitorKey, visitorKeys),
+          // Un robot n'a pas de cohorte. Le filtre des lectures d'événements ne
+          // s'applique pas ici — on ne lit pas `events` — donc il est réécrit.
+          eq(sessions.isBot, false),
+        ),
+      )
+      .orderBy(
+        asc(sessions.visitorKey),
+        asc(sessions.startedAt),
+        asc(sessions.id),
+      );
+
+    return new Map(
+      rows.map((row) => [
+        row.visitorKey,
+        {
+          startedAt: row.startedAt,
+          countryCode: row.countryCode,
+          campaign:
+            row.campaignSource ?? row.campaignMedium ?? row.campaignName
+              ? {
+                  source: row.campaignSource,
+                  medium: row.campaignMedium,
+                  name: row.campaignName,
+                }
+              : null,
+        },
+      ]),
+    );
   }
 
   /**
@@ -890,6 +1532,9 @@ export class EventStore {
       .select({
         sessionId: events.sessionId,
         sessionStartedAt: sessions.startedAt,
+        campaignSource: sessions.campaignSource,
+        campaignMedium: sessions.campaignMedium,
+        campaignName: sessions.campaignName,
         visitorKey: sessions.visitorKey,
         type: events.type,
         source: events.source,
@@ -914,20 +1559,48 @@ export class EventStore {
     // où `visitor_key` existe en mémoire.
     const aliases = new Map<string, string>();
 
-    return rows.map(({ visitorKey, sessionId, ...row }) => {
-      let alias = aliases.get(visitorKey);
+    return rows.map(
+      ({
+        visitorKey,
+        sessionId,
+        campaignSource,
+        campaignMedium,
+        campaignName,
+        ...row
+      }) => {
+        let alias = aliases.get(visitorKey);
 
-      if (alias === undefined) {
-        alias = randomBytes(ALIAS_BYTES).toString('base64url');
-        aliases.set(visitorKey, alias);
-      }
+        if (alias === undefined) {
+          alias = randomBytes(ALIAS_BYTES).toString('base64url');
+          aliases.set(visitorKey, alias);
+        }
 
-      // `sessionId` est déballé puis remis : Drizzle le type `string | null`
-      // parce que la colonne l'est, alors que la jointure interne juste au-dessus
-      // garantit qu'il ne l'est pas ici. Le rétablir explicitement dit où vit
-      // cette garantie, au lieu de la faire passer pour une inattention.
-      return { ...row, sessionId: sessionId as string, visitorAlias: alias };
-    });
+        // Regroupées en objet plutôt qu'en trois champs plats : une campagne est
+        // un triplet, et « source seule » n'en désigne pas une. Les trois
+        // colonnes à `null` valent « pas de campagne », pas « campagne aux
+        // champs vides » — la distinction disparaîtrait à plat.
+        const campaign =
+          campaignSource ?? campaignMedium ?? campaignName
+            ? {
+                source: campaignSource,
+                medium: campaignMedium,
+                name: campaignName,
+              }
+            : null;
+
+        // `sessionId` est déballé puis remis : Drizzle le type `string | null`
+        // parce que la colonne l'est, alors que la jointure interne juste
+        // au-dessus garantit qu'il ne l'est pas ici. Le rétablir explicitement
+        // dit où vit cette garantie, au lieu de la faire passer pour une
+        // inattention.
+        return {
+          ...row,
+          sessionId: sessionId as string,
+          campaign,
+          visitorAlias: alias,
+        };
+      },
+    );
   }
 
   /**
@@ -1074,13 +1747,202 @@ export class EventStore {
    * retrouver le total du mois.
    */
   private where(scope: EventScope): SQL | undefined {
-    return and(
+    return and(...this.scoped(scope), this.excludesBots());
+  }
+
+  /**
+   * Le périmètre sans le filtre des robots — extrait parce qu'une lecture,
+   * **une seule**, doit pouvoir regarder de l'autre côté.
+   *
+   * Elle n'existe pas pour rendre le filtre optionnel : il n'y a pas de drapeau
+   * `includeBots` sur `EventScope`, et il ne faut pas en ajouter. Un
+   * interrupteur invite à être basculé ; une méthode nommée se lit dans un diff.
+   */
+  private scoped(scope: EventScope): (SQL | undefined)[] {
+    return [
       eq(events.projectId, scope.projectId),
       gte(events.occurredAt, scope.from),
       lt(events.occurredAt, scope.to),
       scope.types ? inArray(events.type, scope.types) : undefined,
       this.honoursServerOnly(),
+    ];
+  }
+
+  /**
+   * Écarte ce qu'une session de robot a produit.
+   *
+   * ## Pourquoi ici, et pas dans les lectures
+   *
+   * Exactement l'argument de `honoursServerOnly` : les neuf lectures passent par
+   * `where`, et la table n'est lue que d'ici. Poser la règle dans chaque module
+   * demanderait à chacun de s'en souvenir, et le premier qui l'oublierait
+   * publierait des robots parmi ses visiteurs sans que rien ne le signale.
+   *
+   * ## Ce que ça ne jette pas
+   *
+   * Un `NOT EXISTS` est vrai quand il n'y a rien à trouver : un événement **sans
+   * session** — un déploiement, un paiement, une sonde — passe donc sans qu'on
+   * ait à l'écrire. C'est la même propriété que celle dont `sessionId` nullable
+   * bénéficie déjà partout ailleurs.
+   *
+   * ## Ce que ça ne doit pas faire : se taire
+   *
+   * Un chiffre retiré en silence est un chiffre que personne ne sait manquant.
+   * `countBotSessions` existe pour le publier, et le résumé le rend — sans quoi
+   * ce filtre serait indistinguable d'une baisse de trafic.
+   */
+  private excludesBots(): SQL | undefined {
+    return not(
+      exists(
+        this.db
+          .select({ one: sql`1` })
+          .from(sessions)
+          .where(and(eq(sessions.id, events.sessionId), eq(sessions.isBot, true))),
+      ),
     );
+  }
+
+  /**
+   * Ce que le filtre a retiré : le nombre de sessions de robots de la fenêtre.
+   *
+   * La seule lecture de ce fichier qui regarde délibérément de l'autre côté de
+   * `where`. Elle ne rend pas les événements, seulement leur compte de
+   * sessions : ce qu'on veut savoir d'un robot tient dans un nombre, et le
+   * reste n'intéresse personne.
+   */
+  async countBotSessions(scope: EventScope): Promise<number> {
+    const [row] = await this.db
+      .select({ sessions: countDistinct(events.sessionId) })
+      .from(events)
+      .innerJoin(sessions, eq(events.sessionId, sessions.id))
+      .where(and(...this.scoped(scope), eq(sessions.isBot, true)));
+
+    return row.sessions;
+  }
+
+  /**
+   * Un montant, découpé dans le temps.
+   *
+   * ## Le pas est choisi par l'appelant, pas la fenêtre
+   *
+   * C'est le seul endroit du Core qui accepte une granularité temporelle, et
+   * c'est assumé. L'analytics a rendu son découpage au lecteur à l'étape 33 —
+   * il reçoit des sessions datées et les regroupe comme il l'entend — mais une
+   * somme n'est pas un compte de valeurs distinctes : la redescendre entière
+   * ferait remonter tous les paiements de la fenêtre pour en additionner les
+   * montants dans un navigateur, et deux pages qui referaient ce calcul
+   * finiraient par diverger.
+   *
+   * Le Core ne sait toujours pas ce qu'il additionne. Comme dans `topValues`,
+   * il lit la clé qu'on lui nomme, à l'endroit qu'on lui nomme.
+   *
+   * ## `date_trunc`, et le fuseau
+   *
+   * En **UTC**, comme le reste de la chaîne. Le fuseau d'affichage est une
+   * décision de lecteur, et l'appliquer ici ferait dépendre le contenu d'un
+   * point du pays de qui regarde.
+   *
+   * ## Les pas vides n'existent pas
+   *
+   * Un jour sans paiement ne rend aucune ligne : un `group by` ne fabrique pas
+   * de lignes absentes. C'est au lecteur de compléter son axe — il sait déjà le
+   * faire pour le trafic, et il est le seul à connaître les bornes qu'il
+   * affiche.
+   */
+  async amountSeries(
+    scope: EventScope,
+    { source, amount, currency, step }: AmountSelector & { step: SeriesStep },
+  ): Promise<AmountPoint[]> {
+    const bag = source === 'attributes' ? events.attributes : events.properties;
+
+    // Résolution par un objet gelé dont les clés sont connues à la compilation :
+    // `date_trunc` prend son unité en texte, et c'est exactement le genre
+    // d'endroit où une chaîne d'appelant ne doit pas arriver.
+    const unit = { day: sql`'day'`, week: sql`'week'`, month: sql`'month'` }[
+      step
+    ];
+
+    // Même isolation que dans `topValues` : le groupement porte sur des colonnes
+    // ordinaires de la sous-requête, et non sur des expressions que Drizzle
+    // qualifie différemment selon la clause.
+    const extracted = this.db
+      .select({
+        start: sql<Date>`date_trunc(${unit}, ${events.occurredAt} at time zone 'UTC') at time zone 'UTC'`.as(
+          'start',
+        ),
+        currency: sql<string | null>`${bag} ->> ${currency}::text`.as(
+          'currency',
+        ),
+        amount: sql<
+          string | null
+        >`case when ${bag} ->> ${amount}::text ~ '^-?[0-9]+$' then (${bag} ->> ${amount}::text)::bigint end`.as(
+          'amount',
+        ),
+      })
+      .from(events)
+      .where(this.where(scope))
+      .as('extracted');
+
+    // `coalesce` parce qu'une somme sans aucune valeur rend `null` : un pas dont
+    // aucun événement ne porte de montant existe, et il vaut zéro.
+    const total = sql<number>`coalesce(sum(${extracted.amount}), 0)`.mapWith(
+      Number,
+    );
+
+    return await this.db
+      .select({
+        // `mapWith` emprunte le convertisseur de la colonne d'origine : sans
+        // lui, Drizzle rend la chaîne brute de Postgres, que le contrat rejette
+        // — un `sql` n'hérite d'aucun type, c'est à l'appelant de le dire.
+        start: sql<Date>`${extracted.start}`.mapWith(events.occurredAt),
+        currency: extracted.currency,
+        amount: total,
+        events: sql<number>`count(*)`.mapWith(Number),
+      })
+      .from(extracted)
+      .groupBy(extracted.start, extracted.currency)
+      // Chronologique, puis la devise pour départager : sans le second critère,
+      // deux appels identiques rendraient les devises dans un ordre différent.
+      .orderBy(asc(extracted.start), asc(extracted.currency));
+  }
+
+  /**
+   * Ce que les visiteurs ont répondu au sujet du cookie de croisement.
+   *
+   * ## Deux nombres, et leur somme ne fait pas `sessions`
+   *
+   * Le reste — la majorité, sur un site qui ne demande rien — n'a pas été
+   * interrogé. Le mode par défaut de la mesure ne pose aucune question, donc
+   * une visite sans réponse n'est ni un refus ni un trou : c'est le cas
+   * ordinaire. Rendre un pourcentage ici obligerait à choisir son dénominateur,
+   * et ce choix appartient au lecteur.
+   *
+   * ## `where` et non `scoped`
+   *
+   * Les robots restent **exclus**, comme partout ailleurs. `countBotSessions`
+   * est la seule lecture de ce fichier à regarder de l'autre côté du filtre, et
+   * elle le dit dans son nom.
+   *
+   * Les deux comptes partent ensemble : ils lisent la même jointure, et deux
+   * requêtes pourraient se contredire si un événement arrivait entre les deux.
+   */
+  async countConsent(
+    scope: EventScope,
+  ): Promise<{ granted: number; declined: number }> {
+    const [row] = await this.db
+      .select({
+        granted: sql<number>`count(distinct ${events.sessionId}) filter (where ${sessions.consent})`.mapWith(
+          Number,
+        ),
+        declined: sql<number>`count(distinct ${events.sessionId}) filter (where not ${sessions.consent})`.mapWith(
+          Number,
+        ),
+      })
+      .from(events)
+      .innerJoin(sessions, eq(events.sessionId, sessions.id))
+      .where(this.where(scope));
+
+    return row;
   }
 
   /**

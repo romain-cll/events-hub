@@ -77,6 +77,40 @@ export const analyticsSummarySchema = z.object({
   pageViews: z.number(),
   uniqueVisitors: z.number(),
   /**
+   * Sessions de robots **retirées** de tous les autres compteurs de ce résumé.
+   *
+   * Rendu pour que le retrait ne soit pas muet : sans lui, une vague de robots
+   * et une baisse de trafic se ressemblent exactement.
+   *
+   * ⚠️ Rupture de série : il ne monte qu'à partir de la mise en service de la
+   * détection. Les sessions antérieures sont toutes comptées comme humaines —
+   * le User-Agent qui aurait permis de les juger n'a jamais été stocké.
+   */
+  botSessions: z.number(),
+  /**
+   * Visites dont le visiteur a **accepté** le cookie de croisement.
+   *
+   * Le consentement ne porte que sur l'attribution du revenu — la mesure
+   * d'audience ne demande rien et ne dépose rien. Ce nombre dit donc combien de
+   * visites sont corrélables à un paiement.
+   */
+  consentGranted: z.number(),
+  /**
+   * Visites dont le visiteur a **refusé** le cookie de croisement.
+   *
+   * ⚠️ `consentGranted + consentDeclined` ne fait **pas** `sessions`. L'écart
+   * est le nombre de visites auxquelles on n'a rien demandé — site sans
+   * bandeau, ou page qui ne l'a pas câblé. Les compter comme des refus ferait
+   * passer l'absence de question pour un non, et un site sans bandeau pour un
+   * site que tout le monde refuse.
+   *
+   * Aucun pourcentage n'est rendu : le dénominateur dépend de la question
+   * posée — performance du bandeau, ou couverture de la mesure.
+   *
+   * ⚠️ Rupture de série : ne se remplit qu'à partir de la mise en service.
+   */
+  consentDeclined: z.number(),
+  /**
    * Sessions **terminées** n'ayant vu qu'une seule page — le numérateur du
    * taux de rebond.
    *
@@ -124,9 +158,22 @@ export const sourceSchema = z.object({
    * `assistant` est à part de `search`, et ce n'est pas un détail de rangement :
    * un moteur envoie vers une page, un assistant a **déjà répondu** et n'envoie
    * qu'accessoirement. Les fondre ferait lire « la recherche m'apporte X
-   * visites » en y comptant autre chose.
+   * visites » en y comptant autre chose. `social` est là pour la même raison.
+   *
+   * `other` est le fourre-tout, et il s'appelle ainsi exprès : il a porté le
+   * nom `referral` tant qu'il était la seule sortie pour un site externe, ce
+   * qui promettait une interprétation qu'il n'a pas. Ce qu'aucun ensemble
+   * connu ne revendique tombe dedans, **avec son hôte** — donc nommable, même
+   * si sa nature ne dit rien.
    */
-  kind: z.enum(['direct', 'search', 'assistant', 'referral', 'internal']),
+  kind: z.enum([
+    'direct',
+    'search',
+    'assistant',
+    'social',
+    'other',
+    'internal',
+  ]),
   name: z.string().nullable(),
   /**
    * Le même fait, écrit pour un humain : `Google`, `ChatGPT`, `Direct`,
@@ -144,7 +191,7 @@ export const sourceSchema = z.object({
    * À ne pas confondre avec `name`, et c'est toute la raison de ce champ :
    * `name` vaut `google` pour un moteur — un label d'hôte, que le relais de
    * favicons refuse parce que ce n'est pas un nom d'hôte. `host` vaut
-   * `google.com`. Sur un `referral` ou un `internal`, les deux coïncident.
+   * `google.com`. Sur un `other` ou un `internal`, les deux coïncident.
    *
    * Il vient du serveur pour la même raison que `label` : compléter `google` en
    * `google.com` côté client aurait recréé là-bas la liste des moteurs.
@@ -160,7 +207,7 @@ export type Source = z.infer<typeof sourceSchema>;
 /**
  * Une session, telle que `GET /analytics/sessions` la rend.
  *
- * Huit champs, et les absences sont aussi délibérées que les présences :
+ * Onze champs, et les absences sont aussi délibérées que les présences :
  * `durationMs` n'y est pas parce que les deux bornes y sont, `presences[]` non
  * plus parce que rien ne la demande encore, et `sessionId` est parti le jour
  * où `visitorAlias` est arrivé — stable d'un appel à l'autre, il aurait suffi à
@@ -259,6 +306,29 @@ export const sessionRowSchema = z.object({
    * l'acquisition.
    */
   source: sourceSchema.nullable(),
+  /**
+   * La campagne qui a amené la visite, ou `null` — le cas ordinaire.
+   *
+   * Les trois UTM (`utm_source`, `utm_medium`, `utm_campaign`) normalisés par le
+   * serveur — rognés, en minuscules — et **figés à l'ouverture de la session**.
+   * Recharger une page avec d'autres paramètres ne les change pas : la campagne
+   * décrit comment la visite a commencé, pas la dernière URL vue.
+   *
+   * ⚠️ À lire **à côté** de `source`, jamais à sa place. `source` dit d'où le
+   * clic vient, la campagne dit ce qui a été acheté, et les deux se contredisent
+   * régulièrement — une annonce rouverte depuis un signet arrive en `direct`
+   * avec ses UTM intacts.
+   *
+   * Les trois champs sont nullables séparément : exiger le triplet écarterait
+   * d'un classement les visites qui ne portent qu'un `utm_source`.
+   */
+  campaign: z
+    .object({
+      source: z.string().nullable(),
+      medium: z.string().nullable(),
+      name: z.string().nullable(),
+    })
+    .nullable(),
 });
 
 export type SessionRow = z.infer<typeof sessionRowSchema>;
@@ -355,3 +425,57 @@ export const locationsPageSchema = z.object({
 });
 
 export type LocationsPage = z.infer<typeof locationsPageSchema>;
+
+/**
+ * Le grain d'un classement par technologie.
+ *
+ * `device` et non `deviceType` : c'est du vocabulaire de produit dans une URL
+ * publique, pas un nom de colonne.
+ */
+export const technologyGrainSchema = z.enum(['browser', 'os', 'device']);
+
+export type TechnologyGrain = z.infer<typeof technologyGrainSchema>;
+
+/**
+ * Une ligne de classement par technologie.
+ *
+ * Pas de qualificateur, contrairement à la géographie : deux villes homonymes
+ * ont besoin de leur pays pour ne pas fusionner, deux navigateurs du même nom
+ * *sont* le même navigateur.
+ *
+ * Aucune version n'est rendue, et il n'y en a pas en base : la version mineure
+ * est du bruit qui multiplie l'unicité d'une ligne, et celle du système est
+ * fausse — Windows 11 se déclare « Windows NT 10.0 ».
+ */
+export const technologyRowSchema = z.object({
+  value: z.string(),
+  visitors: z.number(),
+  sessions: z.number(),
+});
+
+export type TechnologyRow = z.infer<typeof technologyRowSchema>;
+
+/**
+ * Un classement par technologie et sa couverture.
+ *
+ * `unresolved` compte les visiteurs dont la valeur du grain est inconnue : la
+ * longue traîne des navigateurs qu'on ne nomme pas. Un classement qui la
+ * tairait se lirait comme s'il couvrait tout le trafic.
+ *
+ * ⚠️ **Au grain `device`, les tablettes sont sous-comptées.** Depuis iPadOS 13,
+ * Safari envoie par défaut l'en-tête d'un Mac : la majorité des iPad est rangée
+ * en `desktop`. L'information n'est pas dans la chaîne, c'est une limite du
+ * mécanisme et pas de la mesure — au même titre que la ville, qui est une
+ * estimation.
+ */
+export const technologyPageSchema = z.object({
+  from: z.iso.datetime({ offset: true }),
+  to: z.iso.datetime({ offset: true }),
+  grain: technologyGrainSchema,
+  rows: z.array(technologyRowSchema),
+  /** Le dénominateur des parts. Rendu, jamais reconstitué par somme. */
+  visitors: z.number(),
+  unresolved: z.number(),
+});
+
+export type TechnologyPage = z.infer<typeof technologyPageSchema>;

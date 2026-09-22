@@ -3,28 +3,22 @@ import type {
   LocationGrain,
   LocationsPage,
   SessionsPage,
+  TechnologyGrain,
 } from '@events-hub/api-contract';
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, createFileRoute } from '@tanstack/react-router';
-import { TrendingDown, TrendingUp } from 'lucide-react';
-import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
+import { Maximize2Icon, TrendingDown, TrendingUp } from 'lucide-react';
 
 import {
   Card,
   CardAction,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from '#/components/ui/card';
-import {
-  ChartContainer,
-  ChartLegend,
-  ChartLegendContent,
-  ChartTooltip,
-  type ChartConfig,
-} from '#/components/ui/chart';
 import {
   Empty,
   EmptyContent,
@@ -33,6 +27,8 @@ import {
   EmptyTitle,
 } from '#/components/ui/empty';
 import { Button } from '#/components/ui/button';
+import { Hint } from '#/components/hint';
+import { TrafficRevenueChart } from '#/components/traffic-revenue-chart';
 import { PeriodSelector } from '#/components/period-selector';
 import { Badge } from '#/components/ui/badge';
 import { Skeleton } from '#/components/ui/skeleton';
@@ -45,24 +41,52 @@ import {
   previousSummaryQuery,
   sessionsQuery,
   summaryQuery,
+  technologyQuery,
   type Period,
 } from '#/lib/analytics';
 import {
+  acquisitionTraffic,
   bounceRate,
+  campaignLabel,
   compareVisitors,
   dailyVisitors,
   entryPages,
   exits,
   percentChange,
-  referrers,
-  trafficSources,
+  type AcquisitionAxis,
   type ComparedDay,
   type ExitRow,
-  type SourceRow,
 } from '#/lib/analytics-rollup';
+import { DataTable, type DataColumn } from '#/components/data-table';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '#/components/ui/dialog';
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from '#/components/ui/drawer';
+import { useIsMobile } from '#/hooks/use-mobile';
 import { API_URL } from '#/lib/api';
-import { deploymentsQuery, type DayDeployments } from '#/lib/deployments';
-import { projectsQuery } from '#/lib/projects';
+import { deploymentsQuery } from '#/lib/deployments';
+import { integrationsQuery } from '#/lib/integrations';
+import { ingestionQuery, projectsQuery } from '#/lib/projects';
+import {
+  ACQUISITION_AXES,
+  AUDIENCE_AXES,
+  LOCATION_AXES,
+  MAX_ATTRIBUTION_LIMIT,
+  attributionQuery,
+  revenueSeriesQuery,
+  type AttributionAxis,
+  type RevenueAttributionPage,
+} from '#/lib/revenue';
 
 /**
  * La période vit dans l'URL plutôt que dans un `useState` : un dashboard se
@@ -80,6 +104,16 @@ export const Route = createFileRoute('/_authed/projects/$projectId/analytics')({
     // une erreur.
     offset: Math.max(0, Math.trunc(Number(search.offset)) || 0),
   }),
+  // Savoir si le projet encaisse décide de la **mise en page** — cinq cartes ou
+  // quatre, des colonnes de revenu ou non. Lu dans le composant, ce serait une
+  // carte Revenue en squelette qui disparaît sous les yeux de chaque projet
+  // sans Stripe, et le bandeau qui se recompose avec elle.
+  //
+  // `prefetchQuery` et non `ensureQueryData` : il ne lève jamais. Une panne de
+  // cette lecture ne doit pas coûter le tableau de bord — la page retombe alors
+  // sur l'affichage du revenu, dont les zéros restent vrais.
+  loader: ({ context, params }) =>
+    context.queryClient.prefetchQuery(integrationsQuery(params.projectId)),
   component: Analytics,
 });
 
@@ -92,6 +126,38 @@ export const Route = createFileRoute('/_authed/projects/$projectId/analytics')({
  * journée, pas sur la veille pour un visiteur à l'ouest de Greenwich.
  */
 const number = new Intl.NumberFormat('en-US');
+
+/** Le nom d'un axe d'attribution, tel que l'onglet et l'en-tête l'affichent. */
+const AXIS_LABELS: Record<AttributionAxis, string> = {
+  campaign: 'Campaign',
+  source: 'Source',
+  referrer: 'Referrer',
+  landing: 'Landing page',
+  country: 'Country',
+  browser: 'Browser',
+  os: 'System',
+  device: 'Device',
+};
+
+/**
+ * Un montant, tel que Stripe l'a écrit — en centimes, dans sa devise.
+ *
+ * La division par cent se fait **ici et nulle part ailleurs** : l'API rend des
+ * entiers parce que toutes les devises n'ont pas deux décimales, et
+ * `Intl.NumberFormat` sait lesquelles en ont combien. Le faire plus haut ferait
+ * entrer des flottants dans une donnée comptable.
+ *
+ * `null` en devise veut dire que l'événement n'en portait pas : on montre le
+ * nombre nu plutôt qu'un symbole inventé.
+ */
+function money(amount: number, currency: string | null): string {
+  if (!currency) return number.format(amount);
+
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: currency.toUpperCase(),
+  }).format(amount / 100);
+}
 const dayLabel = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: '2-digit',
@@ -127,96 +193,6 @@ const dayWithYear = new Intl.DateTimeFormat('en-US', {
  */
 const ratio = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
 
-/** La réserve au-dessus du point le plus haut, en proportion. */
-const HEADROOM = 1.2;
-
-/** Le nombre de graduations visé — indicatif, pas imposé. */
-const TICKS = 4;
-
-/**
- * Les hauteurs de graduation qui se lisent bien, par ordre croissant.
- *
- * Multipliées par une puissance de dix, elles donnent les seuls pas qu'un œil
- * suit sans compter : 20, 25, 30, 300, 1 500. Un pas de 23 est juste aussi, et
- * illisible.
- */
-const NICE_STEPS = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
-
-/**
- * Le sommet de l'axe : 20 % au-dessus du point le plus haut, toujours.
- *
- * ## Pourquoi une réserve, et pourquoi relative
- *
- * Deux raisons qui vont dans le même sens. Une courbe qui touche le haut de son
- * cadre paraît tassée et donne l'impression d'être coupée ; et `natural` dépasse
- * réellement au-dessus du point le plus haut, donc sans réserve la crête sort du
- * tracé et se fait rogner par le bord du SVG.
- *
- * Relative parce qu'elle doit suivre l'échelle au lieu de la subir : un pic à
- * 100 monte l'axe à 120, un pic à 1 000 le monte à 1 200, et le graphique se lit
- * pareil dans les deux cas. Une réserve en pixels ferait l'inverse — elle
- * compterait beaucoup sur une petite échelle et disparaîtrait sur une grande.
- */
-function chartCeiling(max: number): number {
-  // Une échelle vide garde un axe : sans plafond, la ligne de base
-  // disparaîtrait avec lui.
-  if (max <= 0) return TICKS;
-
-  return Math.ceil(max * HEADROOM);
-}
-
-/**
- * Les graduations, posées **sous** le plafond plutôt que dessus.
- *
- * ## C'est le point de tout ce couple de fonctions
- *
- * Les deux décisions sont séparées, et il a fallu s'y reprendre pour le voir.
- * Tant que le plafond était contraint de tomber sur une graduation ronde, la
- * réserve dérivait avec lui : un maximum de 355 poussait l'axe à 600, soit 69 %
- * de vide au-dessus de la courbe — l'inverse exact de ce qu'on cherchait.
- *
- * Ici le plafond vaut les 20 % promis, au visiteur près, et les graduations se
- * posent où le pas rond tombe. La dernière n'atteint donc pas forcément le haut
- * de l'axe, et c'est normal : une graduation dit « voici la hauteur », pas
- * « voici la limite ».
- *
- * ## Le pas est arrondi vers le bas
- *
- * Vers le haut, il sauterait la dernière graduation dès qu'il dépasserait le
- * quart du plafond, et une échelle à deux traits ne se lit plus. Vers le bas, au
- * pire, on en gagne une.
- */
-function chartTicks(ceiling: number): number[] {
-  const magnitude = 10 ** Math.floor(Math.log10(ceiling / TICKS));
-  const step = Math.max(
-    // Le plancher à 1 tient les petits volumes : des visiteurs sont des
-    // entiers, un axe gradué en demis n'a pas de sens.
-    1,
-    Math.floor(
-      [...NICE_STEPS]
-        .reverse()
-        .map((nice) => nice * magnitude)
-        .find((size) => size <= ceiling / TICKS) ?? magnitude,
-    ),
-  );
-
-  const ticks: number[] = [];
-
-  for (let value = 0; value <= ceiling; value += step) ticks.push(value);
-
-  return ticks;
-}
-
-const chartConfig = {
-  current: { label: 'Current period', color: 'var(--chart-1)' },
-  previous: { label: 'Previous period', color: 'var(--chart-2)' },
-  // Une troisième couleur, parce que les deux premières sont prises et qu'un
-  // marqueur qui reprendrait l'une d'elles se lirait comme un point de mesure.
-  // Elle est dans la légende pour la même raison : un rond isolé sur l'axe
-  // n'explique pas ce qu'il marque.
-  deployments: { label: 'Deployment', color: 'var(--chart-3)' },
-} satisfies ChartConfig;
-
 /**
  * La période affichée, écrite en toutes lettres : `Aug 21 – Aug 27`.
  *
@@ -232,21 +208,6 @@ function periodLabel(days: Period, offset: number): string {
 
   return `${format.format(first)} – ${format.format(last)}`;
 }
-
-/**
- * Les natures qu'on annonce à côté du nom.
- *
- * `referral` n'y est pas, et c'est le seul absent volontaire. Un lien depuis
- * `news.ycombinator.com` est simplement une source : le site est nommé, il n'y
- * a rien à ajouter. Écrire « referral » à côté figerait le mot sur ce cas-là,
- * alors qu'il est réservé à ce qui viendra — un `?ref=` posé délibérément sur
- * un lien, une notion qui n'existe encore ni dans le SDK ni dans l'API.
- *
- * `search` et `internal` restent, parce que le nom seul ne les dit pas :
- * `google` pourrait être n'importe quel site, et `shop.test` ressemble à un
- * tiers alors que c'est nous.
- */
-const LABELLED_KINDS = new Set<SourceRow['kind']>(['search', 'internal']);
 
 /**
  * ## Deux requêtes, et tout le reste en découle
@@ -285,7 +246,41 @@ function Analytics() {
   const before = useQuery(previousSessionsQuery(projectId, days, offset));
   const beforeSummary = useQuery(previousSummaryQuery(projectId, days, offset));
   const deployments = useQuery(deploymentsQuery(projectId, days, offset));
+  const integrations = useQuery(integrationsQuery(projectId));
+
+  // Un projet sans encaisseur — l'outil gratuit, le projet open source — n'a
+  // pas de revenu à montrer, et une carte à zéro ou des colonnes de tirets n'y
+  // seraient pas une mesure : du bruit, sur la moitié de la page. Tout ce qui
+  // parle d'argent s'efface donc, et ses lectures ne partent pas.
+  //
+  // Le fournisseur est nommé plutôt que de compter les connexions : une
+  // intégration qui n'encaisse pas — des déploiements, une sonde — ne doit pas
+  // faire apparaître une colonne Revenue.
+  //
+  // Faute de réponse, on montre le revenu. C'est l'écran d'avant, et ses zéros
+  // restent vrais ; le cacher affirmerait une absence qu'on n'a pas lue.
+  const withRevenue =
+    integrations.data?.some(({ provider }) => provider === 'stripe') ?? true;
+
+  // Un seul appel pour les deux cartes du bas : des appels séparés laisseraient
+  // leurs totaux diverger dès qu'un paiement arrive entre les deux.
+  const attribution = useQuery({
+    ...attributionQuery(projectId, days, offset),
+    enabled: withRevenue,
+  });
+  // Même clé que la carte Locations, donc servie par le cache : elle fournit le
+  // dénominateur de l'onglet Country, que les sessions ne portent pas.
+  const countries = useQuery(
+    locationsQuery(projectId, days, offset, 'country', 250),
+  );
+  // Le second panneau du graphique. Un pas quotidien : il doit tomber sur les
+  // mêmes journées que le trafic, qui est replié au jour.
+  const series = useQuery({
+    ...revenueSeriesQuery(projectId, days, offset, 'day'),
+    enabled: withRevenue,
+  });
   const projects = useQuery(projectsQuery());
+  const ingestion = useQuery(ingestionQuery(projectId));
 
   // Le résumé de la période précédente ne sert qu'aux évolutions des cartes du
   // haut, et il est traité comme tel : sa panne ne rejoint pas la bannière
@@ -310,8 +305,30 @@ function Analytics() {
   // un projet fraîchement installé, c'est l'état normal tant que rien n'a été
   // envoyé. On ne l'affiche qu'une fois les *deux* lectures faites — un résumé
   // à zéro pendant que le journal charge clignoterait.
-  const empty =
+  const emptyPeriod =
     summary.data?.pageViews === 0 && sessions.data?.sessions.length === 0;
+
+  // Mais « rien sur cette fenêtre » et « rien depuis toujours » sont deux états
+  // différents, et les confondre coûte la seule information qui compte : qu'un
+  // projet qui recevait ne reçoit plus. Renvoyer vers l'installation dans ce
+  // cas-là répondrait à côté, et cacherait la chute derrière un problème qui
+  // n'existe pas. Une fenêtre à zéro sur un projet vivant est une **mesure** :
+  // elle s'affiche comme telle, tableau complet, chiffres à zéro.
+  //
+  // La distinction ne se lit pas dans les analytics — une fenêtre ne sait rien
+  // de ce qui l'a précédée. Elle vient de la route d'ingestion, une existence
+  // sur tout l'historique du projet, déjà en cache pour qui arrive de l'écran
+  // d'attente.
+  //
+  // Trois états, et le troisième compte : tant que la réponse n'est pas là on
+  // ne trancherait que sur une hypothèse, et se tromper afficherait le tableau
+  // à zéro le temps d'un battement avant de le remplacer. Une panne de cette
+  // lecture penche en revanche vers le tableau : des zéros restent vrais, alors
+  // que l'écran d'installation affirmerait quelque chose qu'on ne sait pas.
+  const everIngested = ingestion.isError ? true : ingestion.data?.hasEvents;
+
+  const undecided = emptyPeriod && everIngested === undefined;
+  const neverIngested = emptyPeriod && everIngested === false;
 
   return (
     // Large, contrairement aux autres écrans. `setup` et `new` sont des
@@ -327,7 +344,9 @@ function Analytics() {
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 p-8">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {withRevenue ? 'Audience & revenue' : 'Audience'}
+          </h1>
           <p className="text-muted-foreground text-sm">
             {project?.name ?? 'Loading…'}
           </p>
@@ -393,13 +412,13 @@ function Analytics() {
             {(summary.error ?? sessions.error)?.message}
           </EmptyDescription>
         </Empty>
-      ) : empty ? (
+      ) : undecided ? null : neverIngested ? (
         <Empty className="border">
           <EmptyHeader>
-            <EmptyTitle>Nothing over {periodLabel(days, offset)}</EmptyTitle>
+            <EmptyTitle>No event yet</EmptyTitle>
             <EmptyDescription>
-              No event reached this project over the period. If you have just
-              installed the snippet, open your site once — or widen the window.
+              Nothing has ever reached this project. If you have just installed
+              the snippet, open your site once.
             </EmptyDescription>
           </EmptyHeader>
 
@@ -416,7 +435,42 @@ function Analytics() {
           {/* Quatre colonnes sur grand écran, deux sur moyen. Trois cartes
               plus une case vide ne se rangent pas en trois colonnes : la
               quatrième tomberait seule sur une seconde ligne. */}
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {/* Cinq cartes, et une seule ligne sur tout écran de bureau.
+              À six, le seuil tombait à `2xl` (1 536 px) : en dessous, un
+              portable de 1 440 px héritait de deux rangées, ce qu'un tableau de
+              bord ne mérite pas.
+
+              Le seuil est **mesuré, pas choisi dans la liste**. `xl` donnait des
+              cartes de 192 px, où « 16.3 pts » passait encore à la ligne sous le
+              taux de rebond — c'est le libellé le plus long du bandeau, et c'est
+              lui qui commande. À 1 400 px il reste 1 136 px de contenu, soit
+              216 px par carte, et tout tient. Aucun palier de Tailwind ne tombe
+              là, d'où `wide` — défini dans `styles.css`, et **pas** une variante
+              arbitraire : celles-ci sont émises avant les paliers nommés, donc
+              le `lg:` qui suit les écrase.
+
+              La carte qui est partie est `Payments` : le compte des paiements
+              se relit dans la colonne du même nom d'Acquisition, et il ne
+              décidait rien en haut de page. Le revenu, lui, reste — c'est la
+              question du produit.
+
+              En dessous, le repli suit la place : trois colonnes sur tablette,
+              deux sur petit écran, une sur téléphone.
+
+              Le revenu ne porte pas de comparaison avec la période précédente —
+              il faudrait une seconde lecture d'attribution pour une flèche, et
+              elle coûte quatre agrégations. */}
+          {/* Sans revenu, quatre cartes : le palier à trois colonnes en
+              laisserait une seule sur la seconde rangée, donc deux jusqu'à
+              `wide`. Les deux listes de classes sont écrites en entier —
+              Tailwind ne génère que ce qu'il lit dans le source. */}
+          <div
+            className={
+              withRevenue
+                ? 'grid gap-4 sm:grid-cols-2 lg:grid-cols-3 wide:grid-cols-5'
+                : 'grid gap-4 sm:grid-cols-2 wide:grid-cols-4'
+            }
+          >
             <Metric
               label="Unique visitors"
               value={summary.data?.uniqueVisitors}
@@ -433,11 +487,22 @@ function Analytics() {
               previous={compareTo && compareTo.sessions}
             />
             <BounceMetric summary={summary.data} previous={compareTo} />
+            {withRevenue && (
+              <RevenueMetric
+                attribution={attribution.data}
+                failed={attribution.isError}
+              />
+            )}
           </div>
 
+          {/* Un seul dessin, deux échelles. Ce que ça coûte et ce qui le rend
+              lisible malgré tout sont écrits dans `TrafficRevenueChart` — c'est
+              là que la décision vit, pas ici. */}
           <Card>
             <CardHeader>
-              <CardTitle>Unique visitors</CardTitle>
+              <CardTitle>
+                {withRevenue ? 'Traffic and revenue' : 'Traffic'}
+              </CardTitle>
               <CardDescription>
                 {visitors && visitors.length > 0
                   ? `${dayLabel.format(new Date(visitors[0].start))} – ${dayLabel.format(
@@ -448,9 +513,16 @@ function Analytics() {
             </CardHeader>
             <CardContent>
               {visitors ? (
-                <VisitorsChart
+                <TrafficRevenueChart
                   days={visitors}
                   deployments={deployments.data ?? []}
+                  series={series.data}
+                  formatAmount={money}
+                  formatDay={(start) => dayLabel.format(new Date(start))}
+                  formatDayWithYear={(start) =>
+                    dayWithYear.format(new Date(start))
+                  }
+                  formatNumber={(value) => number.format(value)}
                 />
               ) : (
                 <Skeleton className="h-[300px] w-full sm:h-[420px]" />
@@ -463,12 +535,31 @@ function Analytics() {
               la porte pas, et ses deux totaux sont déjà dans les agrégats du
               haut. Ce qui part avec, et qu'il faut savoir : le temps actif, et
               les deux mises en garde qui l'accompagnaient. */}
+          <Acquisition
+            revenue={attribution.data}
+            visits={sessions.data}
+            withRevenue={withRevenue}
+          />
+
           <div className="grid items-start gap-4 lg:grid-cols-2">
-            <Acquisition sessions={sessions.data} />
+            <Audience
+              projectId={projectId}
+              days={days}
+              offset={offset}
+              attribution={attribution.data}
+              attributionFailed={attribution.isError}
+              locations={countries.data}
+              withRevenue={withRevenue}
+            />
             <Pages summary={summary.data} sessions={sessions.data} />
           </div>
 
-          <Locations projectId={projectId} days={days} offset={offset} />
+          <Locations
+            projectId={projectId}
+            days={days}
+            offset={offset}
+            withRevenue={withRevenue}
+          />
         </>
       )}
     </div>
@@ -525,10 +616,12 @@ function Locations({
   projectId,
   days,
   offset,
+  withRevenue,
 }: {
   projectId: string;
   days: Period;
   offset: number;
+  withRevenue: boolean;
 }) {
   const [grain, setGrain] = useState<LocationGrain>('country');
   const [hovered, setHovered] = useState<string | null>(null);
@@ -544,6 +637,26 @@ function Locations({
   const world = useQuery(
     locationsQuery(projectId, days, offset, 'country', 250),
   );
+
+  // Le revenu de la période rangé par pays. Il ne vient pas de l'appel
+  // d'attribution de la page : l'axe y était demandé sans que rien ne
+  // l'affiche, et il a déménagé ici — c'est une agrégation déplacée, pas une
+  // agrégation de plus.
+  //
+  // Le plafond de la route plutôt que dix, pour la raison qui vaut partout où
+  // deux classements se joignent : celui-ci trie par montant, le tableau d'à
+  // côté par visiteurs, et un pays qui encaisse sans être dans les dix
+  // premiers du revenu afficherait un tiret là où on connaît son chiffre.
+  const attribution = useQuery({
+    ...attributionQuery(
+      projectId,
+      days,
+      offset,
+      LOCATION_AXES,
+      MAX_ATTRIBUTION_LIMIT,
+    ),
+    enabled: withRevenue,
+  });
 
   return (
     <Card>
@@ -595,6 +708,9 @@ function Locations({
             hovered={hovered}
             onHover={setHovered}
             page={locations.data}
+            revenue={attribution.data?.country}
+            revenuePending={attribution.isPending}
+            withRevenue={withRevenue}
           />
         ) : (
           <Skeleton className="h-[220px] w-full" />
@@ -805,10 +921,16 @@ interface WorldAtlas {
 
 function LocationRows({
   page,
+  revenue,
+  revenuePending,
+  withRevenue,
   hovered,
   onHover,
 }: {
   page: LocationsPage;
+  revenue: RevenueAttributionPage['country'];
+  revenuePending: boolean;
+  withRevenue: boolean;
   hovered: string | null;
   onHover: (code: string | null) => void;
 }) {
@@ -818,6 +940,35 @@ function LocationRows({
   // resterait vide partout dès qu'une part des visiteurs n'est pas localisée.
   const highest = Math.max(page.rows[0]?.visitors ?? 0, 1);
 
+  // Le revenu ne se joint **qu'au grain pays**, parce que c'est le seul que
+  // l'attribution sache ranger — une région n'a pas d'axe côté serveur. La
+  // colonne disparaît donc sur les deux autres onglets plutôt que de s'y
+  // afficher vide : un tiret dit « rien encaissé », pas « rien demandé ».
+  const showRevenue = withRevenue && page.grain === 'country';
+
+  // Indexé sur le code ISO, qui est le libellé que l'attribution rend sur cet
+  // axe — c'est ce qui permet de joindre sans traduire des deux côtés.
+  //
+  // Une liste par pays et non un total : deux devises additionnées feraient un
+  // montant qui n'existe dans aucun compte. Le cas est rare — un classement ne
+  // porte en pratique que la devise du compte connecté — mais il se produit, et
+  // la ligne montre alors celle qui pèse le plus en le disant.
+  //
+  // Mémoïsé parce que le survol re-rend ce composant à chaque ligne pointée.
+  const earned = useMemo(() => {
+    const byCountry = new Map<string, NonNullable<typeof revenue>['rows']>();
+
+    for (const row of revenue?.rows ?? []) {
+      byCountry.set(row.label, [...(byCountry.get(row.label) ?? []), row]);
+    }
+
+    for (const rows of byCountry.values()) {
+      rows.sort((first, second) => second.amount - first.amount);
+    }
+
+    return byCountry;
+  }, [revenue]);
+
   return (
     // `min-h-100` : la hauteur d'un tableau plein — `h-10` d'en-tête plus dix
     // rangs `h-9`, soit 352 px, la même arithmétique que `CARD_BODY`. Un
@@ -825,13 +976,27 @@ function LocationRows({
     // rétrécir la carte entière en changeant d'onglet, planisphère compris,
     // puisque les deux moitiés partagent désormais leur hauteur.
     <div className="flex min-h-100 flex-col gap-3">
-      <DataTable
+      <LegacyTable
         columns={[
           {
             head: GRAINS.find(({ value }) => value === page.grain)?.label ?? '',
           },
           { head: 'Visitors', width: '5.5rem', align: 'right' },
-          // À gauche, contrairement aux deux autres colonnes de chiffres : ce
+          ...(showRevenue
+            ? [
+                {
+                  head: 'Revenue',
+                  width: '6rem',
+                  align: 'right' as const,
+                  // Les deux colonnes ne parlent pas du même moment, et les
+                  // lire comme un taux de conversion par pays serait faux :
+                  // les visiteurs sont ceux d'ici, le revenu est celui des
+                  // clients dont la **première** visite venait d'ici.
+                  hint: 'Revenue from customers whose first visit came from this country — first touch, like Acquisition. Visitors, next to it, are the ones who connected from here over the period: someone can be counted in one country and pay in another.',
+                },
+              ]
+            : []),
+          // À gauche, contrairement aux autres colonnes de chiffres : ce
           // qu'elle coiffe est une barre, pas un nombre, et un en-tête aligné à
           // droite pointerait vers le pourcentage plutôt que vers le rail.
           { head: 'Share', width: '7rem' },
@@ -841,52 +1006,80 @@ function LocationRows({
           description:
             'Visitors show up here once their address resolves to a place.',
         }}
-        rows={page.rows.map((row) => ({
-          // Le grain seul ne fait pas une clé : deux villes homonymes de deux
-          // pays sont deux lignes, et c'est le couple qui les distingue.
-          key: `${row.countryCode ?? ''}-${row.value}`,
-          // Le survol relie les deux moitiés dans les deux sens : pointer une
-          // ligne éclaire son pays, et inversement. Au grain région ou ville,
-          // plusieurs lignes partagent donc le même pays — c'est voulu, elles
-          // sont bien au même endroit.
-          onEnter: () => onHover(row.countryCode),
-          onLeave: () => onHover(null),
-          state:
-            hovered === null
-              ? undefined
-              : hovered === row.countryCode
-                ? ('active' as const)
-                : ('dimmed' as const),
-          cells: [
-            <span key="place" className="block truncate">
-              {page.grain === 'country'
-                ? countryName(row.countryCode)
-                : row.value}
-              {page.grain !== 'country' && (
-                <span className="text-muted-foreground ml-1.5 text-xs">
-                  {countryName(row.countryCode)}
-                </span>
-              )}
-            </span>,
-            number.format(row.visitors),
-            <span key="share" className="flex items-center gap-2">
-              {/* Le rail de la planche : 3,52 px de haut, le creux à
+        rows={page.rows.map((row) => {
+          const [top, ...others] = earned.get(row.countryCode ?? '') ?? [];
+
+          return {
+            // Le grain seul ne fait pas une clé : deux villes homonymes de deux
+            // pays sont deux lignes, et c'est le couple qui les distingue.
+            key: `${row.countryCode ?? ''}-${row.value}`,
+            // Le survol relie les deux moitiés dans les deux sens : pointer une
+            // ligne éclaire son pays, et inversement. Au grain région ou ville,
+            // plusieurs lignes partagent donc le même pays — c'est voulu, elles
+            // sont bien au même endroit.
+            onEnter: () => onHover(row.countryCode),
+            onLeave: () => onHover(null),
+            state:
+              hovered === null
+                ? undefined
+                : hovered === row.countryCode
+                  ? ('active' as const)
+                  : ('dimmed' as const),
+            cells: [
+              <span key="place" className="block truncate">
+                {page.grain === 'country'
+                  ? countryName(row.countryCode)
+                  : row.value}
+                {page.grain !== 'country' && (
+                  <span className="text-muted-foreground ml-1.5 text-xs">
+                    {countryName(row.countryCode)}
+                  </span>
+                )}
+              </span>,
+              number.format(row.visitors),
+              ...(showRevenue
+                ? [
+                    // Le tiret veut dire « aucun paiement rattaché à ce pays »,
+                    // et il doit pouvoir le dire : l'afficher pendant la lecture
+                    // le rendrait faux le temps qu'elle arrive.
+                    <span key="revenue">
+                      {revenuePending ? (
+                        <Skeleton className="ml-auto h-4 w-12" />
+                      ) : !top ? (
+                        '—'
+                      ) : others.length === 0 ? (
+                        money(top.amount, top.currency)
+                      ) : (
+                        <Hint
+                          title={[top, ...others]
+                            .map((paid) => money(paid.amount, paid.currency))
+                            .join(' · ')}
+                        >
+                          {money(top.amount, top.currency)}
+                        </Hint>
+                      )}
+                    </span>,
+                  ]
+                : []),
+              <span key="share" className="flex items-center gap-2">
+                {/* Le rail de la planche : 3,52 px de haut, le creux à
                   `--primary/20`, le remplissage plein. Pas d'ombre, pas de
                   dégradé — la proportion se lit sur la longueur. */}
-              <span className="bg-primary/20 h-1 flex-1 overflow-hidden rounded-full">
-                <span
-                  className="bg-primary block h-full rounded-full"
-                  style={{ width: `${(row.visitors / highest) * 100}%` }}
-                />
-              </span>
-              <span className="text-muted-foreground w-11 shrink-0 text-right text-xs tabular-nums">
-                {page.visitors === 0
-                  ? '—'
-                  : `${ratio.format((row.visitors / page.visitors) * 100)}%`}
-              </span>
-            </span>,
-          ],
-        }))}
+                <span className="bg-primary/20 h-1 flex-1 overflow-hidden rounded-full">
+                  <span
+                    className="bg-primary block h-full rounded-full"
+                    style={{ width: `${(row.visitors / highest) * 100}%` }}
+                  />
+                </span>
+                <span className="text-muted-foreground w-11 shrink-0 text-right text-xs tabular-nums">
+                  {page.visitors === 0
+                    ? '—'
+                    : `${ratio.format((row.visitors / page.visitors) * 100)}%`}
+                </span>
+              </span>,
+            ],
+          };
+        })}
       />
 
       {page.rows.length > 0 && (
@@ -1060,403 +1253,6 @@ function BounceMetric({
 }
 
 /**
- * Les visiteurs uniques par jour, période courante contre période précédente.
- *
- * ## Deux traitements, parce que les deux séries ne se lisent pas pareil
- *
- * La période courante est une **aire dégradée** : c'est le sujet, elle porte le
- * poids visuel. La précédente est un **trait pointillé sans remplissage** :
- * c'est une référence, et deux aplats superposés saliraient la partie commune
- * — qui est la plus grande — sans rien apprendre.
- *
- * Le pointillé n'est pas décoratif non plus. Il dit « ceci n'est pas ici », et
- * c'est utile : les deux courbes partagent un axe des abscisses qui n'appartient
- * qu'à l'une des deux. Le 12 mars affiché sous un point de la courbe pointillée
- * est le 12 février ; le tooltip est le seul endroit où la vraie date apparaît.
- *
- * ## `type="natural"`
- *
- * Le trait est lissé. Il faut savoir ce que ça coûte : entre deux journées, la
- * courbe passe par des valeurs qui n'ont pas été mesurées, et elle peut creuser
- * sous le plus bas de deux points voisins. Aucune de ces valeurs n'est lisible
- * — l'axe ne porte que des journées, et le tooltip ne rend que des points
- * mesurés — donc ce qui se lit reste vrai.
- *
- * ## Les deux `<Area>`
- *
- * La seconde est une aire à `fill="none"`, pas une `<Line>` : `AreaChart`
- * n'accepte que des aires, et mélanger les deux demanderait un
- * `ComposedChart` pour un résultat identique.
- *
- * ## Le graphique principal de la page, dimensionné comme tel
- *
- * C'est ce qu'on vient voir. Il occupe donc une hauteur qui le dit, et il porte
- * un axe des ordonnées gradué — sans lui, un pic « deux fois plus haut » ne se
- * lit qu'au survol, ce qui n'est pas ce qu'on demande à un graphique qu'on
- * balaye du regard.
- */
-/**
- * Une journée du graphique : la comparaison, plus ce qui a été déployé ce
- * jour-là.
- *
- * Les deux champs de déploiement sont **absents** — et pas vides — quand rien
- * n'a été déployé. C'est ce qui fait qu'aucun point n'est dessiné ce jour-là :
- * Recharts saute les valeurs manquantes, là où un zéro explicite en poserait un.
- */
-type ChartDay = ComparedDay & {
-  /**
-   * La valeur que la série des déploiements porte ce jour-là : zéro, ou rien.
-   *
-   * Zéro et pas un compte : le point est un **repère**, posé sur l'axe. Y mettre
-   * le nombre de déploiements le ferait monter, donc le lirait sur l'échelle des
-   * visiteurs, ce qu'il ne mesure pas. La clé absente veut dire « aucun ce
-   * jour-là », et c'est ce qui fait qu'aucun point n'y est dessiné.
-   */
-  deployments?: number;
-  /** Les versions du jour, pour le tooltip. Voir `DayDeployments.tags`. */
-  deployedTags?: (string | null)[];
-};
-
-function VisitorsChart({
-  days,
-  deployments,
-}: {
-  days: ComparedDay[];
-  deployments: DayDeployments[];
-}) {
-  // Le maximum des deux séries. Recharts le recalcule pour le domaine, mais les
-  // graduations sont posées à la main et ne peuvent pas l'attendre.
-  const ceiling = days.reduce(
-    (highest, day) => Math.max(highest, day.current, day.previous),
-    0,
-  );
-
-  // Les déploiements descendent **dans** la donnée du graphique plutôt que d'être
-  // passés à part au tooltip. C'est ce qui fait que le jour survolé porte déjà
-  // ses versions : Recharts ne transmet que le point, et un second canal
-  // obligerait le tooltip à retrouver la journée par sa date — une jointure de
-  // plus, sur une clé qui peut se décaler.
-  const byDay = new Map(deployments.map((day) => [day.start, day.tags]));
-  const data: ChartDay[] = days.map((day) => {
-    const tags = byDay.get(day.start);
-
-    return {
-      ...day,
-      ...(tags ? { deployments: 0, deployedTags: tags } : {}),
-    };
-  });
-
-  return (
-    <ChartContainer
-      config={chartConfig}
-      className="h-[300px] w-full sm:h-[420px]"
-    >
-      <AreaChart
-        data={data}
-        accessibilityLayer
-        // Le dépassement de `natural` est absorbé par la réserve du domaine,
-        // pas ici : ces quelques pixels ne servent qu'à décoller la graduation
-        // du haut du bord de la carte. À gauche, rien — l'axe se dimensionne
-        // tout seul et la carte porte déjà son propre retrait.
-        margin={{ top: 8, left: 0, right: 8 }}
-      >
-        <defs>
-          {/* Le dégradé est ce qui distingue la série du sujet de sa
-              référence. Il descend jusqu'à l'opacité nulle : une aire qui
-              s'arrête net en bas dessine une frontière que la donnée n'a
-              pas.
-
-              ⚠️ Ces opacités ne sont pas celles qu'on voit. Recharts applique
-              un `fillOpacity` de 0,6 par défaut, qui se multiplie avec elles :
-              l'aire monte donc à 0,42, là où la planche la porte à 0,7. Repéré
-              le 29/08/2026 et **laissé tel quel** — l'écart a été jugé sans
-              importance. Le corriger, c'est `fillOpacity={1}` sur l'`<Area>`
-              d'en dessous, rien d'autre. */}
-          <linearGradient id="visitors-current" x1="0" y1="0" x2="0" y2="1">
-            <stop
-              offset="5%"
-              stopColor="var(--color-current)"
-              stopOpacity={0.7}
-            />
-            <stop
-              offset="95%"
-              stopColor="var(--color-current)"
-              stopOpacity={0.05}
-            />
-          </linearGradient>
-        </defs>
-
-        {/* `syncWithTicks` : sans lui, Recharts ajoute une ligne sur la borne
-            du domaine en plus des graduations — un trait sans valeur en face,
-            qui se lit comme une graduation dont on aurait perdu l'étiquette. */}
-        <CartesianGrid vertical={false} syncWithTicks />
-        <XAxis
-          dataKey="start"
-          tickLine={false}
-          axisLine={false}
-          tickMargin={8}
-          minTickGap={16}
-          tickFormatter={(start: string) => dayLabel.format(new Date(start))}
-        />
-        <YAxis
-          tickLine={false}
-          axisLine={false}
-          tickMargin={4}
-          // `auto` plutôt qu'une largeur en dur : l'axe prend ce que ses
-          // étiquettes demandent, et pas un pixel de plus. Une valeur fixe est
-          // forcément fausse deux fois — trop large sur `0 / 20 / 40`, trop
-          // étroite le jour où un projet passe à `1 200 000`.
-          width="auto"
-          // Des visiteurs sont des entiers : sans ça, une échelle basse se
-          // gradue en `0,5 / 1 / 1,5`.
-          allowDecimals={false}
-          tickFormatter={(visitors: number) => number.format(visitors)}
-          // Base à zéro, jamais au minimum observé : une aire qui ne part pas
-          // de zéro exagère les écarts, et c'est l'erreur de lecture la plus
-          // facile à provoquer sur ce genre de courbe.
-          //
-          // Recharts passe le maximum des **deux** séries, donc la réserve
-          // tient compte de la courbe de référence même quand elle domine.
-          domain={[0, chartCeiling]}
-          ticks={chartTicks(chartCeiling(ceiling))}
-        />
-        <ChartTooltip
-          // `cursor` par défaut : la ligne verticale aide à voir de quel jour
-          // on parle quand les deux courbes se croisent.
-          content={<VisitorsTooltip />}
-        />
-
-        {/* La référence est dessinée **avant** le sujet : à valeurs égales, le
-            trait plein du dessus reste lisible. */}
-        <Area
-          dataKey="previous"
-          type="natural"
-          stroke="var(--color-previous)"
-          strokeDasharray="4 4"
-          fill="none"
-          strokeWidth={2}
-          // Le point au survol suffit ; en poser un sur chaque journée
-          // encombrerait une courbe qui n'est là que pour situer l'autre.
-          dot={false}
-        />
-        <Area
-          dataKey="current"
-          type="natural"
-          stroke="var(--color-current)"
-          fill="url(#visitors-current)"
-          strokeWidth={2}
-          dot={false}
-        />
-
-        {/*
-          Un point sur la journée, posé sur la ligne de base — pas une ligne
-          verticale. Deux raisons, et la première est une question d'honnêteté :
-          l'axe ne porte que des journées, donc un trait à un instant précis
-          promettrait une précision que le graphique ne montre pas. La seconde
-          est pratique — deux déploiements le même jour donneraient deux traits
-          superposés, là où le point reste un repère unique dont le tooltip
-          détaille le contenu.
-
-          C'est une **série** et non des `ReferenceDot`, alors que les deux
-          dessinent la même chose. La raison est la légende : un `ReferenceDot`
-          n'est pas une série, Recharts ne le voit donc pas, et le point
-          turquoise resterait sans nom pour qui ne le survole pas. Recharts
-          n'accepte pas non plus qu'on lui dicte le contenu de sa légende.
-
-          La valeur vaut zéro, donc le point tombe sur l'axe : le poser à la
-          hauteur des visiteurs du jour laisserait croire qu'il en dit quelque
-          chose. Les journées sans déploiement n'ont pas la clé du tout, et
-          `connectNulls={false}` empêche de relier les points entre eux — ce
-          serait une courbe, or il n'y a rien de continu ici.
-        */}
-        <Area
-          dataKey="deployments"
-          legendType="circle"
-          // La couleur est portée par `stroke`, et l'épaisseur mise à zéro :
-          // c'est de `stroke` que Recharts tire la pastille de la légende, et
-          // `stroke="none"` la laisserait sans couleur. Aucun trait n'est
-          // dessiné pour autant — il n'y a rien de continu à relier.
-          stroke="var(--color-deployments)"
-          strokeWidth={0}
-          fill="none"
-          connectNulls={false}
-          activeDot={false}
-          dot={{
-            r: 4,
-            fill: 'var(--color-deployments)',
-            // ⚠️ Sans ça, le point est **translucide** et la courbe se voit au
-            // travers. Recharts pose un `fillOpacity` de 0,6 par défaut sur
-            // l'aire, et le point en hérite — c'est le même défaut que celui
-            // déjà noté sur le dégradé plus haut, mais ici il ne se pardonne
-            // pas : un repère à moitié transparent posé sur un trait bleu n'est
-            // plus un repère.
-            fillOpacity: 1,
-            // L'anneau isole le point de ce qu'il y a dessous — le dégradé de
-            // l'aire, la courbe, la grille — pour qu'il reste net quel que soit
-            // l'endroit où il tombe.
-            stroke: 'var(--background)',
-            strokeWidth: 2,
-            strokeOpacity: 1,
-          }}
-        />
-
-        <ChartLegend content={<ChartLegendContent />} />
-      </AreaChart>
-    </ChartContainer>
-  );
-}
-
-/**
- * Le détail du jour survolé : les deux valeurs, la date que l'axe ne dit pas,
- * et l'écart.
- *
- * Écrit à la main plutôt que monté sur `ChartTooltipContent`, qui rend une
- * liste de séries et ne sait pas relier deux lignes par un troisième chiffre.
- * C'est justement ce troisième chiffre qu'on vient chercher ici.
- *
- * Recharts passe le point complet dans `payload[0].payload` : on lit la ligne
- * de données, pas les séries une par une.
- */
-function VisitorsTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: { payload?: ChartDay }[];
-}) {
-  const day = payload?.[0]?.payload;
-
-  if (!active || !day) return null;
-
-  return (
-    <div className="border-border/50 bg-background grid min-w-[13rem] gap-1.5 rounded-lg border px-2.5 py-2 text-xs shadow-xl">
-      <div className="flex items-center justify-between gap-4">
-        <span className="font-medium">
-          {dayWithYear.format(new Date(day.start))}
-        </span>
-        <Change {...day} />
-      </div>
-
-      <Series
-        color="var(--color-current)"
-        label={chartConfig.current.label}
-        value={day.current}
-      />
-      <Series
-        color="var(--color-previous)"
-        label={chartConfig.previous.label}
-        value={day.previous}
-        // La date de la période précédente n'apparaît nulle part ailleurs :
-        // l'axe porte celle de la période courante, pour les deux courbes.
-        note={dayWithYear.format(new Date(day.previousStart))}
-        dashed
-      />
-
-      <Deployments tags={day.deployedTags} />
-    </div>
-  );
-}
-
-/**
- * Les déploiements du jour, en **deux lignes au plus**.
- *
- * Un seul : la version, et c'est tout ce qu'il y a à en dire. Plusieurs : le
- * nombre, puis la dernière version — pas la liste.
- *
- * ## Pourquoi on ne détaille pas
- *
- * Parce que ce n'est pas l'écran pour ça. Un graphique de visiteurs répond à
- * « qu'est-ce qui a changé ce jour-là », et deux lignes y suffisent : *il y a eu
- * des déploiements*, et *voici où on en est arrivé*. Dérouler cinq versions
- * ferait grandir la bulle à chaque déploiement, jusqu'à couvrir la courbe qu'on
- * est venu lire — et pour une information que l'explorateur d'événements rend
- * déjà, avec ses heures et ses propriétés.
- *
- * `tags` est ordonné du plus ancien au plus récent (voir `readAll`), donc la
- * dernière entrée est le dernier déploiement de la journée.
- */
-function Deployments({ tags }: { tags?: (string | null)[] }) {
-  if (!tags || tags.length === 0) return null;
-
-  const last = tags[tags.length - 1];
-
-  return (
-    <div className="border-border/50 mt-0.5 flex flex-col gap-1 border-t pt-1.5">
-      {tags.length === 1 ? (
-        // Un déploiement sans `release.tag` reste un déploiement : on l'affiche
-        // sans inventer de version.
-        <DeploymentLine label={chartConfig.deployments.label} value={last} />
-      ) : (
-        <>
-          <DeploymentLine label={`Deployments ×${String(tags.length)}`} />
-          <DeploymentLine label="Last deployment" value={last} />
-        </>
-      )}
-    </div>
-  );
-}
-
-/** Une ligne de la section déploiements : la pastille, un libellé, une valeur. */
-function DeploymentLine({
-  label,
-  value,
-}: {
-  label: string;
-  /** Absente sur la ligne de comptage, qui n'a pas de version à montrer. */
-  value?: string | null;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <span
-        aria-hidden
-        className="h-2.5 w-2.5 shrink-0 rounded-full"
-        style={{ backgroundColor: 'var(--color-deployments)' }}
-      />
-      <span className="text-muted-foreground">{label}</span>
-      {value === undefined ? null : (
-        <span className="ml-auto font-mono font-medium">{value ?? '—'}</span>
-      )}
-    </div>
-  );
-}
-
-/** Une ligne du tooltip : la pastille de série, son libellé, sa valeur. */
-function Series({
-  color,
-  label,
-  value,
-  note,
-  dashed = false,
-}: {
-  color: string;
-  label: string;
-  value: number;
-  note?: string;
-  dashed?: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      {/* La pastille reprend le traitement de la courbe — pleine pour le
-          sujet, évidée pour la référence — pour qu'on n'ait pas à deviner
-          laquelle est laquelle. */}
-      <span
-        aria-hidden
-        className="h-2.5 w-2.5 shrink-0 rounded-[2px] border-2"
-        style={{
-          borderColor: color,
-          backgroundColor: dashed ? 'transparent' : color,
-        }}
-      />
-      <span className="text-muted-foreground">{label}</span>
-      {note && <span className="text-muted-foreground/70">{note}</span>}
-      <span className="ml-auto font-mono font-medium tabular-nums">
-        {number.format(value)}
-      </span>
-    </div>
-  );
-}
-
-/**
  * L'écart entre deux mesures, et ses quatre cas.
  *
  * | Cas                       | Chiffre | Icône       |
@@ -1595,6 +1391,35 @@ const ROWS = 10;
 const CARD_BODY = 'h-106';
 
 /**
+ * Ce que la carte montre d'un coup.
+ *
+ * Huit parce qu'un rang `roomy` mesure une fois et demie un rang ordinaire :
+ * dix ne tiendraient plus dans la hauteur que les cartes voisines partagent.
+ *
+ * Le panneau, lui, n'a pas de chiffre : il mesure la place qu'on lui laisse et
+ * pagine en conséquence. Un nombre figé y laisserait un tiers de vide sur un
+ * grand moniteur et déborderait sur un portable.
+ */
+const CARD_ROWS = 8;
+
+/** Le seul libellé de nature que cet écran ait à écrire lui-même. */
+const NATURE_LABEL_DIRECT = 'Direct';
+
+/**
+ * Le même corps, mais en **plancher**, pour les cartes de revenu.
+ *
+ * Elles portent souvent moins de dix lignes — un projet sans Stripe branché n'en
+ * a aucune — et la hauteur fixe y creusait un trou blanc de 420 px sous un état
+ * vide. Le plancher garde l'alignement entre les deux cartes voisines sans
+ * imposer le vide.
+ *
+ * Écrit en toutes lettres, et pas dérivé de `CARD_BODY` par interpolation : le
+ * scanner de Tailwind lit les **littéraux** du source. Une classe composée à
+ * l'exécution ne serait jamais générée, et la carte n'aurait aucune hauteur.
+ */
+const CARD_BODY_MIN = 'min-h-106';
+
+/**
  * Une colonne du tableau, telle que la planche la décrit.
  *
  * Les trois onglets de Pages n'ont pas les mêmes colonnes — ni les mêmes
@@ -1621,6 +1446,15 @@ interface Column {
   align?: 'right';
   /** Estompée : la seconde lecture d'une ligne, jamais la première. */
   dim?: boolean;
+  /**
+   * La définition du mot, quand c'en est un de métier.
+   *
+   * Présente, l'en-tête prend un souligné pointillé et rend la définition au
+   * survol — voir `Hint`. Le public de ce produit n'est pas analyste, et un
+   * tableau qui emploie « conversion » ou « revenu par visiteur » sans les
+   * définir laisse son lecteur deviner, ou croire qu'il a compris.
+   */
+  hint?: string;
 }
 
 interface TableRow {
@@ -1641,6 +1475,10 @@ interface TableRow {
 
 /**
  * Le tableau que partagent les trois onglets de Pages.
+ *
+ * ⚠️ **En sursis.** Il reçoit des cellules déjà rendues, donc il ne sait pas
+ * trier — voir `components/data-table.tsx`, qui le remplace carte par carte.
+ * Les cartes qui l'emploient encore migreront à leur tour.
  *
  * ## Un tableau bordé, pas un classement à barres
  *
@@ -1667,7 +1505,7 @@ interface TableRow {
  * Le filet disparaît sous la dernière ligne, pas sous les autres : il sépare,
  * il ne souligne pas. La hauteur ne bouge pas pour autant — `border-box`.
  */
-function DataTable({
+function LegacyTable({
   columns,
   rows,
   empty,
@@ -1704,7 +1542,11 @@ function DataTable({
               column.align === 'right' ? 'text-right' : ''
             }`}
           >
-            {column.head}
+            {column.hint ? (
+              <Hint title={column.hint}>{column.head}</Hint>
+            ) : (
+              column.head
+            )}
           </div>
         ))}
       </div>
@@ -1845,142 +1687,6 @@ function hostOf(origin: string): string {
  * illisible n'en a pas donné. La place reste réservée pour que la colonne
  * d'icônes ne se déchire pas.
  */
-interface BarRow {
-  key: string;
-  /** Ce qui s'écrit dans la gouttière, à droite. Voir `Bars` pour l'alignement. */
-  label: ReactNode;
-  /** Le domaine de l'icône, ou `null` quand la provenance n'a pas de site. */
-  host: string | null;
-  value: number;
-}
-
-/**
- * Le classement en **barres horizontales** — la forme que la planche donne à
- * l'acquisition.
- *
- * ## Pourquoi ce n'est pas un `Rank`
- *
- * Parce que la planche ne dit pas la même chose des deux cartes, et que l'écart
- * était réel : Acquisition y est un graphique — libellés à droite dans une
- * gouttière, barres pleines, repères verticaux — là où Pages est un tableau
- * bordé. Une seule question se pose ici (« combien, comparé aux autres ? »), et
- * une barre y répond mieux qu'une colonne de chiffres ; Pages en pose deux ou
- * trois par ligne, ce qu'une barre ne sait pas porter.
- *
- * ## Deux colonnes, pas une grille de lignes
- *
- * La gouttière et l'aire tracée sont deux colonnes indépendantes, alignées
- * parce que leurs rangs ont la même hauteur et le même écart. C'est ce qui
- * permet aux repères verticaux d'être **un seul** calque continu : dans une
- * grille ligne à ligne, ils se seraient interrompus à chaque gouttière.
- *
- * ## Le retrait de droite, et pourquoi il est en `ch`
- *
- * La valeur suit la barre au lieu d'être rangée dans une colonne — c'est ce qui
- * fait qu'elle **étiquette** la barre plutôt que de la commenter. Elle déborde
- * donc de la piste, et la place qu'elle réclame se réserve en retrait.
- *
- * En `ch` parce que c'est la largeur d'un chiffre : le retrait suit le nombre
- * le plus long au lieu de parier sur lui. Même raison que `width="auto"` sur
- * l'axe du graphique principal — une largeur en dur est fausse deux fois, trop
- * large sur `380` et trop étroite sur `1,204,918`.
- */
-function Bars({
-  rows,
-  empty,
-}: {
-  rows: BarRow[];
-  empty: { title: string; description: string };
-}) {
-  if (rows.length === 0) {
-    return (
-      <Empty>
-        <EmptyTitle>{empty.title}</EmptyTitle>
-        <EmptyDescription>{empty.description}</EmptyDescription>
-      </Empty>
-    );
-  }
-
-  // Le maximum, jamais le total : la barre dit « comparé à la plus grande »,
-  // ce que le classement, tronqué ou non, sait toujours. Une part d'un tout
-  // prétendrait connaître le tout.
-  const highest = Math.max(...rows.map((row) => row.value), 1);
-
-  const written = rows.map((row) => number.format(row.value));
-  const widest = Math.max(...written.map((value) => value.length));
-
-  return (
-    <div className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-2 text-xs">
-      {/* La gouttière. Alignée à droite, donc les libellés viennent buter
-          contre leur barre plutôt que de la laisser flotter au bout d'un blanc.
-          L'icône est au bout, côté barre : c'est le seul emplacement qui la
-          garde en colonne nette sous un texte, lui, en drapeau. */}
-      <div className="text-muted-foreground flex flex-col gap-3">
-        {rows.map((row) => (
-          <div
-            key={row.key}
-            // Plafonnée : un referrer peut être long, et la gouttière mangerait
-            // l'aire tracée qui, elle, porte la comparaison.
-            className="flex h-7 max-w-48 items-center justify-end gap-1.5"
-          >
-            {row.label}
-            {/* La place est tenue même sans icône, sinon la colonne se
-                déchire sur `Direct`. */}
-            <span className="flex size-4 shrink-0 items-center justify-center">
-              {row.host !== null && <Favicon host={row.host} />}
-            </span>
-          </div>
-        ))}
-      </div>
-
-      <div
-        style={{
-          paddingRight: `calc(${widest}ch + var(--spacing) * 2)`,
-        }}
-      >
-        <div className="relative flex flex-col gap-3">
-          {/* Quatre repères à 25, 50, 75 et 100 % — quatre cellules égales
-              bordées à droite, plutôt que quatre positions calculées. Pas de
-              trait à zéro : la gouttière marque déjà l'origine.
-
-              `border-border/50` est le trait du graphique principal, où
-              `CartesianGrid` le prend par la feuille de `ChartContainer`. Les
-              deux graphiques de la page se lisent donc sur la même trame. */}
-          <div aria-hidden className="absolute inset-0 flex">
-            {[0, 1, 2, 3].map((mark) => (
-              <div key={mark} className="border-border/50 flex-1 border-r" />
-            ))}
-          </div>
-
-          {rows.map((row, rank) => (
-            <div key={row.key} className="relative h-7">
-              <div
-                className="bg-chart-1 h-full rounded-[4px]"
-                style={{ width: `${(row.value / highest) * 100}%` }}
-              />
-              {/* Posée au bout de la barre, pas dans une colonne : elle
-                  étiquette la barre. Le retrait du parent lui garde la place. */}
-              <span
-                className="absolute inset-y-0 flex items-center pl-2 tabular-nums"
-                style={{ left: `${(row.value / highest) * 100}%` }}
-              >
-                {written[rank]}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const ACQUISITION_TABS = [
-  { value: 'sources', label: 'Sources' },
-  { value: 'referrers', label: 'Referrers' },
-  { value: 'terms', label: 'Search terms' },
-] as const;
-
-type AcquisitionTab = (typeof ACQUISITION_TABS)[number]['value'];
 
 /**
  * D'où viennent les sessions — trois lectures du même classement.
@@ -1998,100 +1704,749 @@ type AcquisitionTab = (typeof ACQUISITION_TABS)[number]['value'];
  * chantier oublié : `document.referrer` de Google ne porte plus la requête
  * depuis 2013. Il faudra brancher Search Console.
  */
-function Acquisition({ sessions }: { sessions: SessionsPage | undefined }) {
-  const [tab, setTab] = useState<AcquisitionTab>('sources');
+/**
+ * Le revenu de la période, dans la devise qui pèse le plus.
+ *
+ * ## Pourquoi une seule devise, et pas un total
+ *
+ * Parce qu'additionner des euros et des dollars demanderait un taux de change,
+ * donc une date de taux, donc une décision qui n'appartient pas à un tableau de
+ * bord. Quand il y en a plusieurs, la carte le dit au lieu de choisir en
+ * silence.
+ *
+ * Le montant agrège les trois ensembles d'un axe — classé, direct, non
+ * attribué — parce que c'est le revenu **de la période**, pas celui qu'on sait
+ * rattacher. Le second se lira dans la carte de qualité de la mesure, à l'écran
+ * v2.
+ */
+function RevenueMetric({
+  attribution,
+  failed,
+}: {
+  attribution: RevenueAttributionPage | undefined;
+  /**
+   * La lecture a échoué. Sans lui, la carte restait en squelette pour
+   * toujours : une panne se lisait comme un chargement lent.
+   */
+  failed: boolean;
+}) {
+  const [top, second, ...rest] = totalsByCurrency(attribution);
 
-  const sources = sessions && trafficSources(sessions.sessions);
-  const referral = sessions && referrers(sessions.sessions);
+  return (
+    <Card>
+      <CardHeader className="gap-1">
+        <CardDescription>Revenue</CardDescription>
+        <CardTitle className="text-3xl tabular-nums">
+          {attribution ? (
+            money(top?.amount ?? 0, top?.currency ?? null)
+          ) : failed ? (
+            '—'
+          ) : (
+            <Skeleton className="h-8 w-24" />
+          )}
+        </CardTitle>
+
+        {!attribution && failed && (
+          <p className="text-destructive text-xs">Unavailable</p>
+        )}
+
+        {/* La seconde devise **en clair**, et pas un badge « +1 more » : celui-ci
+            ne disait rien à qui encaisse 2 000 $ et 1 400 €, et laissait lire le
+            premier montant comme un total. Au-delà de deux, le compte reprend son
+            sens — il est alors précédé de deux montants, pas d'un seul. */}
+        {second && (
+          <p className="text-muted-foreground text-xs tabular-nums">
+            {money(second.amount, second.currency)}
+            {rest.length > 0 && ` · +${String(rest.length)} more`}
+          </p>
+        )}
+      </CardHeader>
+    </Card>
+  );
+}
+
+/**
+ * Les totaux par devise, du plus gros au plus petit.
+ *
+ * Lus sur **un seul axe** — n'importe lequel : les mêmes paiements y sont tous,
+ * seulement rangés autrement. Les additionner sur deux axes les compterait deux
+ * fois.
+ */
+function totalsByCurrency(
+  attribution: RevenueAttributionPage | undefined,
+): { currency: string | null; amount: number }[] {
+  const axis = attribution?.campaign;
+
+  if (!axis) return [];
+
+  const totals = new Map<string | null, number>();
+
+  for (const row of [...axis.rows, ...axis.direct, ...axis.unattributed]) {
+    totals.set(row.currency, (totals.get(row.currency) ?? 0) + row.amount);
+  }
+
+  return [...totals]
+    .map(([currency, amount]) => ({ currency, amount }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
+/**
+ * La profondeur du classement d'audience de la carte « Who they are ».
+ *
+ * Dix suffiraient à un affichage ; ici la lecture sert de **table de
+ * correspondance**, pas de liste. Les deux classements ne trient pas sur la
+ * même chose — le revenu par montant, l'audience par visiteurs — et un
+ * navigateur qui rapporte sans figurer au top 10 du trafic afficherait un
+ * tiret alors qu'on connaît son compte.
+ *
+ * Le plafond ne coûte rien parce que ces axes sont de faible cardinalité par
+ * nature : une poignée de navigateurs, autant de systèmes, trois types
+ * d'appareil. « Tout » tient dessous, et c'est le but.
+ */
+const TECHNOLOGY_DEPTH = 250;
+
+/**
+ * Qui sont les visiteurs, et lesquels rapportent.
+ *
+ * Trois onglets — navigateur, système, appareil — chacun croisant deux
+ * lectures : les visiteurs viennent du classement d'audience, le revenu de
+ * l'attribution. C'est le même croisement que dans Acquisition, sur des axes que
+ * le visiteur ne choisit pas.
+ *
+ * Le pays n'y est pas : il a sa propre carte, avec son planisphère.
+ */
+function Audience({
+  projectId,
+  days,
+  offset,
+  attribution,
+  attributionFailed,
+  locations,
+  withRevenue,
+}: {
+  projectId: string;
+  days: Period;
+  offset: number;
+  attribution: RevenueAttributionPage | undefined;
+  attributionFailed: boolean;
+  locations: LocationsPage | undefined;
+  withRevenue: boolean;
+}) {
+  const [tab, setTab] = useState<TechnologyGrain>('browser');
+
+  // Les trois onglets nomment le même axe des deux côtés : le classement
+  // d'audience et celui du revenu lisent la même colonne de session, sous le
+  // même nom. C'est ce qui rend la jointure par libellé légitime plus bas.
+  const axis: AttributionAxis = tab;
+
+  // Le classement d'audience suit l'onglet, une lecture par grain. Les trois
+  // ne sortent pas d'une même passe côté serveur — c'est une agrégation par
+  // colonne — et les charger toutes à l'ouverture en paierait deux que
+  // personne ne regarde. React Query garde celles déjà vues, donc une bascule
+  // ne coûte qu'à la première.
+  const technology = useQuery(
+    technologyQuery(projectId, days, offset, tab, TECHNOLOGY_DEPTH),
+  );
+
+  const seen = technology.data
+    ? new Map(technology.data.rows.map((row) => [row.value, row.visitors]))
+    : undefined;
+
+  const breakdown = attribution?.[axis];
+
+  const classified: TableRow[] = (breakdown?.rows ?? []).map((row, index) => {
+    const visitors = seen?.get(row.label);
+
+    return {
+      key: `${row.label}-${String(row.currency)}-${String(index)}`,
+      cells: [
+        <span key="label" className="truncate">
+          {row.label || 'Unknown'}
+        </span>,
+        // Le tiret dit « ce navigateur n'a pas de visite sur la période »,
+        // et il doit pouvoir le dire : l'afficher pendant le chargement le
+        // rendrait faux une fraction de seconde sur chaque bascule d'onglet,
+        // le temps que la lecture du grain arrive.
+        <span key="visitors">
+          {technology.isPending ? (
+            <Skeleton className="ml-auto h-4 w-10" />
+          ) : visitors === undefined ? (
+            '—'
+          ) : (
+            number.format(visitors)
+          )}
+        </span>,
+        <span key="customers">{number.format(row.visitors)}</span>,
+        <span key="revenue">{money(row.amount, row.currency)}</span>,
+      ],
+    };
+  });
+
+  // Sans revenu, les lignes viennent du trafic. Pilotée par l'attribution, la
+  // carte n'aurait rien à ranger et resterait vide sur tout projet qui
+  // n'encaisse pas — alors que ses navigateurs, eux, sont connus.
+  const rows: TableRow[] = withRevenue
+    ? classified
+    : (technology.data?.rows ?? []).map((row) => ({
+        key: row.value,
+        cells: [
+          <span key="label" className="truncate">
+            {row.value || 'Unknown'}
+          </span>,
+          number.format(row.visitors),
+        ],
+      }));
+
+  const loaded = withRevenue ? attribution : technology.data;
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Acquisition</CardTitle>
-        <CardDescription>How each session reached the site.</CardDescription>
+        <CardTitle>Who they are</CardTitle>
+        <CardDescription>
+          {!locations
+            ? 'Loading…'
+            : withRevenue
+              ? 'The same payments, split by what the visitor brought with them.'
+              : 'Visitors, split by what they brought with them.'}
+        </CardDescription>
         <CardAction>
           <Tabs
             value={tab}
-            onValueChange={(value) => setTab(value as AcquisitionTab)}
+            onValueChange={(value) => setTab(value as TechnologyGrain)}
           >
             <TabsList>
-              {ACQUISITION_TABS.map(({ value, label }) => (
-                <TabsTrigger
-                  key={value}
-                  // Visible mais inerte : masquer l'onglet ferait croire que la
-                  // vue n'est pas prévue, alors qu'elle attend une intégration.
-                  disabled={value === 'terms'}
-                  value={value}
-                >
-                  {label}
-                  {value === 'terms' && (
-                    <Badge className="ml-1.5" variant="secondary">
-                      Soon
-                    </Badge>
-                  )}
+              {AUDIENCE_AXES.map((value) => (
+                <TabsTrigger key={value} value={value}>
+                  {AXIS_LABELS[value]}
                 </TabsTrigger>
               ))}
             </TabsList>
           </Tabs>
         </CardAction>
       </CardHeader>
-      <CardContent className={CARD_BODY}>
-        {sources === undefined || referral === undefined ? (
-          <Skeleton className={`w-full ${CARD_BODY}`} />
-        ) : tab === 'sources' ? (
-          <>
-            <Bars
-              empty={{
-                title: 'No sources yet',
-                description:
-                  'Sessions get a source from the referrer of their first page view.',
-              }}
-              rows={sources.rows.slice(0, ROWS).map((source) => ({
-                key: `${source.kind}-${source.name ?? ''}`,
-                host: source.host,
-                label: (
-                  <>
-                    <span className="min-w-0 truncate">{source.label}</span>
-                    {/* La nature reste écrite malgré l'icône : celle-ci lève
-                        bien l'ambiguïté sur `Google`, mais pas sur `internal`,
-                        où le favicon de notre propre site le ferait au
-                        contraire passer pour un tiers. */}
-                    {LABELLED_KINDS.has(source.kind) && (
-                      <span className="shrink-0 text-2xs">{source.kind}</span>
-                    )}
-                  </>
-                ),
-                value: source.sessions,
-              }))}
-            />
-            {/* Ce que l'attribution ne couvre pas. Une session sans vue de page
-                n'a aucune provenance observable — et ce n'est pas `direct`, qui
-                est une observation. Taire l'écart laisserait croire le total
-                exhaustif. */}
-            {sources.unattributed > 0 && (
-              <p className="text-muted-foreground pt-3 text-xs">
-                {number.format(sources.unattributed)} sessions without a page
-                view
-              </p>
-            )}
-          </>
-        ) : (
-          <Bars
-            empty={{
-              title: 'No referrers yet',
-              description: 'Sites that link to you will show up here.',
-            }}
-            rows={referral.slice(0, ROWS).map((source) => ({
-              key: source.name ?? '',
-              // `referrers` a déjà écarté les lignes sans nom : sur un
-              // `referral`, l'hôte est donc toujours là.
-              host: source.host,
-              label: <span className="min-w-0 truncate">{source.label}</span>,
-              value: source.sessions,
-            }))}
+
+      {/* Un **plancher**, pas une hauteur fixe : `CARD_BODY` est calibré sur dix
+          lignes, et l'appliquer à l'état vide creusait un trou blanc de 420 px.
+          Le plancher garde l'alignement entre les deux cartes voisines sans
+          imposer le vide. */}
+      <CardContent className={CARD_BODY_MIN}>
+        {loaded ? (
+          <LegacyTable
+            columns={[
+              { head: AXIS_LABELS[axis] },
+              { head: 'Visitors', width: '5rem', align: 'right' },
+              ...(withRevenue
+                ? [
+                    {
+                      head: 'Customers',
+                      width: '5.5rem',
+                      align: 'right' as const,
+                    },
+                    { head: 'Revenue', width: '6rem', align: 'right' as const },
+                  ]
+                : []),
+            ]}
+            rows={rows}
+            empty={
+              withRevenue
+                ? {
+                    title: 'No revenue yet',
+                    description:
+                      'Payments appear here once one is attributed to a visitor.',
+                  }
+                : {
+                    title: 'No visitors yet',
+                    description:
+                      'Browsers, systems and devices show up with the first visit.',
+                  }
+            }
           />
+        ) : withRevenue && attributionFailed ? (
+          <Empty>
+            <EmptyTitle>Revenue unavailable</EmptyTitle>
+          </Empty>
+        ) : (
+          <Skeleton className="h-full w-full" />
         )}
       </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Une ligne du tableau d'acquisition : le trafic, puis ce qu'il a rapporté.
+ *
+ * `visitors` vient des sessions, `customers` et `revenue` de l'attribution. Les
+ * deux moitiés sont sur la page, et le croisement se fait ici plutôt qu'au
+ * serveur : le demander ajouterait une route pour un repli de trente lignes.
+ */
+interface AcquisitionRow {
+  key: string;
+  label: string;
+  /** Ce qui qualifie le libellé sans le remplacer — voir `campaignLabel`. */
+  note: string | null;
+  /** Le domaine qui porte l'icône, quand la ligne désigne un site. */
+  host: string | null;
+  visitors: number;
+  customers: number;
+  /** En centimes **réglés** — voir le contrat du revenu. */
+  revenue: number;
+  currency: string | null;
+}
+
+/**
+ * Les colonnes, et ce que chacune trie.
+ *
+ * `undefined` n'est pas zéro, et c'est la distinction qui compte : une ligne
+ * dont on ne connaît pas les visiteurs n'a pas un taux de conversion nul, elle
+ * n'en a pas. La trier comme une ligne à zéro la mettrait au même rang que
+ * celles qui ne convertissent réellement pas.
+ */
+function acquisitionColumns(
+  axis: AttributionAxis,
+  rows: AcquisitionRow[],
+  withRevenue: boolean,
+): DataColumn<AcquisitionRow>[] {
+  const busiest = rows.reduce((most, row) => Math.max(most, row.visitors), 0);
+
+  // La moyenne pondérée, pas la moyenne des lignes : c'est le revenu par
+  // visiteur de la carte entière, et c'est à lui qu'une source se compare.
+  const totals = rows.reduce(
+    (sum, row) => ({
+      revenue: sum.revenue + row.revenue,
+      visitors: sum.visitors + row.visitors,
+    }),
+    { revenue: 0, visitors: 0 },
+  );
+  const average = totals.visitors === 0 ? 0 : totals.revenue / totals.visitors;
+
+  const perVisitor = (row: AcquisitionRow) =>
+    row.visitors === 0 ? undefined : row.revenue / row.visitors;
+
+  const rate = (row: AcquisitionRow) =>
+    row.visitors === 0 ? undefined : (row.customers / row.visitors) * 100;
+
+  const columns: DataColumn<AcquisitionRow>[] = [
+    {
+      key: 'label',
+      head: AXIS_LABELS[axis],
+      sortBy: (row) => `${row.label} ${row.note ?? ''}`.toLowerCase(),
+      cell: (row) => (
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            {row.host && <Favicon host={row.host} />}
+            <span className="truncate">{row.label}</span>
+            {/* Sur la même ligne et non dessous : le rang porte déjà la barre
+                de part, et un troisième étage ne tiendrait pas dans sa hauteur.
+                En retrait pour que le nom reste ce qu'on lit d'abord. */}
+            {row.note && (
+              <span className="truncate text-xs text-muted-foreground">
+                {row.note}
+              </span>
+            )}
+          </span>
+          {/* La part du trafic, sous le libellé et non dans une colonne : elle
+              répond à « combien, comparé aux autres ? », que la colonne
+              Visitors seule laisse calculer de tête. */}
+          {/* La barre à pleine intensité, la gouttière dans la version atténuée
+              de la même couleur — celle que portait la barre jusqu'ici : la
+              piste dit « voici le maximum », le remplissage « voici cette
+              ligne ». Les deux dans deux teintes sans rapport se lisaient comme
+              deux mesures. */}
+          <span className="block h-1 w-full rounded-full bg-chart-1/40">
+            <span
+              className="block h-1 rounded-full bg-chart-1"
+              style={{
+                width: `${String(busiest === 0 ? 0 : (row.visitors / busiest) * 100)}%`,
+              }}
+            />
+          </span>
+        </div>
+      ),
+    },
+    {
+      key: 'visitors',
+      head: 'Visitors',
+      width: '5.5rem',
+      align: 'right',
+      sortBy: (row) => row.visitors,
+      cell: (row) => number.format(row.visitors),
+    },
+    {
+      key: 'customers',
+      head: 'Customers',
+      width: '7rem',
+      align: 'right',
+      sortBy: (row) => row.customers,
+      cell: (row) => number.format(row.customers),
+    },
+    {
+      key: 'rate',
+      head: 'Conv.',
+      width: '5rem',
+      align: 'right',
+      dim: true,
+      hint: 'Share of the visitors this source brought who became customers. First touch: a visitor is credited to the source that brought them first, not the one they came back through.',
+      sortBy: rate,
+      cell: (row) => {
+        const value = rate(row);
+
+        return value === undefined ? '—' : `${value.toFixed(1)}%`;
+      },
+    },
+    {
+      key: 'revenue',
+      head: 'Revenue',
+      width: '7rem',
+      align: 'right',
+      sortBy: (row) => row.revenue,
+      cell: (row) =>
+        row.revenue === 0 ? '—' : money(row.revenue, row.currency),
+    },
+    {
+      key: 'per',
+      head: 'Per visitor',
+      width: '7rem',
+      align: 'right',
+      hint: 'Revenue ÷ visitors. The column that reveals a low-volume, high-value source — absolute revenue always buries it under the big channels.',
+      sortBy: perVisitor,
+      cell: (row) => {
+        const value = perVisitor(row);
+
+        if (value === undefined || value === 0) return '—';
+
+        // Vert au-dessus de la moyenne de la carte, et rien en dessous : une
+        // seconde couleur ferait lire « mauvais » là où il n'y a que « moins
+        // que la moyenne », ce qui est le cas de la moitié des lignes.
+        return (
+          <span className={value > average ? 'font-medium text-success' : ''}>
+            {money(Math.round(value), row.currency)}
+          </span>
+        );
+      },
+    },
+  ];
+
+  // La conversion part avec le revenu : un client n'existe que par un
+  // paiement, et sans encaisseur le taux vaudrait zéro sur chaque ligne.
+  return withRevenue
+    ? columns
+    : columns.filter(({ key }) => key === 'label' || key === 'visitors');
+}
+
+/**
+ * D'où viennent les nouveaux clients — et d'où vient le trafic qui n'en produit
+ * pas.
+ *
+ * ## Les lignes viennent du trafic, le revenu s'y joint
+ *
+ * C'est l'inverse de ce que cette carte faisait, et c'est le changement de
+ * fond. Pilotée par l'attribution, elle n'affichait que les sources ayant
+ * encaissé quelque chose : une campagne qui amène cent quatre-vingts visiteurs
+ * et zéro euro en était absente, alors que c'est exactement la ligne qu'on vient
+ * chercher. Trier par trafic n'avait pas davantage de sens sur un classement
+ * qui n'en contenait qu'une partie.
+ *
+ * ## Quatre onglets, deux grains
+ *
+ * `Sources` rend la **nature** — Direct, Search, Social, Campaign — et
+ * `Referrers` les hôtes. Le même classement à deux niveaux de zoom, pas deux
+ * calculs. Le pays n'y est plus : il a sa carte, avec son planisphère.
+ */
+function Acquisition({
+  // Nommés autrement que dans la route, exprès : là-haut ce sont des résultats
+  // de `useQuery`, ici ce sont leurs données déjà extraites. Reprendre les
+  // mêmes noms ferait lire deux choses différentes de la même façon — et le
+  // garde-fou de TanStack Query, qui interdit un résultat de requête dans un
+  // tableau de dépendances, s'y trompait aussi.
+  revenue,
+  visits,
+  withRevenue,
+}: {
+  revenue: RevenueAttributionPage | undefined;
+  visits: SessionsPage | undefined;
+  withRevenue: boolean;
+}) {
+  const [tab, setTab] = useState<AcquisitionAxis>('source');
+  const [open, setOpen] = useState(false);
+  const isMobile = useIsMobile();
+
+  const traffic = useMemo(
+    () => (visits ? acquisitionTraffic(visits.sessions) : undefined),
+    [visits],
+  );
+
+  const rows = useMemo<AcquisitionRow[]>(() => {
+    if (!traffic) return [];
+
+    // Le revenu, indexé sur la clé que chaque axe définit — la même des deux
+    // côtés, sans quoi une ligne aurait des visiteurs ici et du revenu là.
+    //
+    // Les quatre axes sont lus un par un plutôt qu'au travers d'un
+    // `attribution[tab]` : leurs lignes n'ont pas la même forme — une nature
+    // ici, une provenance classée là — et l'index dynamique les réduirait à ce
+    // qu'elles ont en commun, c'est-à-dire à rien de ce dont on a besoin.
+    const earned = new Map<
+      string,
+      {
+        amount: number;
+        visitors: number;
+        currency: string | null;
+        label: string;
+        note: string | null;
+      }
+    >();
+
+    // Chaque branche rend la **même** forme, `note` comprise : laisser les
+    // formes de l'API remonter telles quelles réduisait l'union à ce qu'elles
+    // ont en commun, c'est-à-dire à rien de ce dont l'affichage a besoin.
+    const keyed: {
+      key: string;
+      label: string;
+      note: string | null;
+      amount: number;
+      visitors: number;
+      currency: string | null;
+    }[] =
+      tab === 'source'
+        ? (revenue?.source?.rows ?? []).map((row) => ({
+            ...row,
+            key: row.nature,
+            note: null,
+          }))
+        : tab === 'referrer'
+          ? (revenue?.referrer?.rows ?? []).map((row) => ({
+              ...row,
+              key: row.source.name ?? row.label,
+              note: null,
+            }))
+          : tab === 'campaign'
+            ? (revenue?.campaign?.rows ?? []).map((row) => ({
+                ...row,
+                // Le libellé joint du serveur reste la **clé** — c'est sur lui
+                // que le trafic se recoupe — mais l'affichage sépare le nom de
+                // ce qui le qualifie.
+                key: row.label,
+                ...campaignLabel(row.campaign),
+              }))
+            : (revenue?.landing?.rows ?? []).map((row) => ({
+                ...row,
+                key: row.label,
+                note: null,
+              }));
+
+    // Sur l'axe des natures, l'ensemble `direct` du serveur **est** la ligne
+    // `Direct` : un visiteur connu sans campagne ni referrer n'a rien à ranger
+    // sur cet axe, et c'est exactement ce que « direct » veut dire. Le laisser
+    // en pied afficherait la nature deux fois — ses visiteurs en haut, son
+    // revenu en bas — sans que rien ne dise que c'est la même population.
+    //
+    // Les trois autres axes n'ont pas cette coïncidence : « aucune campagne »
+    // n'est pas une campagne, et « aucun referrer » n'est pas un site.
+    const withDirect =
+      tab === 'source'
+        ? [
+            ...keyed,
+            ...(revenue?.source?.direct ?? []).map((row) => ({
+              ...row,
+              key: 'direct',
+              // Le trafic porte déjà le libellé de cette ligne ; ceux-ci ne
+              // servent qu'au cas où aucune visite de la fenêtre ne la
+              // réclame.
+              label: NATURE_LABEL_DIRECT,
+              note: null,
+            })),
+          ]
+        : keyed;
+
+    for (const { key, ...row } of withDirect) {
+      const seen = earned.get(key);
+
+      if (seen) {
+        seen.amount += row.amount;
+        seen.visitors += row.visitors;
+      } else {
+        earned.set(key, {
+          amount: row.amount,
+          visitors: row.visitors,
+          currency: row.currency,
+          label: row.label,
+          note: row.note,
+        });
+      }
+    }
+
+    const merged = traffic[tab].map<AcquisitionRow>((row) => {
+      const money = earned.get(row.key);
+      earned.delete(row.key);
+
+      return {
+        key: row.key,
+        label: row.label,
+        note: row.note,
+        host: row.host,
+        visitors: row.visitors,
+        customers: money?.visitors ?? 0,
+        revenue: money?.amount ?? 0,
+        currency: money?.currency ?? null,
+      };
+    });
+
+    // Ce qui a rapporté sans apparaître dans le trafic de la fenêtre : un
+    // client dont la première visite est antérieure à ce qu'on affiche. Son
+    // revenu lui est bien attribué — le serveur remonte plus loin que nous — et
+    // le taire ferait mentir la colonne Revenue.
+    const older = [...earned].map<AcquisitionRow>(([key, money]) => ({
+      key,
+      label: money.label,
+      note: money.note,
+      host: null,
+      visitors: 0,
+      customers: money.visitors,
+      revenue: money.amount,
+      currency: money.currency,
+    }));
+
+    return [...merged, ...older];
+  }, [traffic, revenue, tab]);
+
+  const columns = useMemo(
+    () => acquisitionColumns(tab, rows, withRevenue),
+    [tab, rows, withRevenue],
+  );
+
+  // « Not the one that paid » n'a de sens que là où l'on paie.
+  const description = withRevenue
+    ? 'First touch — the first visit of the visitor, not the one that paid.'
+    : 'First touch — the first visit of the visitor.';
+
+  const table = (size: number | 'fit') => (
+    <DataTable
+      columns={columns}
+      rows={rows}
+      rowKey={(row) => row.key}
+      density="roomy"
+      initialSort={{ key: 'visitors', descending: true }}
+      {...(size === 'fit'
+        ? { fit: true }
+        : { pageSize: size, paginate: false })}
+      empty={{
+        title: 'No traffic yet',
+        description:
+          'Sources appear here as soon as the SDK reports a first visit.',
+      }}
+    />
+  );
+
+  const tabs = (
+    <Tabs
+      value={tab}
+      onValueChange={(value) => {
+        setTab(value as AcquisitionAxis);
+      }}
+    >
+      <TabsList>
+        {ACQUISITION_AXES.map((axis) => (
+          <TabsTrigger key={axis} value={axis}>
+            {AXIS_LABELS[axis]}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </Tabs>
+  );
+
+  /**
+   * Le contenu du panneau, à hauteur **imposée**.
+   *
+   * Les onglets gardent leur taille, le tableau prend le reste — `flex-1
+   * min-h-0`, sans quoi un enfant de flex refuse de descendre sous la hauteur
+   * de son contenu et déborderait. C'est cette boîte-là que le tableau mesure
+   * pour décider combien de rangs il pagine, et elle ne dépend pas de lui :
+   * c'est ce qui empêche la mesure de se remettre en cause elle-même.
+   */
+  const full = (
+    <>
+      {tabs}
+      <div className="min-h-0 flex-1">{table('fit')}</div>
+    </>
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Acquisition</CardTitle>
+        <CardDescription>{description}</CardDescription>
+        <CardAction>{tabs}</CardAction>
+      </CardHeader>
+
+      {/* Hauteur **fixe**, et pas un plancher. Les quatre onglets n'ont pas le
+          même nombre de lignes — cinq natures, onze referrers — et sans plafond
+          commun chaque bascule redimensionnait la carte sous le curseur du
+          lecteur qui compare. Un onglet est un changement de contenu, pas de
+          mise en page.
+
+          `h-106` tombe juste par une arithmétique qui vaut d'être écrite :
+          l'en-tête `h-10` plus huit rangs `roomy` `h-12` font 10 + 96 = 106
+          unités d'espacement, soit 373 px. C'est la même constante que les
+          cartes à dix rangs ordinaires, où 10 + 90 = 100 laisse du mou. */}
+      <CardContent className={CARD_BODY}>
+        {visits ? table(CARD_ROWS) : <Skeleton className="h-full w-full" />}
+      </CardContent>
+
+      {/* Toujours rendu, quel que soit l'onglet, et c'est le point : le
+          dialogue appartient à la **carte**, pas à l'onglet courant — il porte
+          les quatre. Le faire apparaître au gré du nombre de lignes ferait
+          sauter le pied de carte d'un onglet à l'autre, exactement ce que la
+          hauteur fixe au-dessus existe pour éviter.
+
+          Son libellé ne compte donc rien : « See 7 more » aurait changé à
+          chaque bascule, pour désigner la même chose. */}
+      <CardFooter className="justify-center border-t pt-4">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setOpen(true);
+          }}
+        >
+          {/* L'icône dit **où** ça s'ouvre — un panneau par-dessus la page, pas
+              une ligne de plus dépliée en dessous. */}
+          <Maximize2Icon />
+          See all
+        </Button>
+      </CardFooter>
+
+      {/* Un tiroir par le bas sur mobile, un dialogue au centre sur bureau. Le
+          même contenu : ce qui change est la façon dont l'écran l'ouvre, pas ce
+          qu'il montre. */}
+      {isMobile ? (
+        <Drawer open={open} onOpenChange={setOpen}>
+          <DrawerContent className="h-[88vh]">
+            <DrawerHeader className="text-left">
+              <DrawerTitle>Acquisition</DrawerTitle>
+              <DrawerDescription>{description}</DrawerDescription>
+            </DrawerHeader>
+            <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 pb-6">
+              {full}
+            </div>
+          </DrawerContent>
+        </Drawer>
+      ) : (
+        <Dialog open={open} onOpenChange={setOpen}>
+          {/* Une hauteur **fixe**, pas un plafond : `max-h` laissait le panneau
+              se dimensionner sur son contenu, donc changer de taille d'un
+              onglet à l'autre — cinq natures contre onze referrers — et le
+              tableau n'avait alors aucune hauteur stable à mesurer. */}
+          <DialogContent className="flex h-[85vh] flex-col gap-3 sm:max-w-4xl">
+            <DialogHeader>
+              <DialogTitle>Acquisition</DialogTitle>
+              <DialogDescription>{description}</DialogDescription>
+            </DialogHeader>
+            <div className="flex min-h-0 flex-1 flex-col gap-3">{full}</div>
+          </DialogContent>
+        </Dialog>
+      )}
     </Card>
   );
 }
@@ -2151,7 +2506,7 @@ function Pages({
       <CardContent className={CARD_BODY}>
         {tab === 'top' ? (
           summary ? (
-            <DataTable
+            <LegacyTable
               columns={[
                 { head: 'Page' },
                 { head: 'Views', width: '5rem', align: 'right' },
@@ -2178,7 +2533,7 @@ function Pages({
           )
         ) : tab === 'entry' ? (
           entries ? (
-            <DataTable
+            <LegacyTable
               columns={[
                 { head: 'Entry page' },
                 { head: 'Entries', width: '5rem', align: 'right' },
@@ -2206,7 +2561,7 @@ function Pages({
             <Skeleton className={`w-full ${CARD_BODY}`} />
           )
         ) : leaving ? (
-          <DataTable
+          <LegacyTable
             columns={[
               { head: 'Exit destination' },
               // À gauche, et plus large que ses voisines : elle porte une

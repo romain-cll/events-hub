@@ -51,3 +51,5 @@ export * from './projects';
 export * from './analytics';
 export * from './events';
 export * from './event-types';
+export * from './integrations';
+export * from './revenue';

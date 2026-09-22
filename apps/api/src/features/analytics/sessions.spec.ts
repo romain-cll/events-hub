@@ -36,6 +36,9 @@ function event(
   return {
     sessionId: session,
     sessionStartedAt: at(debut),
+    // Aucun de ces deux modules ne lit la campagne : `null` est le décor, et
+    // les cas qui l'exercent la posent eux-mêmes.
+    campaign: null,
     // Un visiteur par session sauf mention contraire : le cas où deux sessions
     // en partagent un est le sujet d'un test précis, pas le décor des autres.
     visitorAlias: visiteur,

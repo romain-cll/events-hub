@@ -1,12 +1,10 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { signUp } from './fixtures';
+import { cleanupFixtures, signUp } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * Le relais de favicons.
@@ -18,6 +16,7 @@ import { signUp } from './fixtures';
  */
 describe('GET /v1/favicons/:host (e2e)', () => {
   let app: INestApplication<App>;
+  let db: DrizzleDatabase;
   let cookies: string[];
 
   const demander = (host: string, session = cookies) =>
@@ -26,26 +25,23 @@ describe('GET /v1/favicons/:host (e2e)', () => {
       .set('Cookie', session);
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
-    app.get<DrizzleDatabase>(DRIZZLE);
+    app = await createTestApp();
+    db = app.get<DrizzleDatabase>(DRIZZLE);
 
     cookies = (await signUp(app)).cookies;
   });
 
   afterAll(async () => {
+    await cleanupFixtures(db);
     await app.close();
   });
 
   it('exige une session', async () => {
     // Sans ça, la route serait un proxy DuckDuckGo ouvert à tout Internet, à
     // nos frais et sous notre adresse IP.
-    await request(app.getHttpServer()).get('/v1/favicons/github.com').expect(401);
+    await request(app.getHttpServer())
+      .get('/v1/favicons/github.com')
+      .expect(401);
   });
 
   describe('ce que la validation refuse', () => {

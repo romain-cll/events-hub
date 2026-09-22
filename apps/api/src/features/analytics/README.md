@@ -210,7 +210,7 @@ Une session peut commencer avant `from` et n'exposer que sa fin. Elle est alors 
 | Un `page_view` d'un site **multi-pages**      | `internal`                         | Non. C'est précisément la catégorie « on n'a pas vu l'arrivée ». |
 | Un `page_view` d'une **application monopage** | la vraie provenance externe        | La source est juste. C'est le `path` qui n'est pas une landing.  |
 
-Aucune de ces branches ne produit de **fausse acquisition** : on ne peut pas inventer un `search` ou un `referral` qui n'a pas eu lieu. Le seul défaut résiduel est le `path` du troisième cas.
+Aucune de ces branches ne produit de **fausse acquisition** : on ne peut pas inventer un `search` ou un `social` qui n'a pas eu lieu. Le seul défaut résiduel est le `path` du troisième cas.
 
 On sait désormais **que** la session a été coupée : `Session.startedAt` porte le vrai début, et `startedAt < from` identifie exactement les sessions concernées. C'est ce que l'étape 28 exploite (voir juste en dessous). Ce qu'on ne sait toujours pas, c'est quelle page l'a ouverte.
 
@@ -228,10 +228,10 @@ Nuance qui a sa place ici : une vue de page arrivée **sans aucun attribut explo
 
 ### Les catégories
 
-Inchangées, et elles restent bonnes : `direct` / `search` / `referral` / `internal`.
+Six natures : `direct` / `search` / `assistant` / `social` / `other` / `internal`. `other` est le fourre-tout assumé — il a porté le nom `referral` tant qu'il était la seule sortie pour un site externe, ce qui promettait une interprétation qu'il n'a pas. On ne tiendra pas la liste des sites de la planète ; ce qu'aucun ensemble connu ne revendique y tombe **avec son hôte**, donc nommable.
 
 - **Additive** : non, quel que soit le niveau.
-- **Cas limite majeur** : `internal` n'est pas de l'acquisition. C'est un referrer pointant sur nous — rechargement, ancre, session attrapée après un changement de document. Il est **rendu plutôt qu'écarté** parce que sa part dit à quel point la lecture est polluée. L'acquisition, c'est `direct + search + referral`.
+- **Cas limite majeur** : `internal` n'est pas de l'acquisition. C'est un referrer pointant sur nous — rechargement, ancre, session attrapée après un changement de document. Il est **rendu plutôt qu'écarté** parce que sa part dit à quel point la lecture est polluée. L'acquisition, c'est `direct + search + assistant + social + other`.
 - **Cas limite majeur** : `direct` veut dire « aucune provenance connue », pas « quelqu'un a tapé l'URL ». Le navigateur ne donne pas de referrer sur une entrée directe, mais pas non plus avec une `Referrer-Policy` restrictive, en HTTPS → HTTP, ou depuis certaines apps natives.
 
 ---
@@ -369,7 +369,7 @@ La première ne fait remonter aucune ligne, donc son coût ne dépend pas du vol
 
 **Ce que la ligne porte, et ce qu'elle écarte.**
 
-Huit champs : `visitorAlias`, `startedAt`, `endedAt`, `activeMs`, `pageViews`, `presencesStillOpen`, `entryPath`, `source`.
+Onze champs : `visitorAlias`, `startedAt`, `endedAt`, `activeMs`, `pageViews`, `presencesStillOpen`, `entryPath`, `exit`, `settled`, `source`, `campaign`.
 
 `durationMs` n'y est pas parce que les deux bornes y sont — la soustraction appartient au lecteur. La mise en garde du §6 reste entière : cette étendue part du début **réel** de la session, donc elle ne s'additionne pas entre fenêtres adjacentes. C'est désormais une note, plus une rétention, et `startedAt` est là pour que le lecteur le voie lui-même.
 
@@ -400,3 +400,109 @@ Trois décisions :
 1. **quelles moyennes affiche-t-on ?** Le §7 pose les conditions — médiane plutôt que moyenne, dénominateur explicite, `sessionsWithOpenPresence` toujours à côté. Il reste à choisir.
 2. **que fait-on voir des sessions non classées ?** Les trois nombres — classées, tronquées, sans vue — ne se lisent qu'ensemble. La question est de savoir si l'UI montre la ventilation ou seulement une alerte quand « sans vue » grimpe : c'est le signal « instrumentation cassée », et le seul des trois sur lequel on peut agir.
 3. **où plafonne-t-on le nombre de lignes ?** `/analytics/sessions` n'est borné que par la fenêtre. Une pagination ou un plafond explicite devra arriver avant que le volume ne le décide à notre place — dans la même route, et en le disant dans la réponse plutôt qu'en tronquant en silence.
+
+## Technologie — navigateur, système, appareil
+
+`GET /v1/projects/:id/analytics/technology?grain=browser|os|device`. Même forme
+que `locations` : une route, trois grains, `unresolved` rendu plutôt que tu.
+
+**Ce qui est mesuré.** Trois libellés dérivés du User-Agent **à l'ouverture de la
+session**, comme la géographie l'est de l'IP. Le User-Agent lui-même n'est stocké
+nulle part — il entre dans `CoreService`, sert à dériver la clé visiteur et ces
+libellés, et meurt avec la requête.
+
+**Aucune version.** Ni celle du navigateur — la mineure est du bruit qui
+multiplie l'unicité d'une ligne de session, la majeure sert une matrice de
+compatibilité qui est un autre produit — ni celle du système, qui est **fausse** :
+Windows 11 se déclare « Windows NT 10.0 », macOS « 10_15_7 » depuis des années.
+
+**`unresolved` n'est pas une anomalie.** C'est la longue traîne des navigateurs
+qu'on ne nomme pas. La table ne reconnaît que ce qu'elle nomme, et rend `null`
+plutôt qu'un libellé faux. Un classement qui tairait ces visiteurs se lirait
+comme s'il couvrait tout le trafic.
+
+**`visitors` ne s'additionne pas** entre les lignes, pour la même raison qu'au
+classement géographique : le classement est tronqué par `limit`, et un même
+visiteur peut apparaître sous deux valeurs s'il a changé d'appareil. Le
+dénominateur est rendu à part.
+
+### ⚠️ Les tablettes sont sous-comptées
+
+Depuis iPadOS 13, Safari envoie par défaut l'en-tête d'un Mac — littéralement
+celui d'un ordinateur de bureau. La majorité des iPad est donc rangée en
+`desktop`, et sous `macOS` au grain système. Aucune correction n'est possible :
+l'information n'est pas dans la chaîne.
+
+**Décision : on le dit, on ne le corrige pas.** La carte affichera « Mac ou
+iPad » plutôt que « Mac », et laissera `desktop` tel quel. Une heuristique qui
+tenterait de distinguer les deux — par la taille d'écran, par le tactile —
+inventerait un fait à partir d'un indice, et se tromperait en silence sur les
+deux populations à la fois. L'iPad pèse peu sur l'audience visée ; une mention
+honnête coûte moins cher qu'une devinette.
+
+C'est du même ordre que la ville, qui est une estimation, et ça se dit à qui lit
+le chiffre plutôt que de se rattraper dans le calcul.
+
+### `botSessions` — et pourquoi il est publié
+
+Les sessions de robots sont écartées **structurellement** : la condition vit dans
+`EventStore.where()`, que les neuf lectures traversent, donc aucun module ne peut
+l'oublier. Un événement sans session — un déploiement, un paiement, une sonde —
+passe sans qu'on ait à l'écrire, le `NOT EXISTS` étant vrai quand il n'y a rien à
+trouver.
+
+Mais un chiffre retiré en silence est un chiffre que personne ne sait manquant :
+sans ce compteur, une vague de robots et une baisse de trafic se ressembleraient
+exactement. Le résumé le rend donc, et c'est la seule place des robots dans le
+produit.
+
+**La détection est volontairement conservatrice.** Uniquement des robots qui se
+déclarent ; jamais une déduction par l'absence. Un faux positif ne dégrade pas une
+statistique, il **supprime** du trafic réel de tous les compteurs — et un
+User-Agent vide ou inhabituel n'est pas un robot, c'est un visiteur qu'on ne sait
+pas nommer.
+
+**⚠️ Rupture de série.** `botSessions` ne monte qu'à partir de la mise en service
+de la détection. Toutes les sessions antérieures sont comptées comme humaines, et
+le resteront : le User-Agent qui aurait permis de les juger n'a jamais été
+stocké. Ce n'est pas une invasion soudaine, c'est une mesure qui commence.
+
+### `consentGranted` et `consentDeclined` — deux nombres, pas un taux
+
+Le consentement ne porte **que sur le croisement**. La mesure d'audience par
+défaut ne demande rien et ne dépose rien : elle tient sur l'intérêt légitime, et
+l'opposition se prend dans la politique de confidentialité. Ce qui exige un
+consentement, c'est l'identité durable — celle qui permet de rattacher un
+paiement au parcours qui l'a produit, des mois après.
+
+Les deux compteurs disent donc **combien de visites sont corrélables à un
+paiement**, pas combien de visiteurs « ont accepté les cookies ».
+
+**Leur somme ne fait pas `sessions`, et l'écart est la donnée la plus
+importante des trois.** C'est le nombre de visites auxquelles on n'a rien
+demandé : un site sans bandeau, ou une page qui ne l'a pas câblé. Les compter
+comme des refus ferait passer l'absence de question pour un non — et un site
+sans plateforme de consentement pour un site que tous ses visiteurs refusent.
+Les deux appellent pourtant des actions opposées : améliorer un bandeau, ou en
+poser un.
+
+**Aucun pourcentage n'est rendu**, et c'est pour la même raison que `bounces` est
+publié sans son taux : le dénominateur dépend de la question. Rapporté aux
+visites qui ont répondu, le chiffre mesure la performance du bandeau ; rapporté à
+toutes les visites, il mesure la couverture de l'attribution. Les deux sont
+légitimes, aucun n'est *le* taux de consentement.
+
+**La valeur retenue est le dernier signal connu**, pas celui de l'ouverture — à
+l'inverse de la position, du client et de la campagne. Le bandeau se répond à la
+deuxième page aussi souvent qu'à la première, et le premier événement d'une
+visite précède toujours le clic : figer à l'ouverture sous-estimerait les
+acceptations de façon structurelle. Une absence de signal n'efface jamais une
+réponse.
+
+**Ce n'est pas une preuve de consentement.** Aucune identité, aucun horodatage de
+l'acte : la preuve incombe au site, et la dupliquer nous ferait garder de la
+donnée que personne ne nous demande. Ce qui est stocké est un drapeau d'audience
+sur une visite anonyme, emporté avec sa ligne par la purge des 25 mois.
+
+**⚠️ Rupture de série**, comme `botSessions` : le signal voyageait sur le fil bien
+avant d'être rangé quelque part. Les visites antérieures resteront sans réponse.

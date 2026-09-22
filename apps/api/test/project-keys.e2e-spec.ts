@@ -1,21 +1,18 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
-import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { projects, users } from '../src/database/schema';
 import { projectKeySchema } from '@events-hub/api-contract';
 
 import {
+  TEST_ORIGIN,
+  cleanupFixtures,
   expectMatchesContract,
   joinOrganization,
   signUp,
-  TEST_ORIGIN,
 } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * La gestion des clés depuis le dashboard.
@@ -43,34 +40,20 @@ interface ProjectJson {
 describe('gestion des clés de projet (e2e)', () => {
   let app: INestApplication<App>;
   let db: DrizzleDatabase;
-  const createdUsers: string[] = [];
-  const createdProjects: string[] = [];
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
     db = app.get<DrizzleDatabase>(DRIZZLE);
   });
 
   afterAll(async () => {
-    for (const id of createdProjects) {
-      await db.delete(projects).where(eq(projects.id, id));
-    }
-    for (const id of createdUsers) {
-      await db.delete(users).where(eq(users.id, id));
-    }
+    await cleanupFixtures(db);
     await app.close();
   });
 
   /** Un propriétaire, son organisation personnelle et un projet dedans. */
   const setup = async () => {
     const user = await signUp(app, 'Proprietaire');
-    createdUsers.push(user.id);
 
     const [organization] = (
       await request(app.getHttpServer())
@@ -86,8 +69,6 @@ describe('gestion des clés de projet (e2e)', () => {
         .send({ organizationId: organization.id, name: 'projet clés' })
         .expect(201)
     ).body as ProjectJson;
-
-    createdProjects.push(project.id);
 
     return { user, organizationId: organization.id, project };
   };
@@ -195,7 +176,6 @@ describe('gestion des clés de projet (e2e)', () => {
       const { organizationId, project } = await setup();
 
       const membre = await signUp(app, 'Membre');
-      createdUsers.push(membre.id);
       await joinOrganization(db, organizationId, membre.id, 'member');
 
       // Lire : les clés sont publiques par nature, elles sont dans le bundle.
@@ -218,7 +198,6 @@ describe('gestion des clés de projet (e2e)', () => {
       const { project } = await setup();
 
       const etranger = await signUp(app, 'Etranger');
-      createdUsers.push(etranger.id);
 
       await request(app.getHttpServer())
         .get(`/v1/projects/${project.id}/keys`)

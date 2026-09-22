@@ -47,6 +47,60 @@ export const createEventSchema = z.strictObject({
   // contrainte ici. Absentes -> `{}`, jamais `null` (la colonne est NOT NULL).
   attributes: z.record(z.string(), z.unknown()).default({}),
   properties: z.record(z.string(), z.unknown()).default({}),
+  /**
+   * Le consentement du visiteur au dépôt d'un identifiant durable, tel que la
+   * plateforme de consentement du client éditeur le rapporte.
+   *
+   * Optionnel à deux titres. Au sens du contrat d'abord : un SDK antérieur qui
+   * ne l'envoie pas reste accepté, et c'est ce qui permet de l'ajouter sans
+   * quitter `/v1`. Au sens du domaine ensuite — l'absence n'est **pas** un
+   * refus, voir `decideVisitorCookie`.
+   *
+   * Champ de premier niveau, et jamais une clé d'`attributes` : les deux sacs
+   * sont opaques pour le socle, y lire quoi que ce soit reviendrait à leur
+   * supposer une forme.
+   */
+  consent: z.boolean().optional(),
+  /**
+   * L'opposition du visiteur au traitement, tout entier.
+   *
+   * À ne pas confondre avec `consent`, qui ne parle que de l'identifiant
+   * durable : refuser le cookie laisse la mesure d'audience se faire, s'opposer
+   * l'arrête. Les deux existent parce qu'ils répondent à deux questions
+   * différentes — l'une porte sur ce qu'on écrit sur le terminal, l'autre sur
+   * le fondement même du traitement.
+   *
+   * Même tri-état, et pour la même raison : l'absence n'est pas une
+   * révocation. Voir `decideOptOut`.
+   */
+  optOut: z.boolean().optional(),
+  /**
+   * Les paramètres de campagne lus dans l'URL par le SDK.
+   *
+   * Champ de premier niveau pour la même raison que `consent` : les deux sacs
+   * sont opaques pour le socle, et l'URL de la page — où ces paramètres vivent —
+   * y est rangée. Le serveur ne peut donc pas les y chercher, et
+   * `architecture.spec.ts` le lui interdit nommément.
+   *
+   * `strictObject` ici aussi : un quatrième paramètre glissé dans l'objet est un
+   * 400, pas une clé ignorée en silence. On ne garde que les trois qui répondent
+   * à « quelle campagne rapporte » ; les autres restent entiers dans l'URL.
+   *
+   * Les valeurs arrivent **brutes**. La normalisation — casse, espaces,
+   * longueur — est faite côté serveur, par `normalizeCampaign`, et là seulement :
+   * si chaque version du SDK normalisait à sa façon, deux visiteurs du même site
+   * produiraient deux campagnes différentes selon la date de leur bundle.
+   *
+   * Bornes larges : une valeur de campagne n'a pas de forme, et refuser une
+   * saisie inhabituelle ferait perdre l'événement entier pour un libellé.
+   */
+  campaign: z
+    .strictObject({
+      source: z.string().max(500).optional(),
+      medium: z.string().max(500).optional(),
+      name: z.string().max(500).optional(),
+    })
+    .optional(),
 });
 
 /** Payload tel qu'il arrive sur le fil (`occurredAt` est une chaîne). */

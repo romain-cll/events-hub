@@ -1,14 +1,12 @@
-import { Test, type TestingModule } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import { events, projects, sessions } from '../src/database/schema';
-import { createProject, TEST_ORIGIN } from './fixtures';
+import { TEST_ORIGIN, cleanupFixtures, createProject } from './fixtures';
+import { createTestApp } from './harness';
 
 /** Un UUID de projet qui n'existe pas : le corps n'a plus le droit d'en porter. */
 const PROJET_INEXISTANT = '00000000-0000-4000-8000-000000000000';
@@ -36,6 +34,7 @@ const PROJET_INEXISTANT = '00000000-0000-4000-8000-000000000000';
 interface EventResponse {
   id: string;
   type: string;
+  sessionId: string | null;
   attributes: Record<string, unknown>;
   properties: Record<string, unknown>;
 }
@@ -56,20 +55,13 @@ describe('POST /v1/events (e2e)', () => {
   const payload = () => ({
     apiKey,
     type: 'page_view',
-      occurredAt: new Date().toISOString(),
+    occurredAt: new Date().toISOString(),
     attributes: { 'page.path': '/pricing' },
     properties: { plan: 'pro' },
   });
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    // La même configuration que `main.ts`, sinon `/v1` n'existe pas.
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
 
     db = app.get<DrizzleDatabase>(DRIZZLE);
 
@@ -86,6 +78,7 @@ describe('POST /v1/events (e2e)', () => {
     await db.delete(events).where(eq(events.projectId, projectId));
     await db.delete(sessions).where(eq(sessions.projectId, projectId));
     await db.delete(projects).where(eq(projects.id, projectId));
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -101,7 +94,7 @@ describe('POST /v1/events (e2e)', () => {
       expect(asEvent(response)).toMatchObject({
         projectId,
         type: 'page_view',
-              occurredAt: body.occurredAt,
+        occurredAt: body.occurredAt,
         attributes: { 'page.path': '/pricing' },
         properties: { plan: 'pro' },
       });
@@ -117,6 +110,24 @@ describe('POST /v1/events (e2e)', () => {
 
       expect(asEvent(response)).not.toHaveProperty('visitorKey');
       expect(JSON.stringify(asEvent(response))).not.toContain('visitor');
+    });
+
+    it('rend la visite, la même pour deux événements qui se suivent', async () => {
+      const envoyer = () =>
+        request(app.getHttpServer())
+          .post('/v1/events')
+          .set('Origin', TEST_ORIGIN)
+          .send(payload())
+          .expect(201);
+
+      const premier = await envoyer();
+      const second = await envoyer();
+
+      expect(asEvent(premier).sessionId).toMatch(/^[0-9a-f-]{36}$/);
+      // C'est ce qui la rend utilisable pour rattacher un paiement : le site
+      // peut la lire à n'importe quel moment de la visite et obtenir la même
+      // valeur.
+      expect(asEvent(second).sessionId).toBe(asEvent(premier).sessionId);
     });
 
     it('accepte un événement sans attributes ni properties', async () => {
@@ -285,21 +296,9 @@ describe('POST /v1/events (e2e)', () => {
     // `session_id` n'y figure plus : la colonne est nullable depuis qu'un
     // événement peut ne pas avoir de visiteur. C'est `source` qui la remplace.
     it.each([
-      [
-        'type',
-        'project_id, source, occurred_at, session_id',
-        '$1, $2, $3, $4',
-      ],
-      [
-        'source',
-        'project_id, type, occurred_at, session_id',
-        '$1, $2, $3, $4',
-      ],
-      [
-        'occurred_at',
-        'project_id, type, source, session_id',
-        '$1, $2, $3, $4',
-      ],
+      ['type', 'project_id, source, occurred_at, session_id', '$1, $2, $3, $4'],
+      ['source', 'project_id, type, occurred_at, session_id', '$1, $2, $3, $4'],
+      ['occurred_at', 'project_id, type, source, session_id', '$1, $2, $3, $4'],
     ])(
       'refuse un événement sans %s (NOT NULL)',
       async (_col, columns, values) => {
@@ -374,7 +373,7 @@ describe('POST /v1/events (e2e)', () => {
         .values({
           projectId,
           type: 'page_view',
-                  source: 'browser',
+          source: 'browser',
           occurredAt: new Date('2026-08-20T14:30:00.123Z'),
           sessionId: session.id,
         })

@@ -1,16 +1,14 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
 import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import { events, projects, sessions } from '../src/database/schema';
 import { EventStore } from '../src/events/event-store.service';
 import { sessionsOf, type Session } from '../src/features/analytics/sessions';
-import { createProject, TEST_ORIGIN } from './fixtures';
+import { TEST_ORIGIN, cleanupFixtures, createProject } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * Les sessions, éprouvées de bout en bout.
@@ -101,13 +99,7 @@ describe('AnalyticsService.sessions (e2e)', () => {
       .expect(201);
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
 
     db = app.get<DrizzleDatabase>(DRIZZLE);
     store = app.get(EventStore);
@@ -155,6 +147,7 @@ describe('AnalyticsService.sessions (e2e)', () => {
     await db.delete(events).where(eq(events.projectId, projectId));
     await db.delete(sessions).where(eq(sessions.projectId, projectId));
     await db.delete(projects).where(eq(projects.id, projectId));
+    await cleanupFixtures(db);
     await app.close();
   });
 

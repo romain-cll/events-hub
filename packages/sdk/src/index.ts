@@ -13,6 +13,20 @@
  * pas non plus ici — il s'agit d'abord de vérifier qu'on sait produire un flux
  * d'événements propre.
  *
+ * ## Le consentement, transporté et jamais demandé
+ *
+ * Le SDK ne montre aucun bandeau et n'en montrera jamais : le responsable de
+ * traitement est le site client, pas le hub. Ce qu'il fait, c'est **relayer**
+ * la décision que la plateforme de consentement du site a déjà prise, via
+ * `setConsent()`. Un site qui n'appelle rien reste parfaitement fonctionnel,
+ * dans le mode qui ne dépose rien sur le terminal.
+ *
+ * Quand le consentement est accordé, le hub rend l'identifiant durable du
+ * visiteur avec chaque réponse, et le SDK en dépose une copie lisible sur le
+ * domaine du site — voir `browser/visitor-mirror.ts`. C'est cette copie que le
+ * backend du site joint à ses paiements ; c'est elle qui permettra de dire quel
+ * revenu vient de quelle visite.
+ *
  * ## Frontière entre `attributes` et `properties`
  *
  * `attributes` appartient au SDK. Ce sont les clés pointées et namespacées
@@ -34,6 +48,8 @@
  * site ne doit pouvoir se faire passer pour du contexte collecté.
  */
 import { collectAttributes } from './browser/attributes.ts';
+import { collectCampaign } from './browser/campaign.ts';
+import { mirrorVisitorId } from './browser/visitor-mirror.ts';
 import { trackClicks } from './tracking/click.ts';
 import { trackOutboundClicks } from './tracking/outbound-click.ts';
 import { trackPageLeave } from './tracking/page-leave.ts';
@@ -74,6 +90,15 @@ export interface AnalyticsOptions {
    * l'appelant.
    */
   onError?: (error: unknown) => void;
+  /**
+   * Le consentement du visiteur, s'il est déjà connu à la construction.
+   *
+   * Rarement le cas — une plateforme de consentement répond après le démarrage
+   * de la page. D'où `setConsent()`, qui est la voie normale ; cette option
+   * n'est là que pour un site qui aurait déjà la réponse sous la main, et pour
+   * éviter de devoir appeler une méthode juste après le constructeur.
+   */
+  consent?: boolean;
 }
 
 /**
@@ -95,11 +120,148 @@ export class Analytics {
   private readonly apiKey: string;
   private readonly endpoint: string;
   private readonly onError: (error: unknown) => void;
+  /**
+   * `undefined` tant que rien n'a été déclaré, et c'est un troisième état, pas
+   * un `false` en attente : le hub honore alors un identifiant déjà posé au
+   * lieu de l'effacer. Confondre les deux ferait perdre son identité à tout
+   * visiteur d'un site qui ne câble pas le signal.
+   */
+  private consent: boolean | undefined;
+  /** Le dernier identifiant rendu par le hub. Jamais forgé ici. */
+  private visitorId: string | undefined;
+  /**
+   * La visite en cours, telle que le hub l'a découpée. Jamais forgée ici non
+   * plus, et **jamais recopiée dans un cookie** : c'est ce qui lui permet
+   * d'exister sans consentement. Voir `getSessionId()`.
+   */
+  private sessionId: string | undefined;
+  /**
+   * A-t-on déjà répercuté une réponse depuis le chargement de la page ?
+   *
+   * Sans ce drapeau, la première réponse *sans* identifiant serait confondue
+   * avec l'état initial et n'effacerait rien — laissant survivre une copie
+   * posée lors d'une visite précédente, alors que le consentement a été retiré
+   * entre-temps.
+   */
+  private mirrored = false;
+  /**
+   * L'opposition, portée par le prochain événement puis oubliée.
+   *
+   * Remise à `undefined` une fois partie : la répéter à chaque événement ne
+   * changerait rien côté hub, où c'est le cookie qui fait foi. C'est ce qui
+   * distingue ce champ de `consent`, dont le site réaffirme la valeur aussi
+   * longtemps qu'elle vaut.
+   */
+  private optingOut: boolean | undefined;
+  /**
+   * De quoi arrêter ce que `start()` a démarré, sans que l'appelant ait à nous
+   * rendre le `Teardown` qu'il a peut-être jeté. Un site qui s'oppose ne doit
+   * pas continuer d'émettre parce qu'il a oublié de le garder.
+   */
+  private stopCollectors: Teardown = () => undefined;
 
-  constructor({ apiKey, endpoint, onError }: AnalyticsOptions) {
+  constructor({ apiKey, endpoint, onError, consent }: AnalyticsOptions) {
     this.apiKey = apiKey;
     this.endpoint = endpoint;
     this.onError = onError ?? (() => undefined);
+    this.consent = consent;
+  }
+
+  /**
+   * Rapporte la décision de la plateforme de consentement du site.
+   *
+   * À appeler à chaque fois qu'elle change, dans les deux sens : accorder pose
+   * un identifiant durable côté hub, retirer l'efface. Rien n'est envoyé à cet
+   * instant — la décision voyage avec le prochain événement, ce qui évite une
+   * requête dont le seul contenu serait un booléen.
+   *
+   * Il n'y a donc rien à nettoyer et rien à attendre : le retrait prend effet
+   * au premier événement qui suit, et si aucun ne suit, il n'y avait rien à
+   * rattacher.
+   */
+  setConsent(granted: boolean): void {
+    this.consent = granted;
+  }
+
+  /**
+   * Enregistre l'opposition du visiteur au traitement, tout entier.
+   *
+   * ## Ce n'est pas `setConsent(false)`
+   *
+   * Le consentement ne porte que sur l'identifiant durable : le refuser laisse
+   * la mesure d'audience se faire, sans rien déposer sur le terminal. S'opposer
+   * l'arrête. Les deux répondent à deux questions différentes, et un site qui a
+   * un bandeau a besoin des deux — l'un pour son bandeau, l'autre pour le lien
+   * d'opposition de sa politique de confidentialité.
+   *
+   * ## Ce que ça fait, et dans quel ordre
+   *
+   * Les collecteurs démarrés sont arrêtés immédiatement, et un dernier
+   * événement part porter la décision — c'est lui qui la fait enregistrer côté
+   * hub, et il est écarté à l'arrivée sans rien écrire. Sans cet envoi, le
+   * refus ne vivrait que dans cet onglet et serait oublié au rechargement.
+   *
+   * `optIn()` fait le chemin inverse. Il ne redémarre **pas** les collecteurs :
+   * ce n'est pas à nous de décider qu'un site veut recommencer à mesurer, et
+   * `start()` est là pour ça.
+   */
+  optOut(): void {
+    this.stopCollectors();
+    this.declareOptOut(true);
+  }
+
+  /** Retire une opposition. Ne redémarre rien — voir `optOut()`. */
+  optIn(): void {
+    this.declareOptOut(false);
+  }
+
+  /**
+   * Le dernier identifiant durable rendu par le hub, s'il y en a un.
+   *
+   * Pour les sites qui construisent leur paiement en JS. Ceux qui le
+   * construisent côté serveur n'en ont pas besoin : ils lisent la copie déposée
+   * dans leurs propres cookies, et c'est le chemin recommandé — il ne dépend
+   * d'aucun ordre d'exécution.
+   *
+   * Synchrone, donc `undefined` tant qu'aucune réponse n'est revenue. Le rendre
+   * asynchrone déplacerait l'attente dans le code du site pour ne rien y
+   * gagner : un paiement arrive toujours après une navigation.
+   */
+  getVisitorId(): string | undefined {
+    return this.visitorId;
+  }
+
+  /**
+   * La visite en cours, à joindre au paiement quand il n'y a pas de
+   * consentement.
+   *
+   * ## Ce qu'elle permet, et ce qu'elle ne permet pas
+   *
+   * Elle rattache un paiement à la visite qui l'a produit, donc à la source
+   * d'où cette visite venait. Un achat conclu pendant la navigation est
+   * attribué ; un achat conclu trois jours plus tard s'attribue à la visite de
+   * ce jour-là, dont le referrer est le plus souvent vide — le trafic direct
+   * est donc sur-crédité, et le canal d'acquisition sous-crédité. Un
+   * renouvellement d'abonnement, lui, n'a aucune visite derrière lui et reste
+   * hors d'atteinte.
+   *
+   * Tout cela, `getVisitorId()` le résout — au prix d'un consentement. Préférez
+   * l'identifiant durable quand il existe, celui-ci quand il n'existe pas.
+   *
+   * ## Pourquoi il n'y a pas de cookie miroir
+   *
+   * Parce que ce serait renoncer à ce qui la rend intéressante. Le miroir de
+   * `visitorId` existe parce que sa source est un cookie de notre domaine, que
+   * le site ne peut pas lire ; ici il n'y a pas de source à recopier, et poser
+   * un cookie ferait rentrer par la fenêtre le consentement qu'on évite.
+   *
+   * Le site transmet donc cette valeur lui-même à son backend, au moment où il
+   * construit son paiement. C'est du travail pour lui, et c'est le prix.
+   *
+   * Synchrone, donc `undefined` tant qu'aucune réponse n'est revenue.
+   */
+  getSessionId(): string | undefined {
+    return this.sessionId;
   }
 
   /**
@@ -118,7 +280,14 @@ export class Analytics {
     type: string,
     properties: EventProperties = {},
   ): Promise<unknown> {
-    return postEvent(this.endpoint, this.envelope(type, properties));
+    const body = await postEvent(
+      this.endpoint,
+      this.envelope(type, properties),
+    );
+
+    this.receive(body);
+
+    return body;
   }
 
   /**
@@ -157,10 +326,21 @@ export class Analytics {
         return;
       }
 
-      postEvent(this.endpoint, envelope).catch(this.onError);
+      postEvent(this.endpoint, envelope)
+        .then((body) => {
+          this.receive(body);
+        })
+        .catch(this.onError);
     };
 
     const teardowns: Teardown[] = [];
+
+    // Retenu ici pour qu'`optOut()` puisse tout arrêter sans que l'appelant ait
+    // à nous rendre le `Teardown` qu'on lui a donné.
+    this.stopCollectors = () => {
+      for (const stop of teardowns) stop();
+      teardowns.length = 0;
+    };
 
     if (pageView) teardowns.push(trackPageViews(emit));
 
@@ -196,13 +376,99 @@ export class Analytics {
    * observe. `toISOString()` produit exactement la forme ISO 8601 UTC que le
    * schéma attend.
    */
+  /**
+   * Répercute ce que le hub vient de dire de ce visiteur.
+   *
+   * Le SDK n'invente jamais d'identifiant : il n'y a ici que de la recopie. La
+   * réponse fait autorité dans les deux sens — elle en porte un, on l'écrit ;
+   * elle n'en porte plus, on efface.
+   *
+   * L'écriture est conditionnée au changement pour ne pas toucher
+   * `document.cookie` à chaque événement, ce qui n'apporterait rien : la copie
+   * porte déjà sa propre durée de vie.
+   *
+   * La lecture est défensive parce que le transport rend `unknown` : un corps
+   * vide (une origine refusée répond 204) ou une forme inattendue ne doit pas
+   * faire échouer un envoi qui, lui, a réussi.
+   */
+  /**
+   * Envoie la décision, puis l'oublie.
+   *
+   * Par `beacon` plutôt que par `fetch` : `optOut()` est souvent appelé depuis
+   * un gestionnaire de clic qui navigue dans la foulée, et une requête ordinaire
+   * serait annulée au déchargement — le refus serait perdu au moment précis où
+   * il compte. Rien n'est attendu en retour : la réponse est un 204 vide.
+   */
+  private declareOptOut(refused: boolean): void {
+    this.optingOut = refused;
+
+    if (typeof window === 'undefined') return;
+
+    beaconEvent(this.endpoint, this.envelope('opt_out', {}));
+    this.optingOut = undefined;
+
+    // Le miroir sur le domaine du site n'a plus de raison d'être : il ne sert
+    // qu'à joindre un identifiant à un paiement, et il n'y a plus d'identifiant.
+    if (refused) {
+      this.visitorId = undefined;
+      mirrorVisitorId(undefined);
+    }
+  }
+
+  private receive(body: unknown): void {
+    // Avant la garde de recopie, et pas après : elle ne parle que du cookie
+    // miroir. Un visiteur sans consentement n'a jamais d'identifiant durable,
+    // donc la garde est vraie à chaque événement — y ranger la session
+    // reviendrait à ne l'enregistrer que pour les visiteurs consentants, c'est
+    // à dire exactement ceux qui n'en ont pas besoin.
+    this.sessionId = readString(body, 'sessionId');
+
+    const visitorId = readString(body, 'visitorId');
+
+    if (this.mirrored && visitorId === this.visitorId) return;
+
+    this.mirrored = true;
+    this.visitorId = visitorId;
+    mirrorVisitorId(visitorId);
+  }
+
   private envelope(type: string, properties: EventProperties): EventEnvelope {
+    const campaign = collectCampaign();
+
     return {
       apiKey: this.apiKey,
       type,
       occurredAt: new Date().toISOString(),
       attributes: collectAttributes(),
       properties,
+      // Étalé plutôt que posé à `undefined` : le schéma du hub refuse les clés
+      // inconnues, et une clé présente à `undefined` disparaît certes de la
+      // sérialisation, mais laisse le type mentir sur ce qui part.
+      ...(this.consent === undefined ? {} : { consent: this.consent }),
+      ...(this.optingOut === undefined ? {} : { optOut: this.optingOut }),
+      // Relue à **chaque** événement, comme les attributs : après une navigation
+      // interne l'URL a changé, et c'est celle du moment qui compte. Le hub, lui,
+      // n'en retient que celle de l'ouverture de session — décider quand figer
+      // est son travail, pas le nôtre.
+      ...(campaign ? { campaign } : {}),
     };
   }
+}
+
+/**
+ * Lit une chaîne dans un corps de réponse.
+ *
+ * Défensive parce que le transport rend `unknown` : un corps vide (une origine
+ * refusée répond 204) ou une forme inattendue ne doit pas faire échouer un envoi
+ * qui, lui, a réussi. Une clé absente et une clé d'un autre type mènent au même
+ * endroit, et c'est voulu — il n'y a rien à distinguer entre les deux.
+ */
+function readString(body: unknown, key: string): string | undefined {
+  if (typeof body !== 'object' || body === null || !(key in body)) {
+    return undefined;
+  }
+
+  const value = (body as Record<string, unknown>)[key];
+
+  return typeof value === 'string' ? value : undefined;
 }

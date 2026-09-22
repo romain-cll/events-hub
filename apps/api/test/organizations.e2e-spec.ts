@@ -1,16 +1,14 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
 import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 
 import { invitationsSchema, membersPageSchema } from '@events-hub/api-contract';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
-import { memberships, users } from '../src/database/schema';
-import { expectMatchesContract, signUp } from './fixtures';
+import { memberships } from '../src/database/schema';
+import { cleanupFixtures, expectMatchesContract, signUp } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * Les organisations, de l'inscription à l'invitation.
@@ -40,37 +38,20 @@ interface OrganizationJson {
 describe('organisations (e2e)', () => {
   let app: INestApplication<App>;
   let db: DrizzleDatabase;
-  const createdUsers: string[] = [];
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
     db = app.get<DrizzleDatabase>(DRIZZLE);
   });
 
   afterAll(async () => {
-    // `memberships` et `organizations` partent en cascade avec l'utilisateur.
-    for (const id of createdUsers) {
-      await db.delete(users).where(eq(users.id, id));
-    }
+    await cleanupFixtures(db);
     await app.close();
   });
 
-  const register = async (name?: string) => {
-    const user = await signUp(app, name);
-    createdUsers.push(user.id);
-
-    return user;
-  };
-
   describe('l’organisation personnelle', () => {
     it('existe dès l’inscription, et le compte en est propriétaire', async () => {
-      const user = await register('Romain');
+      const user = await signUp(app, 'Romain');
 
       const response = await request(app.getHttpServer())
         .get('/v1/auth/organization/list')
@@ -82,7 +63,7 @@ describe('organisations (e2e)', () => {
       expect(orgs).toHaveLength(1);
       expect(orgs[0].name).toBe("Romain's org");
       // Le slug est généré et unique, mais il n'apparaît dans aucune URL.
-      expect(orgs[0].slug).toMatch(/^romain-[0-9a-f]{6}$/);
+      expect(orgs[0].slug).toMatch(/^romain-[0-9a-f]{12}$/);
 
       const rows = await db
         .select({ role: memberships.role })
@@ -95,8 +76,8 @@ describe('organisations (e2e)', () => {
     it('donne des slugs distincts à deux comptes homonymes', async () => {
       // Le suffixe aléatoire existe pour ça : `slug` est unique en base, et
       // deux « Romain » qui s'inscrivent ne doivent pas se percuter.
-      const premier = await register('Homonyme');
-      const second = await register('Homonyme');
+      const premier = await signUp(app, 'Homonyme');
+      const second = await signUp(app, 'Homonyme');
 
       const slugOf = async (cookies: string[]) => {
         const response = await request(app.getHttpServer())
@@ -115,8 +96,8 @@ describe('organisations (e2e)', () => {
 
   describe('inviter et retirer un membre', () => {
     it('fait entrer un second compte par invitation', async () => {
-      const owner = await register('Proprietaire');
-      const invite = await register('Invite');
+      const owner = await signUp(app, 'Proprietaire');
+      const invite = await signUp(app, 'Invite');
 
       const [organization] = (
         await request(app.getHttpServer())
@@ -162,7 +143,7 @@ describe('organisations (e2e)', () => {
     });
 
     it('rend une invitation en attente conforme au contrat', async () => {
-      const owner = await register('Attente');
+      const owner = await signUp(app, 'Attente');
 
       const [organization] = (
         await request(app.getHttpServer())
@@ -200,8 +181,8 @@ describe('organisations (e2e)', () => {
     });
 
     it('refuse d’inviter dans une organisation dont on n’est pas membre', async () => {
-      const owner = await register('Interne');
-      const etranger = await register('Etranger');
+      const owner = await signUp(app, 'Interne');
+      const etranger = await signUp(app, 'Etranger');
 
       const [organization] = (
         await request(app.getHttpServer())
@@ -268,8 +249,8 @@ describe('organisations (e2e)', () => {
     };
 
     it('interdit à un « member » d’inviter', async () => {
-      const owner = await register('Patron');
-      const simple = await register('Simple');
+      const owner = await signUp(app, 'Patron');
+      const simple = await signUp(app, 'Simple');
       const organization = await joinAs(owner, simple, 'member');
 
       const response = await request(app.getHttpServer())
@@ -288,8 +269,8 @@ describe('organisations (e2e)', () => {
     it('laisse un « admin » inviter', async () => {
       // Le pendant du test précédent : sans lui, un refus généralisé passerait
       // pour un contrôle de rôle alors qu'il serait une panne.
-      const owner = await register('Patronne');
-      const admin = await register('Adjoint');
+      const owner = await signUp(app, 'Patronne');
+      const admin = await signUp(app, 'Adjoint');
       const organization = await joinAs(owner, admin, 'admin');
 
       await request(app.getHttpServer())
@@ -305,9 +286,9 @@ describe('organisations (e2e)', () => {
     });
 
     it('refuse une invitation acceptée sous une autre adresse', async () => {
-      const owner = await register('Hote');
-      const destinataire = await register('Destinataire');
-      const autre = await register('Autre');
+      const owner = await signUp(app, 'Hote');
+      const destinataire = await signUp(app, 'Destinataire');
+      const autre = await signUp(app, 'Autre');
 
       const [organization] = (
         await request(app.getHttpServer())

@@ -9,10 +9,15 @@ import {
 import { SESSION_GAP_MS } from '../../sessions/session-assigner.service';
 import type {
   AnalyticsLocationsDto,
+  AnalyticsTechnologyDto,
   AnalyticsWindowDto,
 } from './dto/analytics-query.dto';
 import { sourceOf, type Source } from './entry-source';
-import { sessionsOf, type SessionExit } from './sessions';
+import {
+  sessionsOf,
+  type SessionCampaign,
+  type SessionExit,
+} from './sessions';
 
 /**
  * Le seul endroit du backend qui sait ce qu'est une page vue.
@@ -40,6 +45,18 @@ const GRAIN_COLUMNS: Record<LocationGrain, SessionColumn> = {
   country: 'countryCode',
   region: 'region',
   city: 'city',
+};
+
+/**
+ * Le grain de requête, traduit en colonne de session.
+ *
+ * Jumelle de `GRAIN_COLUMNS`, et la même propriété de sécurité : la table est
+ * close à la compilation, donc aucune chaîne d'appelant n'atteint le SQL.
+ */
+const TECHNOLOGY_COLUMNS: Record<TechnologyGrain, SessionColumn> = {
+  browser: 'browser',
+  os: 'os',
+  device: 'deviceType',
 };
 
 /**
@@ -127,6 +144,41 @@ export interface AnalyticsSummary {
    * entier. Un résumé doit pouvoir donner ce nombre sans payer le détail.
    */
   uniqueVisitors: number;
+  /**
+   * Sessions de robots **retirées** de tous les autres compteurs de ce résumé.
+   *
+   * Elles sont écartées structurellement, dans `EventStore.where()`, que toutes
+   * les lectures traversent. Ce champ existe pour que ce retrait ne soit pas
+   * muet : sans lui, une vague de robots et une baisse de trafic se
+   * ressembleraient exactement, et la seule façon de les distinguer serait de
+   * connaître le code.
+   *
+   * ⚠️ Il ne monte qu'à partir de la mise en service de la détection. Les
+   * sessions antérieures sont toutes à `false` — le User-Agent qui aurait permis
+   * de les juger n'a jamais été stocké. Une rupture de série, pas une invasion.
+   */
+  botSessions: number;
+  /**
+   * Visites dont le visiteur a **accepté** le cookie de croisement.
+   *
+   * Le consentement ne porte que sur l'attribution du revenu : la mesure
+   * d'audience, elle, ne demande rien et ne dépose rien. Ce compteur dit donc
+   * combien de visites sont corrélables à un paiement, pas combien de visiteurs
+   * ont « accepté les cookies ».
+   */
+  consentGranted: number;
+  /**
+   * Visites dont le visiteur a **refusé** le cookie de croisement.
+   *
+   * ⚠️ `consentGranted + consentDeclined` ne fait **pas** `sessions`, et
+   * l'écart n'est pas une erreur : c'est le nombre de visites auxquelles on n'a
+   * rien demandé — un site sans bandeau, ou une page qui ne l'a pas câblé. Les
+   * compter comme des refus ferait passer l'absence de question pour un non.
+   *
+   * ⚠️ Rupture de série, comme `botSessions` : le signal existait sur le fil
+   * avant d'être rangé, donc les visites antérieures sont toutes sans réponse.
+   */
+  consentDeclined: number;
   /**
    * Sessions **terminées** n'ayant vu qu'une seule page.
    *
@@ -347,6 +399,24 @@ export interface SessionRow {
    * bruit qui n'a rien à voir avec l'acquisition. Voir `sourceOf`.
    */
   source: Source | null;
+  /**
+   * La campagne qui a amené la visite, ou `null`.
+   *
+   * Les trois UTM tels que le navigateur les portait, normalisés par le serveur
+   * et **figés à l'ouverture** : une session ne change pas de campagne parce que
+   * le visiteur a rechargé une page avec d'autres paramètres.
+   *
+   * À côté de `source` et non à sa place : `source` dit d'où le clic vient
+   * (`google`, un referrer, direct), la campagne dit ce qu'on a acheté. Les deux
+   * se contredisent régulièrement — une annonce ouverte depuis un signet arrive
+   * en direct avec ses UTM — et c'est cette contradiction qui rend un classement
+   * par campagne différent d'un classement par provenance.
+   *
+   * Chaque champ est nullable séparément : une campagne peut porter un `source`
+   * sans `medium`, et exiger les trois écarterait des visites réelles d'un
+   * classement.
+   */
+  campaign: SessionCampaign | null;
 }
 
 /**
@@ -368,6 +438,41 @@ export interface SessionsPage {
 }
 
 /** Un endroit et son poids, tel que la route le rend. */
+/**
+ * Le grain d'un classement par technologie.
+ *
+ * `device` et non `deviceType` : le paramètre de requête est du vocabulaire de
+ * produit, la colonne est du vocabulaire de schéma, et `TECHNOLOGY_COLUMNS` fait
+ * la traduction — comme `GRAIN_COLUMNS` le fait déjà pour la géographie.
+ */
+export type TechnologyGrain = 'browser' | 'os' | 'device';
+
+/** Une ligne de classement par technologie. Rien à départager, donc rien de plus. */
+export interface TechnologyRow {
+  value: string;
+  visitors: number;
+  sessions: number;
+}
+
+/**
+ * Un classement par technologie **et sa couverture**.
+ *
+ * `unresolved` n'est pas une anomalie ici : c'est la longue traîne des
+ * navigateurs qu'on ne nomme pas, et un classement qui la tairait se lirait
+ * comme s'il couvrait tout le trafic.
+ */
+export interface TechnologyPage {
+  /** Borne incluse. */
+  from: Date;
+  /** Borne exclue. */
+  to: Date;
+  grain: TechnologyGrain;
+  rows: TechnologyRow[];
+  /** Le dénominateur des parts. Rendu, jamais reconstitué par somme. */
+  visitors: number;
+  unresolved: number;
+}
+
 export interface LocationRow {
   countryCode: string | null;
   value: string;
@@ -457,11 +562,20 @@ export class AnalyticsService {
     const audience: EventScope = { projectId, from, to };
     const pages: EventScope = { ...audience, types: [EVENT_TYPE] };
 
-    const [sessions, pageViews, uniqueVisitors, topPages, byPageCount] =
-      await Promise.all([
+    const [
+      sessions,
+      pageViews,
+      uniqueVisitors,
+      botSessions,
+      consent,
+      topPages,
+      byPageCount,
+    ] = await Promise.all([
         this.events.countSessions(audience),
         this.events.countEvents(pages),
         this.events.countVisitors(audience),
+        this.events.countBotSessions(audience),
+        this.events.countConsent(audience),
         this.events.topValues(pages, {
           source: 'attributes',
           key: PATH_ATTRIBUTE,
@@ -482,6 +596,9 @@ export class AnalyticsService {
       sessions,
       pageViews,
       uniqueVisitors,
+      botSessions,
+      consentGranted: consent.granted,
+      consentDeclined: consent.declined,
       bounces: byPageCount.single,
       settledSessions: byPageCount.single + byPageCount.several,
       topPages,
@@ -562,6 +679,7 @@ export class AnalyticsService {
       // deux lectures ne peuvent donc pas se contredire sur ce qui est clos.
       settled: session.endedAt < closedBefore,
       source: sourceOf(session),
+      campaign: session.campaign,
     }));
 
     // L'ordre est celui du journal, donc chronologique sur l'ouverture — hérité
@@ -602,11 +720,69 @@ export class AnalyticsService {
     const [{ rows, unresolved }, visitors] = await Promise.all([
       this.events.topSessionValues(scope, {
         column: GRAIN_COLUMNS[grain],
+        // Le départage est géographique, et il n'a de sens qu'ici : sans lui,
+        // deux villes homonymes dans deux pays fusionneraient en une ligne.
+        qualifier: 'countryCode',
         limit,
       }),
       this.events.countVisitors(scope),
     ]);
 
-    return { from, to, grain, rows, visitors, unresolved };
+    return {
+      from,
+      to,
+      grain,
+      // Le socle nomme cette colonne `qualifier` parce qu'il ne sait pas ce
+      // qu'est un pays. C'est ici que le mot géographique revient.
+      rows: rows.map(({ qualifier, ...row }) => ({
+        countryCode: qualifier,
+        ...row,
+      })),
+      visitors,
+      unresolved,
+    };
+  }
+
+  /**
+   * Avec quoi le trafic navigue : navigateur, système ou appareil.
+   *
+   * Même forme que `locations`, et pour les mêmes raisons — une route et trois
+   * grains plutôt que trois routes qui rendraient la même requête sous trois
+   * noms, et `unresolved` rendu plutôt que tu.
+   *
+   * Aucun départage : un navigateur ne se confond avec rien, contrairement à
+   * deux villes homonymes.
+   *
+   * ⚠️ **Les tablettes sont sous-comptées.** Depuis iPadOS 13, Safari envoie
+   * par défaut l'en-tête d'un Mac, donc la majorité des iPad est rangée en
+   * ordinateur. L'information n'est pas dans la chaîne : aucune correction n'est
+   * possible ici, seulement une mention à qui lit le chiffre.
+   */
+  async technology(
+    projectId: string,
+    { from, to, grain, limit }: AnalyticsTechnologyDto,
+  ): Promise<TechnologyPage> {
+    const scope: EventScope = { projectId, from, to };
+
+    const [{ rows, unresolved }, visitors] = await Promise.all([
+      this.events.topSessionValues(scope, {
+        column: TECHNOLOGY_COLUMNS[grain],
+        limit,
+      }),
+      this.events.countVisitors(scope),
+    ]);
+
+    return {
+      from,
+      to,
+      grain,
+      rows: rows.map(({ value, visitors: v, sessions }) => ({
+        value,
+        visitors: v,
+        sessions,
+      })),
+      visitors,
+      unresolved,
+    };
   }
 }

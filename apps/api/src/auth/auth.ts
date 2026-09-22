@@ -16,8 +16,24 @@ const logger = new Logger('Auth');
  * Fabrique un slug d'organisation.
  *
  * Le plugin exige `slug` unique ; nous n'en voulions pas. On le dérive donc du
- * nom, suffixé de six caractères aléatoires — assez pour que deux « Acme » ne
- * se percutent pas, sans avoir à boucler sur les collisions.
+ * nom, suffixé d'un aléa — assez pour que deux « Acme » ne se percutent pas,
+ * sans avoir à boucler sur les collisions.
+ *
+ * ## Douze caractères, et pas six
+ *
+ * Six l'ont été, et c'était trop court, pour une raison qui ne se voit pas dans
+ * le calcul : l'espace n'est pas partagé par tous les comptes, il l'est par
+ * **préfixe**. Six caractères hexadécimaux donnent seize millions de valeurs,
+ * mais seize millions *par nom* — et les noms se répètent bien plus qu'on ne le
+ * croit. La suite e2e le montrait en grand : quatre mille organisations
+ * `proprietaire-*` accumulées, soit une inscription sur quatre mille deux cents
+ * qui se heurtait.
+ *
+ * Ce que coûte la collision n'est pas proportionné à sa rareté. L'organisation
+ * est créée dans un hook `after`, **hors de la transaction** qui crée le compte
+ * (voir plus bas) : l'insert échoue après coup, l'inscription rend 500, et il
+ * reste un compte sans organisation. Douze caractères repoussent ça de six
+ * ordres de grandeur, pour six octets de plus en base.
  *
  * Ce slug **n'apparaît dans aucune URL** : les routes désignent les projets par
  * leur id, et l'accès se vérifie contre l'appartenance. Il n'a pas à être joli,
@@ -32,7 +48,7 @@ function slugify(name: string): string {
     .replace(/^-|-$/g, '')
     .slice(0, 32);
 
-  return `${base || 'org'}-${randomBytes(3).toString('hex')}`;
+  return `${base || 'org'}-${randomBytes(6).toString('hex')}`;
 }
 
 /**
@@ -84,8 +100,8 @@ export function createAuth(db: DrizzleDatabase, config: ConfigService) {
      * Better Auth déclare `name: z.string()` — sans `.min(1)` — donc la chaîne
      * vide passe sa validation. Or l'inscription en dérive une organisation
      * (`databaseHooks.user.create.after` plus bas) : un nom vide produit une
-     * organisation nommée `'s org`, et un slug réduit à six caractères
-     * aléatoires. Le compte est créé, l'organisation est absurde, et plus rien
+     * organisation nommée `'s org`, et un slug réduit à son seul
+     * suffixe aléatoire. Le compte est créé, l'organisation est absurde, et plus rien
      * ne le signale ensuite.
      *
      * Le formulaire du dashboard l'interdit déjà, mais ça ne protège rien : un

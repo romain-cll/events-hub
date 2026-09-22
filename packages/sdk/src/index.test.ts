@@ -22,7 +22,17 @@ const ENDPOINT = 'https://hub.test/v1/events';
  * par `fetch`, mais du point de vue du produit c'est un seul flux. Deux
  * journaux séparés ne diraient rien de la séquence.
  */
-function createHub({ ok = true }: { ok?: boolean } = {}) {
+/** La visite que le hub rend à chaque réponse, avec ou sans consentement. */
+const SESSION_ID = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
+
+function createHub({
+  ok = true,
+  visitorId,
+}: { ok?: boolean; visitorId?: string } = {}) {
+  // Modifiable en cours de test : c'est ce que fait un hub quand le visiteur
+  // accorde puis retire son consentement.
+  let identifiant = visitorId;
+
   const sent: {
     transport: 'fetch' | 'keepalive' | 'beacon';
     body: Promise<string>;
@@ -46,7 +56,12 @@ function createHub({ ok = true }: { ok?: boolean } = {}) {
       ok,
       status: ok ? 201 : 422,
       statusText: ok ? 'Created' : 'Unprocessable Entity',
-      json: () => Promise.resolve({ id: 'evt_1' }),
+      json: () =>
+        Promise.resolve(
+          identifiant
+            ? { id: 'evt_1', sessionId: SESSION_ID, visitorId: identifiant }
+            : { id: 'evt_1', sessionId: SESSION_ID },
+        ),
       text: () => Promise.resolve('{"message":"projet inconnu"}'),
     });
   });
@@ -72,6 +87,9 @@ function createHub({ ok = true }: { ok?: boolean } = {}) {
         (body) => (JSON.parse(body) as EventEnvelope).type,
       ),
     transports: () => sent.map((call) => call.transport),
+    setVisitorId: (next: string | undefined) => {
+      identifiant = next;
+    },
   };
 }
 
@@ -318,6 +336,140 @@ describe('Analytics', () => {
 
       await expect(analytics.track('nimporte_quoi')).rejects.toThrow(
         /422.*projet inconnu/s,
+      );
+    });
+  });
+
+  describe('la visite en cours', () => {
+    it('est tenue à disposition sans consentement, et sans cookie', async () => {
+      // Le hub ne rend aucun identifiant durable ici : c'est exactement le cas
+      // d'un visiteur qui n'a rien accepté, et c'est là que la session sert.
+      await analytics.track('checkout_started');
+
+      expect(analytics.getSessionId()).toBe(SESSION_ID);
+      // Rien n'est inscrit sur le terminal, et c'est toute la propriété qui
+      // rend ce chemin utilisable sans consentement. La recopier « par
+      // symétrie » avec le visitorId la détruirait.
+      expect(document.cookie).not.toContain(SESSION_ID);
+    });
+
+    it('reste disponible après le premier événement', async () => {
+      // Le miroir du visitorId court-circuite quand rien n'a changé — sans
+      // consentement, c'est à *chaque* événement. La session ne doit pas être
+      // emportée par cette garde.
+      await analytics.track('premier');
+      await analytics.track('second');
+
+      expect(analytics.getSessionId()).toBe(SESSION_ID);
+    });
+  });
+
+  describe('l’opposition', () => {
+    it('arrête les collecteurs et déclare la décision', async () => {
+      start();
+
+      analytics.optOut();
+
+      const envoyees = await hub.envelopes();
+
+      // Sans cet envoi, le refus ne vivrait que dans cet onglet et serait
+      // oublié au rechargement : c'est le hub qui le mémorise.
+      expect(envoyees[envoyees.length - 1]).toMatchObject({ optOut: true });
+
+      document.body.click();
+
+      // Et plus rien ne part : s'opposer sans arrêter d'émettre laisserait le
+      // hub jeter des événements qu'on continuerait de lui envoyer.
+      expect(await hub.envelopes()).toHaveLength(envoyees.length);
+    });
+
+    it('ne répète pas la décision sur les événements suivants', async () => {
+      analytics.optIn();
+      await analytics.track('ensuite');
+
+      const envoyees = await hub.envelopes();
+
+      // Côté hub c'est un cookie qui fait foi : la répéter n'apprendrait rien.
+      expect(envoyees[envoyees.length - 1]).not.toHaveProperty('optOut');
+    });
+
+    it('efface la copie du visitorId en s’opposant', async () => {
+      const VISITEUR = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+      hub.setVisitorId(VISITEUR);
+      await analytics.track('avant');
+
+      analytics.optOut();
+
+      // Elle ne sert qu'à joindre un identifiant à un paiement, et il n'y a
+      // plus d'identifiant à joindre.
+      expect(document.cookie).not.toContain(`eh_visitor_id=${VISITEUR}`);
+      expect(analytics.getVisitorId()).toBeUndefined();
+    });
+  });
+
+  describe('la copie du visitorId', () => {
+    const VISITOR_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
+    /** jsdom garde ses cookies d'un test à l'autre : on repart du vide. */
+    beforeEach(() => {
+      document.cookie = 'eh_visitor_id=; Path=/; Max-Age=0';
+    });
+
+    it('dépose ce que le hub rend, et le tient à disposition', async () => {
+      hub.setVisitorId(VISITOR_ID);
+
+      await analytics.track('checkout_started');
+
+      // Le cookie pour le backend du site, le getter pour son JS. Les deux
+      // portent la même valeur, et aucune n'a été forgée ici.
+      expect(document.cookie).toContain(`eh_visitor_id=${VISITOR_ID}`);
+      expect(analytics.getVisitorId()).toBe(VISITOR_ID);
+    });
+
+    it('efface la copie dès que le hub cesse d’en rendre une', async () => {
+      hub.setVisitorId(VISITOR_ID);
+      await analytics.track('avant');
+
+      // Le visiteur retire son consentement : le hub ne rend plus rien.
+      hub.setVisitorId(undefined);
+      await analytics.track('apres');
+
+      expect(document.cookie).not.toContain('eh_visitor_id=');
+      expect(analytics.getVisitorId()).toBeUndefined();
+    });
+
+    it('efface une copie laissée par une visite précédente', async () => {
+      // Le cas que le drapeau interne existe pour couvrir : le consentement a
+      // été retiré entre deux chargements de page, donc rien en mémoire ne
+      // signale qu'il y a quelque chose à effacer. Sans lui, cette copie
+      // survivrait 400 jours et continuerait de partir dans les paiements.
+      document.cookie = `eh_visitor_id=${VISITOR_ID}; Path=/`;
+
+      await analytics.track('premier_de_la_page');
+
+      expect(document.cookie).not.toContain('eh_visitor_id=');
+    });
+
+    it('ne réécrit rien tant que la valeur ne change pas', async () => {
+      hub.setVisitorId(VISITOR_ID);
+      await analytics.track('premier');
+
+      const cookie = vi.spyOn(document, 'cookie', 'set');
+      await analytics.track('second');
+
+      // La copie porte déjà sa propre durée de vie : la réécrire à chaque
+      // événement n'ajouterait rien.
+      expect(cookie).not.toHaveBeenCalled();
+      cookie.mockRestore();
+    });
+
+    it('suit aussi les événements collectés, pas seulement track()', async () => {
+      hub.setVisitorId(VISITOR_ID);
+
+      start();
+
+      await vi.waitFor(() =>
+        expect(document.cookie).toContain(`eh_visitor_id=${VISITOR_ID}`),
       );
     });
   });

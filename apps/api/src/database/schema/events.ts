@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   index,
   jsonb,
@@ -87,7 +88,13 @@ export const events = pgTable(
      *
      * La colonne est donc nullable, et c'est ce qui fait du produit un hub
      * plutôt qu'un outil d'analyse web. Elle porte l'affirmation « cet
-     * événement n'a pas de visiteur », qui est vraie et qui le restera.
+     * événement n'a pas de **visite** », qui est vraie et qui le restera.
+     *
+     * Elle ne dit plus « pas de visiteur » : depuis le lot revenu, un paiement
+     * rapporté par un serveur désigne quelqu'un dont on connaît le parcours,
+     * sans s'être produit pendant une visite — il peut arriver trois jours après
+     * la dernière, ou des mois plus tard pour un renouvellement. C'est
+     * `visitorKey`, juste en dessous, qui porte cette seconde question.
      *
      * Conséquence à connaître pour les lectures : `COUNT(DISTINCT session_id)`
      * ignore les `NULL` de lui-même, et une jointure interne sur `sessions`
@@ -96,23 +103,65 @@ export const events = pgTable(
      * et surtout rien à retirer le jour où un événement serveur portera une
      * session (un paiement rattaché à une visite, pour un funnel).
      *
-     * La clé visiteur, elle, n'est **pas** sur cette table : elle vit sur
-     * `sessions` (voir le commentaire de cette table-là). L'identité anonyme est
-     * un attribut de la session, pas de chaque événement — un module qui lit des
-     * événements ne l'a donc plus sous la main par inadvertance.
      */
     sessionId: uuid().references(() => sessions.id, { onDelete: 'restrict' }),
+    /**
+     * L'identité **durable** du visiteur, quand il en a consenti une.
+     *
+     * ## Pourquoi elle a fini par arriver ici
+     *
+     * Cette colonne n'existait pas, et le commentaire qui vit ici disait
+     * pourquoi : l'identité anonyme est un attribut de la *session*, pas de
+     * chaque événement, et l'y remonter la mettrait sous la main de tout module
+     * qui lit des événements.
+     *
+     * Ce qui a changé n'est pas l'intention, c'est le modèle. Un paiement a un
+     * visiteur **sans avoir de visite** : il n'a pas de `sessionId`, donc plus
+     * rien ne le relierait à un parcours. Sans cette colonne, la seule question
+     * que le produit pose — d'où vient ce revenu — n'a pas de réponse.
+     *
+     * L'intention, elle, tient toujours, mais autrement : c'est `EventStore` qui
+     * expose la corrélation, et `architecture.spec.ts` interdit toujours à un
+     * module métier de **nommer** cette clé. Aucun d'eux ne l'a sous la main.
+     *
+     * ## Durable, et rien d'autre
+     *
+     * Nullable, et elle ne porte **jamais** la clé dérivée du réseau. Celle-ci
+     * tourne chaque jour : la figer sur un événement laisserait croire à une
+     * continuité qui n'existe pas, et deux visiteurs derrière la même sortie
+     * réseau la partagent. Ce qui est écrit ici a été consenti, ou n'est pas
+     * écrit.
+     *
+     * La conséquence est nette et voulue : sans consentement, un paiement n'est
+     * corrélable à rien. Ce n'est pas une limite de l'implémentation.
+     */
+    visitorKey: text(),
     attributes: jsonb().$type<Record<string, unknown>>().notNull().default({}),
     properties: jsonb().$type<Record<string, unknown>>().notNull().default({}),
   },
   (table) => [
     index('events_project_id_idx').on(table.projectId),
+    // « Tout ce que ce visiteur a fait », la lecture qui porte l'attribution du
+    // revenu. Cloisonnée par projet comme toutes les autres.
+    index('events_project_visitor_idx').on(table.projectId, table.visitorKey),
     // La recherche de voisins lit les événements d'une session autour d'un
     // instant, et la fusion les réécrit par session. Les deux passent par là.
     index('events_session_occurred_idx').on(table.sessionId, table.occurredAt),
     // Toute lecture croise `event_types` pour faire respecter `serverOnly`
     // (voir `EventStore.where`). La corrélation se fait sur ce couple.
     index('events_project_type_idx').on(table.projectId, table.type),
+    // La purge, et rien d'autre : les lignes sans visite qui portent encore une
+    // identité durable, du plus ancien au plus récent.
+    //
+    // **Partiel**, et c'est tout l'intérêt. Il ne couvre qu'une fraction
+    // minuscule de la table, et il **rétrécit à mesure que la purge travaille**
+    // puisqu'une ligne anonymisée sort de son prédicat. Un index global sur la
+    // seule date serait au contraire payé à chaque insertion d'ingestion — sur
+    // le chemin le plus chaud du produit — pour servir une requête qui tourne
+    // une fois par nuit.
+    index('events_sessionless_identified_idx')
+      .on(table.occurredAt)
+      .where(sql`session_id is null and visitor_key is not null`),
   ],
 );
 

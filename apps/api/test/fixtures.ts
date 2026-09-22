@@ -1,15 +1,19 @@
 import type { INestApplication } from '@nestjs/common';
+import { eq, inArray } from 'drizzle-orm';
 import { createHash, randomBytes } from 'node:crypto';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { z } from 'zod';
 
-import type { DrizzleDatabase } from '../src/database/database.module';
+import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import {
+  events,
   memberships,
   organizations,
   projectKeys,
   projects,
+  sessions,
+  users,
   type Project,
 } from '../src/database/schema';
 
@@ -33,6 +37,21 @@ import {
  */
 let sharedOrganizationId: string | null = null;
 
+/**
+ * Ce que ce fichier de suite a créé, pour pouvoir le reprendre.
+ *
+ * Trois listes et non une : l'ordre de suppression est imposé par les clés
+ * étrangères, et il n'est pas celui de la création.
+ *
+ * La portée est déjà la bonne sans rien faire — Jest donne un registre de
+ * modules neuf à chaque fichier de test, donc ces tableaux sont naturellement
+ * « par suite », comme `sharedOrganizationId`. Aucun partage entre workers, donc
+ * aucune synchronisation à prévoir.
+ */
+const createdProjects: string[] = [];
+const createdOrganizations: string[] = [];
+const createdUsers: string[] = [];
+
 export async function organizationId(db: DrizzleDatabase): Promise<string> {
   if (sharedOrganizationId) return sharedOrganizationId;
 
@@ -45,6 +64,7 @@ export async function organizationId(db: DrizzleDatabase): Promise<string> {
     .returning({ id: organizations.id });
 
   sharedOrganizationId = organization.id;
+  createdOrganizations.push(organization.id);
 
   return sharedOrganizationId;
 }
@@ -57,6 +77,32 @@ export async function organizationId(db: DrizzleDatabase): Promise<string> {
  * suites doivent donc poser celle-ci sur chaque envoi.
  */
 export const TEST_ORIGIN = 'http://localhost:3002';
+
+/** Ce qui distingue cette exécution de la précédente. */
+const RUN = randomBytes(4).toString('hex');
+
+/**
+ * Rend un identifiant propre à cette exécution.
+ *
+ * Réservé aux identifiants que **Postgres arbitre globalement** — aujourd'hui
+ * `stripe_webhook_events.event_id`, clé primaire non cloisonnée par projet. Le
+ * service y réserve en `onConflictDoNothing` : un identifiant déjà présent est
+ * lu comme « déjà rejoué », et **rien n'est écrit**. C'est le comportement qu'on
+ * veut en production, et un piège en test.
+ *
+ * Avec des identifiants en dur, il suffisait qu'un run s'arrête au mauvais
+ * moment — Ctrl-C, worker tué, échec dans un `beforeAll` — pour laisser la ligne
+ * derrière lui. Tous les runs suivants échouaient alors **de façon déterministe
+ * et définitive**, sur une assertion qui constate un événement manquant sans
+ * rien dire de la raison. Le nettoyage de fin de suite ne protège de rien : il
+ * ne s'exécute pas quand la suite meurt, et c'est précisément le cas qui empoisonne.
+ *
+ * L'unicité par exécution rend le résidu inoffensif. Les nettoyages restent —
+ * ils empêchent la table de croître, ils n'ont jamais empêché ça.
+ */
+export function perRun(id: string): string {
+  return `${id}_${RUN}`;
+}
 
 /** Un projet de test, avec les deux clés qui permettent d'y écrire. */
 export interface TestProject extends Project {
@@ -88,6 +134,8 @@ export async function createProject(
     .insert(projects)
     .values({ ...values, organizationId: await organizationId(db) })
     .returning();
+
+  createdProjects.push(project.id);
 
   // Une clé vient avec, parce qu'un projet sans clé ne peut rien recevoir : le
   // `projectId` ne circule plus dans le corps des requêtes d'ingestion.
@@ -197,7 +245,43 @@ export async function signUp(
 
   const body = response.body as { user: { id: string } };
 
+  await trackSignUp(app, body.user.id);
+
   return { cookies: cookiesOf(response), id: body.user.id, email };
+}
+
+/**
+ * Retient un compte fraîchement inscrit, et l'organisation venue avec.
+ *
+ * `organizations` n'a **aucune clé étrangère vers `users`** : supprimer le
+ * compte emporte son `membership`, jamais l'organisation. C'est ce qui a laissé
+ * vingt-cinq mille organisations vides dans la base locale, et deux commentaires
+ * de suites affirmaient le contraire.
+ *
+ * L'identifiant de cette organisation n'est nulle part dans la réponse
+ * d'inscription — le hook la crée après coup, hors transaction. On le lit donc
+ * dans `memberships`, où le compte n'en a encore qu'un seul : à cet instant, son
+ * unique appartenance *est* son organisation personnelle. Appelé plus tard, après
+ * un `joinOrganization`, ce raccourci désignerait n'importe quoi.
+ *
+ * Exporté pour la seule suite qui s'inscrit sans passer par `signUp` : celle de
+ * l'authentification, qui poste sur la route parce que c'est la route qu'elle
+ * éprouve.
+ */
+export async function trackSignUp(
+  app: INestApplication<App>,
+  userId: string,
+): Promise<void> {
+  const db = app.get<DrizzleDatabase>(DRIZZLE);
+
+  const appartenances = await db
+    .select({ organizationId: memberships.organizationId })
+    .from(memberships)
+    .where(eq(memberships.userId, userId));
+
+  createdUsers.push(userId);
+  for (const { organizationId } of appartenances)
+    createdOrganizations.push(organizationId);
 }
 
 /** Les organisations d'un compte, telles que Better Auth les rend. */
@@ -213,8 +297,74 @@ export async function listOrganizations(
   return response.body as Array<{ id: string; name: string; slug: string }>;
 }
 
-/** Remet le cache d'organisation à zéro — utile entre deux suites. */
-export function resetFixtures(): void {
+/**
+ * Reprend tout ce que ce fichier de suite a créé.
+ *
+ * ## Pourquoi une fonction, et pas la même séquence recopiée
+ *
+ * Elle l'était : vingt-cinq suites supprimaient `events`, puis `sessions`, puis
+ * `projects`, et dix rajoutaient une boucle sur les comptes. Toutes s'arrêtaient
+ * là, et laissaient les **organisations** — dont aucune suite ne connaissait
+ * l'identifiant. Une règle qu'on recopie est une règle qu'on recopie
+ * *incomplète* : c'est le mode d'échec que ce fichier existe pour supprimer.
+ *
+ * ## L'ordre n'est pas un style, il est imposé
+ *
+ * `events.projectId`, `events.sessionId` et `sessions.projectId` sont en
+ * `restrict`, et `projects.organizationId` aussi. Partir dans l'autre sens ne
+ * laisse pas des orphelins : ça échoue, en `foreign_key_violation`.
+ *
+ * ```
+ * events → sessions → projects → organizations → users
+ * ```
+ *
+ * Supprimer `projects` emporte en cascade ses clés, ses types d'événement, son
+ * intégration et ses tables Stripe ; supprimer une organisation emporte ses
+ * `memberships` et ses invitations ; supprimer un compte emporte ses sessions
+ * d'auth et ses comptes liés. Les suppressions que gardent certaines suites
+ * au-dessus de cet appel sont donc des ceintures, pas des bretelles — sauf pour
+ * `stripe_webhook_events`, dont les lignes sans projet ne tiennent à rien.
+ *
+ * ## Ce qu'elle ne peut pas reprendre
+ *
+ * Ce qui n'est pas passé par ce fichier. Un `db.insert` direct dans une suite
+ * reste à sa charge — et c'est une raison de ne pas en faire.
+ */
+export async function cleanupFixtures(db: DrizzleDatabase): Promise<void> {
+  // Les projets se reprennent par leur **organisation**, pas par la liste de
+  // ceux que `createProject` a posés : plusieurs suites en créent par la route
+  // `POST /v1/projects`, qui est justement ce qu'elles éprouvent, et ce fichier
+  // n'en sait rien. Comme `projects.organizationId` est en `restrict`, les
+  // oublier ne laisse pas un projet orphelin — ça **refuse** de supprimer
+  // l'organisation, et le nettoyage meurt au milieu.
+  const aReprendre = createdOrganizations.length
+    ? await db
+        .select({ id: projects.id })
+        .from(projects)
+        .where(inArray(projects.organizationId, createdOrganizations))
+    : [];
+
+  const cibles = [
+    ...new Set([...createdProjects, ...aReprendre.map(({ id }) => id)]),
+  ];
+
+  if (cibles.length) {
+    await db.delete(events).where(inArray(events.projectId, cibles));
+    await db.delete(sessions).where(inArray(sessions.projectId, cibles));
+    await db.delete(projects).where(inArray(projects.id, cibles));
+  }
+
+  if (createdOrganizations.length)
+    await db
+      .delete(organizations)
+      .where(inArray(organizations.id, createdOrganizations));
+
+  if (createdUsers.length)
+    await db.delete(users).where(inArray(users.id, createdUsers));
+
+  createdProjects.length = 0;
+  createdOrganizations.length = 0;
+  createdUsers.length = 0;
   sharedOrganizationId = null;
 }
 

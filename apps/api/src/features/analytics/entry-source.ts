@@ -116,9 +116,10 @@ const SEARCH_ENGINES = new Set([
  * m'apporte X visites » en y comptant du trafic qui n'a rien à voir ; les
  * laisser dans `referral` les noierait parmi les sites.
  *
- * `copilot` n'y est pas : Copilot répond sur `bing.com` et `copilot.microsoft.com`
- * selon le chemin, et trancher demanderait de lire l'URL complète. Le jour où
- * ça compte, c'est une ligne ici — pas une exception ailleurs.
+ * `copilot` y est, mais il est le cas bancal de l'ensemble : Copilot répond
+ * aussi sur `bing.com`, où il est indiscernable du moteur sans lire l'URL
+ * complète. On compte donc ce qui vient de `copilot.microsoft.com` et on rate
+ * le reste — un sous-compte assumé, pas une erreur de classement.
  */
 const ASSISTANTS = new Set([
   'chatgpt',
@@ -130,17 +131,86 @@ const ASSISTANTS = new Set([
 ]);
 
 /**
- * Les cinq natures de provenance.
+ * Les réseaux sociaux, par **label d'hôte** comme les deux ensembles du dessus.
  *
- * `internal` n'est pas de l'acquisition : c'est un referrer qui pointe sur nous
- * — rechargement, navigation vers une ancre, ou session dont la fenêtre a coupé
- * le début. Il est **rendu** plutôt qu'écarté, parce qu'un chiffre jeté en
- * silence est un chiffre que personne ne sait manquant : sa part dit à quel
- * point la lecture est polluée. L'acquisition, c'est
- * `direct + search + assistant + referral`.
+ * Ils méritent leur nature pour la même raison que les assistants : « les
+ * réseaux m'apportent X visites » est une question qu'on pose, et elle n'a pas
+ * de réponse tant que Twitter, LinkedIn et Reddit sont noyés parmi les sites.
+ *
+ * ## Le label n'est pas la marque
+ *
+ * C'est le piège de cet ensemble, et il n'existe pas pour les moteurs. Les
+ * réseaux raccourcissent leurs liens sur des domaines qui ne portent pas leur
+ * nom : `t.co` a pour label **`t`**, `lnkd.in` a **`lnkd`**, `fb.me` a
+ * **`fb`**. Y écrire `twitter` ne classerait rien — ce sont les domaines
+ * courts qui apparaissent dans un referrer, pas les longs.
+ *
+ * D'où les doublons assumés : `x` **et** `t`, `linkedin` **et** `lnkd`,
+ * `facebook` **et** `fb`. `KNOWN` les ramène ensuite au même libellé, pour que
+ * le lecteur ne voie pas deux lignes là où il y a un réseau.
+ *
+ * ## Ce qui n'y est pas, et pourquoi
+ *
+ * `news.ycombinator.com` et les forums ne sont pas des réseaux sociaux : ce
+ * sont des sites. Ils tombent en `other` avec leur hôte, ce qui se lit très
+ * bien. Étendre `social` à « tout ce qui a des commentaires » rendrait la
+ * catégorie inutilisable.
+ */
+const SOCIAL = new Set([
+  'x',
+  't',
+  'twitter',
+  'linkedin',
+  'lnkd',
+  'facebook',
+  'fb',
+  'instagram',
+  'threads',
+  'reddit',
+  'youtube',
+  'youtu',
+  'tiktok',
+  'pinterest',
+  'snapchat',
+  'mastodon',
+  'bsky',
+  'bluesky',
+  'discord',
+  'telegram',
+  'whatsapp',
+]);
+
+/**
+ * Les six natures de provenance.
+ *
+ * ## `other` est un fourre-tout, et c'est une décision
+ *
+ * Il a porté le nom `referral` tant qu'il était la seule sortie pour un site
+ * externe. Une fois `social` posé à côté de `search` et `assistant`, ce qui
+ * restait dedans n'était plus « une recommandation » mais « un site qu'on n'a
+ * pas su classer » — et le mot promettait alors plus qu'il ne savait.
+ *
+ * Le renommage acte ce qu'on ne fera pas : on ne tiendra pas la liste des sites
+ * de la planète. Les ensembles au-dessus se complètent au fil de l'eau, et tout
+ * ce qu'ils ne revendiquent pas tombe ici **avec son hôte**, donc lisible en
+ * tant que ligne dans l'onglet Referrers. Rien n'est perdu, seul le rangement
+ * est avoué.
+ *
+ * ## `internal` n'est pas de l'acquisition
+ *
+ * C'est un referrer qui pointe sur nous — rechargement, navigation vers une
+ * ancre, ou session dont la fenêtre a coupé le début. Il est **rendu** plutôt
+ * qu'écarté, parce qu'un chiffre jeté en silence est un chiffre que personne ne
+ * sait manquant : sa part dit à quel point la lecture est polluée.
+ * L'acquisition, c'est `direct + search + assistant + social + other`.
  */
 export type SourceKind =
-  'direct' | 'search' | 'assistant' | 'referral' | 'internal';
+  | 'direct'
+  | 'search'
+  | 'assistant'
+  | 'social'
+  | 'other'
+  | 'internal';
 
 /**
  * Ce qu'on sait d'une provenance nommée : comment elle s'écrit, et quel domaine
@@ -195,6 +265,30 @@ const KNOWN: Record<string, { label: string; host: string }> = {
   gemini: { label: 'Gemini', host: 'gemini.google.com' },
   copilot: { label: 'Copilot', host: 'copilot.microsoft.com' },
   mistral: { label: 'Mistral', host: 'mistral.ai' },
+  // Les réseaux. Les domaines courts pointent sur la **même** entrée que leur
+  // marque — `t` et `x` rendent tous deux « X » — sans quoi un lien partagé
+  // depuis l'application et un lien collé à la main feraient deux lignes.
+  x: { label: 'X', host: 'x.com' },
+  t: { label: 'X', host: 'x.com' },
+  twitter: { label: 'X', host: 'x.com' },
+  linkedin: { label: 'LinkedIn', host: 'linkedin.com' },
+  lnkd: { label: 'LinkedIn', host: 'linkedin.com' },
+  facebook: { label: 'Facebook', host: 'facebook.com' },
+  fb: { label: 'Facebook', host: 'facebook.com' },
+  instagram: { label: 'Instagram', host: 'instagram.com' },
+  threads: { label: 'Threads', host: 'threads.com' },
+  reddit: { label: 'Reddit', host: 'reddit.com' },
+  youtube: { label: 'YouTube', host: 'youtube.com' },
+  youtu: { label: 'YouTube', host: 'youtube.com' },
+  tiktok: { label: 'TikTok', host: 'tiktok.com' },
+  pinterest: { label: 'Pinterest', host: 'pinterest.com' },
+  snapchat: { label: 'Snapchat', host: 'snapchat.com' },
+  mastodon: { label: 'Mastodon', host: 'mastodon.social' },
+  bsky: { label: 'Bluesky', host: 'bsky.app' },
+  bluesky: { label: 'Bluesky', host: 'bsky.app' },
+  discord: { label: 'Discord', host: 'discord.com' },
+  telegram: { label: 'Telegram', host: 'telegram.org' },
+  whatsapp: { label: 'WhatsApp', host: 'whatsapp.com' },
 };
 
 /** Ce qu'on écrit quand il n'y a pas de nom à écrire. */
@@ -202,8 +296,31 @@ const KIND_LABELS: Record<SourceKind, string> = {
   direct: 'Direct',
   search: 'Search',
   assistant: 'Assistant',
-  referral: 'Referral',
+  social: 'Social',
+  other: 'Other',
   internal: 'Internal',
+};
+
+/**
+ * La nature d'un trafic, campagne comprise.
+ *
+ * `campaign` n'est **pas** une nature de referrer, et c'est pour ça qu'elle
+ * vit ici plutôt que dans `SourceKind` : une visite balisée arrive de
+ * `google.com` comme une visite organique, le referrer ne les distingue pas.
+ * C'est la présence des paramètres de campagne sur la visite qui tranche, et
+ * elle l'emporte — du trafic acheté n'est pas du `search` organique, et les
+ * confondre est l'erreur que la lecture par nature existe pour éviter.
+ *
+ * Deux types plutôt qu'un `SourceKind` élargi : `classifyReferrer` ne peut pas
+ * rendre `campaign`, n'ayant jamais vu la visite. Les fondre laisserait croire
+ * qu'elle le pourrait.
+ */
+export type TrafficNature = SourceKind | 'campaign';
+
+/** Le libellé d'une nature, y compris celle que le referrer ne connaît pas. */
+export const NATURE_LABELS: Record<TrafficNature, string> = {
+  ...KIND_LABELS,
+  campaign: 'Campaign',
 };
 
 export interface Source {
@@ -285,12 +402,24 @@ function hostOf(url: URL): string {
  * configuration, pas une donnée d'événement. Tant qu'elle n'existe pas, on
  * préfère une ligne `referral` visible à un rapprochement silencieux et faux.
  *
- * Interne au module : `sourceOf` est la seule porte. L'exporter en plus
- * donnerait un second chemin vers la même règle, qui contourne la seule chose
- * que `sourceOf` ajoute — le refus de classer une session dont on n'a vu aucune
- * page.
+ * ## Deux portes, et elles n'ont pas le même garde-fou
+ *
+ * `sourceOf` prend une session repliée et refuse de classer celle dont aucune
+ * page n'a été vue. C'est la porte de l'analytics, et ce refus est ce qui
+ * empêche de gonfler `direct` d'un bruit qui n'a rien à voir avec
+ * l'acquisition.
+ *
+ * Cette fonction-ci est l'autre porte, ouverte pour la lecture du revenu : elle
+ * reçoit un referrer déjà isolé par le Core, sur une ligne qui **existe par
+ * construction** — il a fallu un événement pour la produire. Le garde-fou de
+ * `sourceOf` n'aurait rien à y garder, et l'exiger obligerait à fabriquer une
+ * session de façade pour le satisfaire.
+ *
+ * La règle de classement, elle, reste écrite **une seule fois**. C'est tout ce
+ * qui compte : deux classements qui divergeraient au premier moteur ajouté
+ * seraient pires que deux portes.
  */
-function classifyReferrer(
+export function classifyReferrer(
   referrer: string | null,
   pageUrl: string | null,
 ): Source {
@@ -309,7 +438,7 @@ function classifyReferrer(
   const from = parseUrl(referrer);
   // Quelque chose était là : ce n'est pas une entrée directe. Mais on ne sait
   // pas quoi, et inventer un nom serait pire que de ne pas en donner.
-  if (from === null || from.hostname === '') return source('referral', null);
+  if (from === null || from.hostname === '') return source('other', null);
 
   const site = pageUrl === null ? null : parseUrl(pageUrl);
   if (site !== null && from.origin === site.origin) {
@@ -325,11 +454,17 @@ function classifyReferrer(
   const assistant = labels.find((label) => ASSISTANTS.has(label));
   if (assistant !== undefined) return source('assistant', assistant);
 
+  // Les réseaux avant les moteurs pour la même raison : `youtube.com` n'est
+  // qu'un cas de plus du recouvrement — c'est un réseau, pas un moteur, alors
+  // même que Google l'opère et qu'on y cherche.
+  const network = labels.find((label) => SOCIAL.has(label));
+  if (network !== undefined) return source('social', network);
+
   const engine = labels.find((label) => SEARCH_ENGINES.has(label));
 
-  return engine === undefined
-    ? source('referral', host)
-    : source('search', engine);
+  // Le fourre-tout garde l'**hôte**, jamais `null` : c'est ce qui permet à
+  // l'onglet Referrers de le nommer alors même que sa nature ne dit rien.
+  return engine === undefined ? source('other', host) : source('search', engine);
 }
 
 /**

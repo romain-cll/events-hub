@@ -8,6 +8,10 @@
   "rootDir": ".",
   "testEnvironment": "node",
   "testRegex": ".e2e-spec.ts$",
+  "maxWorkers": 4,
+  "setupFiles": [
+    "<rootDir>/jest.setup.ts"
+  ],
   "transform": {
     "^.+\\.m?[tj]s$": "ts-jest"
   },

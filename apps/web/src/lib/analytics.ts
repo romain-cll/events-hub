@@ -2,16 +2,26 @@ import {
   analyticsSummarySchema,
   locationsPageSchema,
   sessionsPageSchema,
+  technologyPageSchema,
   type AnalyticsSummary,
   type LocationGrain,
   type LocationsPage,
   type SessionsPage,
+  type TechnologyGrain,
+  type TechnologyPage,
 } from '@events-hub/api-contract';
 import { queryOptions } from '@tanstack/react-query';
 
 import { apiJson } from './api';
 
-export type { AnalyticsSummary, LocationGrain, LocationsPage, SessionsPage };
+export type {
+  AnalyticsSummary,
+  LocationGrain,
+  LocationsPage,
+  SessionsPage,
+  TechnologyGrain,
+  TechnologyPage,
+};
 
 /**
  * Accès aux **deux** routes analytiques, et il n'y en a que deux.
@@ -288,6 +298,40 @@ export function locationsQuery(
       apiJson(
         `/v1/projects/${projectId}/analytics/locations?${params.toString()}`,
         locationsPageSchema,
+      ),
+  });
+}
+
+/**
+ * Le classement par technologie — navigateur, système, type d'appareil.
+ *
+ * Jumelle de `locationsQuery`, jusqu'à la structure de sa clé de cache : même
+ * route à un mot près, même double fermeture du grain au bord HTTP, et le même
+ * `limit` dans la clé pour la même raison — deux bornes différentes ne rendent
+ * pas la même liste.
+ *
+ * La route existait depuis le lot des User-Agents et n'était consommée par
+ * personne : la carte qui l'affiche arrive avec cette page.
+ */
+export function technologyQuery(
+  projectId: string,
+  days: Period,
+  offset = 0,
+  grain: TechnologyGrain = 'browser',
+  limit = 10,
+) {
+  const window = windowFor(days, offset);
+  const params = new URLSearchParams({ from: window.from, grain });
+
+  if (window.to) params.set('to', window.to);
+  params.set('limit', String(limit));
+
+  return queryOptions({
+    queryKey: ['analytics', projectId, 'technology', window, grain, limit],
+    queryFn: () =>
+      apiJson(
+        `/v1/projects/${projectId}/analytics/technology?${params.toString()}`,
+        technologyPageSchema,
       ),
   });
 }

@@ -1,17 +1,15 @@
 import type { INestApplication } from '@nestjs/common';
-import { Test, type TestingModule } from '@nestjs/testing';
 import { asc, eq } from 'drizzle-orm';
 import type { App } from 'supertest/types';
 
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { DRIZZLE, type DrizzleDatabase } from '../src/database/database.module';
 import { events, projects, sessions } from '../src/database/schema';
 import {
   SESSION_GAP_MS,
   SessionAssigner,
 } from '../src/sessions/session-assigner.service';
-import { createProject } from './fixtures';
+import { cleanupFixtures, createProject } from './fixtures';
+import { createTestApp } from './harness';
 
 /**
  * L'attribution de session à l'ingestion, éprouvée contre un vrai Postgres.
@@ -71,7 +69,7 @@ describe('SessionAssigner (e2e)', () => {
       await tx.insert(events).values({
         projectId,
         type: 'alpha',
-              source: 'browser',
+        source: 'browser',
         occurredAt,
         sessionId,
         attributes: { repere },
@@ -104,19 +102,14 @@ describe('SessionAssigner (e2e)', () => {
   };
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication({ bodyParser: false });
-    configureApp(app);
-    await app.init();
+    app = await createTestApp();
 
     db = app.get<DrizzleDatabase>(DRIZZLE);
     assigner = app.get(SessionAssigner);
   });
 
   afterAll(async () => {
+    await cleanupFixtures(db);
     await app.close();
   });
 
@@ -215,7 +208,7 @@ describe('SessionAssigner (e2e)', () => {
       await db.insert(events).values({
         projectId: autre.id,
         type: 'alpha',
-              source: 'browser',
+        source: 'browser',
         occurredAt: apres(60_000),
         sessionId: sessionVoisine.id,
       });

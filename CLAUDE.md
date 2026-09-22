@@ -44,6 +44,30 @@ les deux sens** avec son schéma de `packages/api-contract`. Ajouter un champ à
 réponse sans toucher le contrat ne compile pas, exprès : le contrat a dérivé quatre
 fois avant d'exister, et c'est ce qui l'empêche.
 
+`apps/api/test/harness.e2e-spec.ts` exige qu'une suite e2e démarre son application
+par `createTestApp()` (`test/harness.ts`) et jamais elle-même. La raison est dans
+ce fichier : supertest lie et ferme un port éphémère à **chaque requête** tant que
+le serveur n'écoute pas déjà, et ce cycle échoue de lui-même une fois sur
+~66 000 — en `Parse Error: Expected HTTP/`, sur une suite au hasard, jamais celle
+qui l'a causé. Une suite qui rebâtit le démarrage à la main déstabilise donc les
+autres, pas la sienne.
+
+Le même fichier exige la symétrique : une suite qui crée des fixtures appelle
+`cleanupFixtures(db)` (`test/fixtures.ts`). `organizations` n'a **aucune clé
+étrangère vers `users`** — supprimer un compte emporte son appartenance, jamais
+l'organisation que l'inscription lui a créée. Deux suites affirmaient le
+contraire en commentaire, et la base locale a atteint vingt-cinq mille
+organisations vides. Le coût n'est pas le volume : `slug` est unique, et une
+collision fait échouer une inscription en 500 dans un hook hors transaction, au
+milieu d'une suite qui ne parle pas d'organisations.
+
+La rétention tourne **seule**, en seconde passe (`test/jest-e2e.retention.js`).
+Non pas parce que `purge()` est globale — aucune fixture n'a plus de vingt-cinq
+mois, elle n'emporte rien — mais parce que ses assertions le sont : le verrou
+consultatif est pris au niveau du cluster, et la seconde passe affirme que la
+purge ne trouve plus rien **nulle part**. Les borner supprimerait la garantie en
+même temps que la contrainte.
+
 ## La frontière socle / métier
 
 Le **socle** — `core/`, `events/`, `event-types/`, `sessions/`, `privacy/`,
@@ -75,9 +99,17 @@ voyage dans `attributes` sous `sdk.version`.
   présentée à l'ingestion, jamais lu dans le payload. C'est ce qui le rend digne de
   confiance.
 - **`sessionId` à `null`** n'est pas une valeur manquante : c'est un événement
-  **sans visiteur** — un deploy, un paiement, une sonde. Les compteurs adossés à la
+  **sans visite** — un deploy, un paiement, une sonde. Les compteurs adossés à la
   session s'en filtrent structurellement (`COUNT DISTINCT` ignore les `NULL`, une
   jointure interne écarte ces lignes) : il n'y a **rien à filtrer à la main**.
+- **`visitorKey` à `null`** est l'autre question, et ce n'est pas la même : « pas de
+  visite » ne veut pas dire « pas de visiteur ». Un paiement rapporté par un serveur
+  désigne quelqu'un dont on connaît le parcours, des mois après sa dernière visite.
+  La colonne ne porte **que** l'identité durable, celle qui a été consentie —
+  jamais la clé dérivée du réseau, qui tourne chaque jour. Sans consentement, un
+  paiement n'est corrélable à rien, et c'est le cadre qui le veut.
+  `features/` n'a pas le droit de **nommer** cette clé : la corrélation passe par
+  `EventStore`.
 
 **La règle de rangement :** colonne = axe de corrélation **dérivé par le serveur** ;
 `jsonb` = charge utile **fournie par le client**, de forme dépendante du `type`. Les
