@@ -1,200 +1,75 @@
-Welcome to your new TanStack Start app!
+# `@events-hub/web`
 
-# Getting Started
+Le dashboard : TanStack Start + React + Tailwind + shadcn/ui. Sert sur
+**`:3002`**, parle à l'API sur `:3003`.
 
-To run this application:
+⚠️ **Ne pas lancer `pnpm dev` ici** si les serveurs tournent déjà sous turbo à la
+racine.
 
-```bash
-pnpm install
-pnpm dev
+**L'interface est en anglais.** Les commentaires et les discussions sont en
+français. Les écrans d'authentification encore en français sont une dette connue.
+
+## Commandes
+
+```sh
+pnpm dev               # vite dev --port 3002
+pnpm build             # -> .output/ (Nitro)
+pnpm preview
+pnpm generate-routes   # tsr generate — routeTree.gen.ts
+pnpm lint
+pnpm check-types       # tsr generate, puis tsc --noEmit
 ```
 
-# Building For Production
+`node .output/server/index.mjs` sert le build. `scripts/build-world-map.mjs`
+regénère les données du planisphère.
 
-To build this application for production:
+## Configuration
 
-```bash
-pnpm build
+Une seule variable, et elle est optionnelle :
+
+|                |                                                                                      |
+| -------------- | ------------------------------------------------------------------------------------ |
+| `VITE_API_URL` | base de l'API — ingestion, lecture, authentification. Défaut `http://localhost:3003` |
+
+Elle est déclarée dans `src/env.d.ts` et lue **une seule fois**, dans
+`src/lib/api.ts` (`API_URL`) ; `auth-client.ts` en dérive son `baseURL`. En
+ajouter une seconde définition laisserait un jour l'une pointer ailleurs que
+l'autre.
+
+## Les routes
+
+Le routage est par fichiers (`src/routes/`), `routeTree.gen.ts` est **généré** —
+ne pas l'éditer.
+
+```
+index.tsx                                   /
+auth/{login,signup}.tsx                     connexion, inscription
+_authed/projects/index.tsx                  la liste
+_authed/projects/$projectId/analytics.tsx   le tableau de bord
+_authed/projects/$projectId/events.tsx      l'explorateur d'événements
+_authed/projects/$projectId/setup.tsx       poser le snippet
+_authed/projects/$projectId/settings/…      projet, clés, membres, organisation, intégrations
+_authed/integrations/stripe/callback.tsx    le retour OAuth de Stripe
+_authed/invitations/$invitationId.tsx       accepter une invitation
 ```
 
-## Styling
+Le préfixe `_authed` porte la garde de session : la session vit dans le contexte
+du routeur, jamais dans un `useSession()`.
 
-This project uses [Tailwind CSS](https://tailwindcss.com/) for styling.
+## Design
 
-### Removing Tailwind CSS
+**Compact design** comme style de base, et le levier qui la porte est
+`--spacing: 0.22rem` dans `src/styles.css`. `--chart-1` vaut `--primary`
+volontairement. shadcn/ui, `components.json` à la racine de `apps/web`.
 
-If you prefer not to use Tailwind CSS:
+Pas de paragraphe explicatif sous une métrique : la nuance va dans la doc, pas
+sous le graphique.
 
-1. Remove the demo pages in `src/routes/demo/`
-2. Replace the Tailwind import in `src/styles.css` with your own styles
-3. Remove `tailwindcss()` from the plugins array in `vite.config.ts`
-4. Remove `@tailwindcss/vite` and `tailwindcss` from `package.json`
+## Où lire la suite
 
-## Deploy with Nitro
-
-This project uses Nitro as a generic server adapter, so it can run on any Node-compatible host.
-
-```bash
-npm run build
-node dist/server/index.mjs
-```
-
-The build output is a self-contained Node server. To deploy, push the `dist/` directory to your host (Render, Fly.io, your own VPS, etc.) and run the server command above.
-
-For host-specific presets (Vercel, Netlify, Cloudflare, AWS Lambda, etc.) and tuning, see https://v3.nitro.build/deploy.
-
-## Shadcn
-
-Add components using the latest version of [Shadcn](https://ui.shadcn.com/).
-
-```bash
-pnpm dlx shadcn@latest add button
-```
-
-## Routing
-
-This project uses [TanStack Router](https://tanstack.com/router) with file-based routing. Routes are managed as files in `src/routes`.
-
-### Adding A Route
-
-To add a new route to your application just add a new file in the `./src/routes` directory.
-
-TanStack will automatically generate the content of the route file for you.
-
-Now that you have two routes you can use a `Link` component to navigate between them.
-
-### Adding Links
-
-To use SPA (Single Page Application) navigation you will need to import the `Link` component from `@tanstack/react-router`.
-
-```tsx
-import { Link } from '@tanstack/react-router';
-```
-
-Then anywhere in your JSX you can use it like so:
-
-```tsx
-<Link to="/about">About</Link>
-```
-
-This will create a link that will navigate to the `/about` route.
-
-More information on the `Link` component can be found in the [Link documentation](https://tanstack.com/router/v1/docs/framework/react/api/router/linkComponent).
-
-### Using A Layout
-
-In the File Based Routing setup the layout is located in `src/routes/__root.tsx`. Anything you add to the root route will appear in all the routes. The route content will appear in the JSX where you render `{children}` in the `shellComponent`.
-
-Here is an example layout that includes a header:
-
-```tsx
-import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router';
-
-export const Route = createRootRoute({
-  head: () => ({
-    meta: [
-      { charSet: 'utf-8' },
-      { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'My App' },
-    ],
-  }),
-  shellComponent: ({ children }) => (
-    <html lang="en">
-      <head>
-        <HeadContent />
-      </head>
-      <body>
-        <header>
-          <nav>
-            <Link to="/">Home</Link>
-            <Link to="/about">About</Link>
-          </nav>
-        </header>
-        {children}
-        <Scripts />
-      </body>
-    </html>
-  ),
-});
-```
-
-More information on layouts can be found in the [Layouts documentation](https://tanstack.com/router/latest/docs/framework/react/guide/routing-concepts#layouts).
-
-## Server Functions
-
-TanStack Start provides server functions that allow you to write server-side code that seamlessly integrates with your client components.
-
-```tsx
-import { createServerFn } from '@tanstack/react-start';
-
-const getServerTime = createServerFn({
-  method: 'GET',
-}).handler(async () => {
-  return new Date().toISOString();
-});
-
-// Use in a component
-function MyComponent() {
-  const [time, setTime] = useState('');
-
-  useEffect(() => {
-    getServerTime().then(setTime);
-  }, []);
-
-  return <div>Server time: {time}</div>;
-}
-```
-
-## API Routes
-
-You can create API routes by using the `server` property in your route definitions:
-
-```tsx
-import { createFileRoute } from '@tanstack/react-router';
-import { json } from '@tanstack/react-start';
-
-export const Route = createFileRoute('/api/hello')({
-  server: {
-    handlers: {
-      GET: () => json({ message: 'Hello, World!' }),
-    },
-  },
-});
-```
-
-## Data Fetching
-
-There are multiple ways to fetch data in your application. You can use TanStack Query to fetch data from a server. But you can also use the `loader` functionality built into TanStack Router to load the data for a route before it's rendered.
-
-For example:
-
-```tsx
-import { createFileRoute } from '@tanstack/react-router';
-
-export const Route = createFileRoute('/people')({
-  loader: async () => {
-    const response = await fetch('https://swapi.dev/api/people');
-    return response.json();
-  },
-  component: PeopleComponent,
-});
-
-function PeopleComponent() {
-  const data = Route.useLoaderData();
-  return (
-    <ul>
-      {data.results.map((person) => (
-        <li key={person.name}>{person.name}</li>
-      ))}
-    </ul>
-  );
-}
-```
-
-Loaders simplify your data fetching logic dramatically. Check out more information in the [Loader documentation](https://tanstack.com/router/latest/docs/framework/react/guide/data-loading#loader-parameters).
-
-# Learn More
-
-You can learn more about all of the offerings from TanStack in the [TanStack documentation](https://tanstack.com).
-
-For TanStack Start specific documentation, visit [TanStack Start](https://tanstack.com/start).
+| Sujet                                           | Document                                                             |
+| ----------------------------------------------- | -------------------------------------------------------------------- |
+| Ce que la page audience × revenu doit porter    | [`docs/page-audience-revenu.md`](../../docs/page-audience-revenu.md) |
+| L'inventaire des croisements analytics × revenu | [`docs/croisements-revenu.md`](../../docs/croisements-revenu.md)     |
+| Mettre en ligne                                 | [`docs/deploiement.md`](../../docs/deploiement.md)                   |
+| Les invariants du dépôt                         | [`CLAUDE.md`](../../CLAUDE.md)                                       |

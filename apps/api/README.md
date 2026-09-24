@@ -1,98 +1,83 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# `@events-hub/api`
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+NestJS + Drizzle + Postgres. Ingère les événements, les stocke, les compte, et
+sert le dashboard. Écoute sur **`:3003`**.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+⚠️ **Ne pas lancer `pnpm dev` ici** si les serveurs tournent déjà sous turbo à la
+racine : un second démarrage échoue sur un port occupé ou, pire, en prend un
+autre en silence.
 
-## Description
+## Démarrer
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
-
-```bash
-$ pnpm install
+```sh
+cp .env.example .env     # puis renseigner DATABASE_URL et les deux secrets
+pnpm db:migrate
+pnpm dev
 ```
 
-## Compile and run the project
+`VISITOR_KEY_SECRET` et `BETTER_AUTH_SECRET` sont lues par `getOrThrow` :
+**l'API refuse de démarrer sans elles**. `openssl rand -hex 32` pour chacune.
+Les onze autres variables sont optionnelles, chacune commentée dans
+`.env.example`, et [`docs/deploiement.md`](../../docs/deploiement.md) dit ce que
+leur absence coûte en production.
 
-```bash
-# development
-$ pnpm run start
+## Commandes
 
-# watch mode
-$ pnpm run start:dev
+```sh
+pnpm dev             # nest start --watch
+pnpm build           # -> dist/
+pnpm start:prod      # node dist/main
 
-# production mode
-$ pnpm run start:prod
+pnpm test            # unitaires (jest)
+pnpm test:e2e        # e2e contre un vrai Postgres — voir plus bas
+pnpm lint
+pnpm check-types
+
+pnpm db:generate     # schéma modifié -> migration SQL dans drizzle/
+pnpm db:migrate
+pnpm db:check
+pnpm db:studio
+pnpm db:seed         # jeu de démonstration (scripts/seed-demo.mjs)
 ```
 
-## Run tests
+## Les tests e2e ont des règles, et elles sont testées
 
-```bash
-# unit tests
-$ pnpm run test
+`pnpm test:e2e` demande un **vrai Postgres** et tourne en **deux passes** :
+`test/jest-e2e.suites.js`, puis `test/jest-e2e.retention.js` seule. La rétention
+est isolée parce que ses assertions sont globales — elle affirme que la purge ne
+trouve plus rien nulle part, et le verrou consultatif est pris au niveau du
+cluster.
 
-# e2e tests
-$ pnpm run test:e2e
+`test/harness.e2e-spec.ts` fait échouer la suite si l'une de ces deux règles est
+enfreinte, et le fichier explique pourquoi :
 
-# test coverage
-$ pnpm run test:cov
-```
+- une suite démarre son application par **`createTestApp()`** (`test/harness.ts`),
+  jamais elle-même ;
+- une suite qui crée des fixtures appelle **`cleanupFixtures(db)`**
+  (`test/fixtures.ts`).
 
-## Deployment
+Compte de test local : `test@test.com` / `password`.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+## Ce qui casse le build, et ce n'est pas une préférence
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+`src/architecture.spec.ts` lit les sources et échoue sur la forme du code :
+hors de `features/`, aucun fichier ne nomme un type d'événement — pas même dans
+un commentaire —, ne compare un `type` à un littéral, ni n'indexe un
+comportement par lui. `@events-hub/api-contract` n'entre dans `src/` qu'en
+`import type`.
 
-```bash
-$ pnpm install -g @nestjs/mau
-$ mau deploy
-```
+`src/contract.spec.ts` vérifie que chaque forme de réponse coïncide **dans les
+deux sens** avec son schéma de `packages/api-contract`.
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+La frontière socle / métier, le modèle d'événement et les pièges de migration
+sont dans [`CLAUDE.md`](../../CLAUDE.md), à lire avant de toucher au socle.
 
-## Resources
+## Où lire la suite
 
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+| Sujet                                       | Document                                                               |
+| ------------------------------------------- | ---------------------------------------------------------------------- |
+| Mettre en ligne, configurer Stripe          | [`docs/deploiement.md`](../../docs/deploiement.md)                     |
+| Envoyer des événements                      | [`docs/ingestion.md`](../../docs/ingestion.md)                         |
+| Les webhooks Stripe                         | [`src/features/stripe/README.md`](src/features/stripe/README.md)       |
+| L'interprétation analytics                  | [`src/features/analytics/README.md`](src/features/analytics/README.md) |
+| Ce qui est collecté, et sous quel fondement | [`docs/privacy.md`](../../docs/privacy.md)                             |
