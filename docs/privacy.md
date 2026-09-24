@@ -8,7 +8,10 @@ Two things settle almost every question on this page:
 
 - **Nothing is read from or written to the visitor's device in the default mode.**
   No cookie, no local storage, nothing. That is what puts it outside Article 5(3)
-  of the ePrivacy Directive and Article 82 of the French Data Protection Act.
+  of the ePrivacy Directive and Article 82 of the French Data Protection Act. The
+  one exception proves it rather than weakening it: a visitor who *objects* gets a
+  cookie recording that refusal, which Article 5(3) exempts as strictly
+  necessary — see [the right to object](#the-right-to-object).
 - **The IP address and the browser identification string are never stored.** They
   enter the server, three coarse labels and a visitor key are derived from them,
   and they die with the request.
@@ -24,8 +27,8 @@ banner of its own.
 
 | | **Default** | **Consented** |
 |---|---|---|
-| Written on the device | nothing | `__Host-eh_vid` on the hub's domain, 13 months, plus a readable copy `eh_visitor_id` on yours |
-| Read from the device | nothing | that cookie |
+| Written on the device | nothing, unless the visitor objects | `__Host-eh_vid` on the hub's domain, 13 months, plus a readable copy `eh_visitor_id` on yours |
+| Read from the device | nothing, unless the visitor objected | that cookie |
 | How the visitor is identified | `HMAC(daily secret, project id + IP + User-Agent)` | `HMAC(master secret, project id + a random UUID we issued)` |
 | How long that identity lasts | until 00:00 UTC | 13 months from the day consent was given, never extended |
 | Recognised tomorrow | no | yes |
@@ -230,27 +233,39 @@ that is not enforced is worse than none, because it is a claim rather than a gap
 
 ## The right to object
 
-Article 21(1) makes objection to legitimate-interest processing unconditional. Two
-of the three paths are not shipped, and pretending otherwise would be the one
-mistake this document must not make.
+Article 21(1) makes objection to legitimate-interest processing unconditional. All
+five paths work today.
 
 | Path | Effect | Status |
 |---|---|---|
 | Removing the SDK for that visitor | nothing reaches the hub | works today |
 | `setConsent(false)` | the durable cookie and its copy are erased on that event; the visitor returns to the daily derived key | works today |
 | Clearing browser cookies | the durable identity is gone; a new one is only issued on a fresh consent | works today |
-| `Sec-GPC: 1` request header | intended: the event is discarded at ingestion, nothing written, `204` returned | **not implemented** |
-| `window.eventsHub.optOut()` | intended: the SDK stops emitting and remembers the choice on the device | **not implemented** |
+| `Sec-GPC: 1` request header | the event is discarded at ingestion, nothing written, nothing stored on the device, `204` returned | works today |
+| `window.eventsHub.optOut()` | the SDK stops its collectors and remembers the choice on the device | works today |
 
 Withdrawing consent is **not** the same as objecting: it returns a visitor to the
-default mode, it does not stop measurement. Until the two paths above ship, an
-objection in default mode has to be honoured by you — by not loading the script
-for that visitor.
+default mode, it does not stop measurement.
+
+`Sec-GPC` is honoured on the exact value `1` and nothing else — an absent, empty
+or `0` header does not say "I refuse", it says nothing, and treating any presence
+as a refusal would discard traffic on a malformed header. It sets **no cookie**:
+the browser resends the header on every request, so there is nothing to remember.
+A visitor who turns the signal off returns to the default mode immediately, which
+is the coherent outcome — they have just withdrawn what carried their refusal.
+
+`optOut()` stops the collectors and sends one last event carrying the decision;
+that event is discarded on arrival without being written, and it is what makes the
+refusal outlive the tab. `optIn()` reverses it, and deliberately does **not**
+restart the collectors — the site decides that, through `start()`.
 
 Note the small irony in `optOut()`: remembering a refusal means writing to the
 device. That write is permitted without consent precisely because it serves the
-visitor's own expressed choice, and it is why the marker will hold nothing but the
-refusal itself.
+visitor's own expressed choice — CNIL names the refusal cookie among the exempt
+trackers — and it is why the marker holds nothing but the refusal itself. The
+cookie is `__Host-eh_optout`, its value is `1`, it carries no identifier, and it
+lasts 13 months, refreshed on each event. An opt-out that told people apart would
+be the very tracker it exists to switch off.
 
 ## Retention
 

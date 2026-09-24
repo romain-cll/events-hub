@@ -11,6 +11,7 @@ only as the alternative that was weighed and set aside.
 | | |
 |---|---|
 | Assessed | 11 September 2026 |
+| Revised | 25 September 2026 — §3.5(6), §3.6, §4 and §5 re-run after the objection path shipped |
 | Controller | the publisher operating the site that loads the SDK |
 | Processor | events-hub |
 | Processing | audience measurement: counting visitors and visits, attributing them to a page, a source and a coarse location |
@@ -187,12 +188,17 @@ An assessment that finds no risk is not an assessment.
    query string, it is retained. The platform cannot filter what it is forbidden
    to read. *This is the controller's duty, and this document is where it is put
    in writing.*
-6. **The right to object is not mechanised.** Article 21(1) gives an unconditional
-   right to object to 6(1)(f) processing. Today, honouring it requires the
-   publisher to stop loading the script for that visitor — a manual path that does
-   not scale and that most visitors have no way to trigger. `Sec-GPC` handling and
-   an SDK `optOut()` are specified and **not implemented**. *This is the most
-   substantive weakness of the current state.*
+6. **The objection path is mechanised, but its reach depends on the publisher.**
+   Article 21(1) gives an unconditional right to object to 6(1)(f) processing, and
+   two mechanisms now honour it: `Sec-GPC: 1` is respected at ingestion — the
+   event is discarded, nothing is written, nothing is stored on the device — and
+   the SDK's `optOut()` stops collection and records the refusal in a cookie that
+   holds nothing but the refusal. Neither reaches every visitor on its own.
+   `Sec-GPC` depends on the browser, and most do not send it; `optOut()` only
+   reaches someone the publisher has given a link to click. *The remaining duty is
+   the publisher's: surface the objection link where a visitor will find it,
+   which in practice means the privacy policy. A mechanism nobody is told about
+   is not an accessible means of objecting.*
 7. **Retention is enforced, but it can be switched off per instance.** A purge
    runs daily at 03:15 UTC and applies the 25-month limit across the whole
    platform: expired visits are deleted with their events, and events that have no
@@ -239,8 +245,9 @@ The balance holds **on four conditions**:
 4. The site's own URLs do not reveal special-category data (§3.1).
 
 Condition 3 is met by the implementation and has to be verified per instance.
-**Condition 2 is not met today**: no mechanism exists that a visitor can
-trigger.
+**Condition 2 is met by the implementation** — `Sec-GPC` at ingestion and
+`optOut()` in the SDK — but only as far as the publisher carries it: the link that
+triggers `optOut()` has to be published somewhere a visitor will find it (§3.5(6)).
 
 ---
 
@@ -252,17 +259,18 @@ strong argument — the design is already the least intrusive one that answers t
 question — and the balancing test comes out in favour of the interest, given
 safeguards that are structural rather than promised.
 
-That conclusion is conditional, and one condition is open:
+The gap this assessment carried at its first writing — no mechanised objection
+path — is closed: `Sec-GPC` is honoured at ingestion and `optOut()` ships. What
+remains is not a gap in the platform but two duties the publisher discharges, and
+neither can be discharged for them:
 
-| Gap | Consequence while open | Closes when |
+| Duty | Why it cannot be structural | How it is discharged |
 |---|---|---|
-| No mechanised objection path | Article 21(1) is honoured only manually, by the publisher | `Sec-GPC` is honoured at ingestion and `optOut()` ships |
+| Publish the objection route | the platform cannot put a link in a privacy policy it does not control | an `optOut()` link, reachable from the privacy policy |
+| Verify the purge runs | `RETENTION_ENABLED=false` silences the schedule on any instance | check it on the instance actually in use |
 
-Until it closes, a publisher relying on this assessment should publish a
-contactable objection route and answer objections by removing the SDK for that
-visitor. It should also confirm, rather than assume, that the 25-month purge runs
-on the instance it uses — a declared retention period that nothing enforces is a
-claim, not a safeguard.
+A declared retention period that nothing enforces is a claim, not a safeguard, and
+an objection mechanism nobody is told about is not an accessible one.
 
 The ePrivacy question in §3.5(8) remains open regardless: a defensible position,
 not a zero-risk one. It is stated here rather than in a footnote because a DPO who
@@ -272,7 +280,8 @@ discovers it elsewhere is entitled to distrust everything above it.
 
 ## 5. When to re-run this
 
-- `Sec-GPC` or `optOut()` ships — condition 2 closes, rewrite §3.5(6) and §4.
+- The objection path changes — a mechanism is added, or one of the two stops
+  being honoured. Rewrite §3.5(6) and §4.
 - The retention period or its schedule changes, or an instance disables the
   purge.
 - Per-day random secrets replace the derived daily secret — §3.5(2) closes.
