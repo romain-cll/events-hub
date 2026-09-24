@@ -54,7 +54,7 @@ export function collectCampaign(): Campaign | undefined {
   // Rien à dire vaut mieux qu'un objet vide : le serveur distingue « pas de
   // campagne » de « campagne aux champs vides », et un objet toujours présent
   // effacerait cette distinction dès le fil.
-  return campaign.source ?? campaign.medium ?? campaign.name
+  return (campaign.source ?? campaign.medium ?? campaign.name)
     ? campaign
     : undefined;
 }

@@ -1,4 +1,11 @@
-import { index, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
 
 import { projects } from './projects';
 import { stripeSubscriptions } from './stripe-subscriptions';

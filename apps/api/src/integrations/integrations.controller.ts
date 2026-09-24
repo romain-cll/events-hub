@@ -11,11 +11,11 @@ import {
 import { z } from 'zod';
 
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
-import type {
-  Integration,
-  IntegrationProvider,
-} from '../database/schema';
-import { ProjectMemberGuard, ProjectRoles } from '../projects/project-member.guard';
+import type { Integration, IntegrationProvider } from '../database/schema';
+import {
+  ProjectMemberGuard,
+  ProjectRoles,
+} from '../projects/project-member.guard';
 import { IntegrationsService } from './integrations.service';
 import { StripeConnectService } from './stripe-connect.service';
 
@@ -121,7 +121,9 @@ export class IntegrationsController {
   ): Promise<PublicIntegration> {
     const account = await this.stripeConnect.exchange(projectId, code, state);
 
-    return publicOf(await this.integrations.connect(projectId, 'stripe', account));
+    return publicOf(
+      await this.integrations.connect(projectId, 'stripe', account),
+    );
   }
 
   /**

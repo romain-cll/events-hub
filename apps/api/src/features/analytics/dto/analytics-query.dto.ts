@@ -160,6 +160,4 @@ export const analyticsTechnologySchema = z
   });
 
 /** Requête de classement par technologie, validée et résolue. */
-export type AnalyticsTechnologyDto = z.output<
-  typeof analyticsTechnologySchema
->;
+export type AnalyticsTechnologyDto = z.output<typeof analyticsTechnologySchema>;

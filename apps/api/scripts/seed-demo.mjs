@@ -216,7 +216,12 @@ const SITE = 'https://seeded.example.com';
 
 /** Les pages d'arrivée, par canal : une campagne n'atterrit pas sur un billet. */
 const LANDINGS = {
-  campaign: ['/pricing', '/', '/lp/analytics-for-founders', '/lp/stripe-revenue'],
+  campaign: [
+    '/pricing',
+    '/',
+    '/lp/analytics-for-founders',
+    '/lp/stripe-revenue',
+  ],
   search: [
     '/',
     '/blog/attribution-without-cookies',
@@ -352,18 +357,22 @@ function trafficOf(dayIndex, launchDay) {
   const weekend = date.getUTCDay() === 0 || date.getUTCDay() === 6;
   const growth = 0.55 + (dayIndex / TRAFFIC_DAYS) * 0.9;
   const noise = 0.8 + rand() * 0.45;
-  const spike = dayIndex === launchDay ? 7 : dayIndex === launchDay + 1 ? 2.6 : 1;
+  const spike =
+    dayIndex === launchDay ? 7 : dayIndex === launchDay + 1 ? 2.6 : 1;
 
   return {
     date,
-    visits: Math.round(BASE_VISITS * growth * noise * (weekend ? 0.55 : 1) * spike),
+    visits: Math.round(
+      BASE_VISITS * growth * noise * (weekend ? 0.55 : 1) * spike,
+    ),
     isLaunch: dayIndex === launchDay || dayIndex === launchDay + 1,
   };
 }
 
 function landingFor(channel) {
   if (channel.campaign) return pick(LANDINGS.campaign);
-  if (['google', 'bing', 'ddg'].includes(channel.key)) return pick(LANDINGS.search);
+  if (['google', 'bing', 'ddg'].includes(channel.key))
+    return pick(LANDINGS.search);
   if (channel.key === 'direct') return pick(LANDINGS.direct);
 
   return pick(LANDINGS.social);
@@ -482,7 +491,9 @@ function visit(visitor, at, { first, converting, buying }) {
       visitorKey: eventVisitorKey,
       source: 'browser',
       attributes: { 'page.path': page },
-      properties: { 'leave.reason': index === path.length - 1 ? 'pagehide' : 'page_hidden' },
+      properties: {
+        'leave.reason': index === path.length - 1 ? 'pagehide' : 'page_hidden',
+      },
     });
 
     clock += between(1, 6) * 1000;
@@ -563,15 +574,20 @@ function buildTraffic() {
       // Un tiers des visites d'un jour sont des retours, quand il y a de quoi.
       if (returning.length > 40 && chance(0.3)) {
         const back = returning[Math.floor(rand() * returning.length)];
-        visit(back, at, { first: false, converting: back.converts, buying: false });
+        visit(back, at, {
+          first: false,
+          converting: back.converts,
+          buying: false,
+        });
         continue;
       }
 
       counter += 1;
       const isBot = chance(0.045);
-      const channel = isLaunch && chance(0.65)
-        ? CHANNELS.find((c) => c.key === 'producthunt')
-        : weighted(CHANNELS);
+      const channel =
+        isLaunch && chance(0.65)
+          ? CHANNELS.find((c) => c.key === 'producthunt')
+          : weighted(CHANNELS);
 
       const visitor = {
         id: `v_${String(counter).padStart(5, '0')}`,
@@ -584,7 +600,13 @@ function buildTraffic() {
         isBot,
         // Trois états, pas deux. `null` = jamais demandé : l'analytics est
         // exemptée, seul le croisement avec le revenu demande un cookie.
-        consent: isBot ? null : chance(0.7) ? true : chance(0.45) ? false : null,
+        consent: isBot
+          ? null
+          : chance(0.7)
+            ? true
+            : chance(0.45)
+              ? false
+              : null,
         firstSeen: at,
       };
 
@@ -603,7 +625,11 @@ function buildTraffic() {
       if (visitor.converts && !buying) {
         const later = new Date(at.getTime() + between(1, 12) * DAY);
         if (later < NOW) {
-          visit(visitor, later, { first: false, converting: true, buying: true });
+          visit(visitor, later, {
+            first: false,
+            converting: true,
+            buying: true,
+          });
         }
       }
     }
@@ -654,7 +680,11 @@ function buildStripe(visitors) {
     const linked = visitor && visitor.consent === true && chance(0.88);
 
     if (linked) {
-      rows.customers.push({ customerId, visitorId: visitor.id, learnedAt: startedAt });
+      rows.customers.push({
+        customerId,
+        visitorId: visitor.id,
+        learnedAt: startedAt,
+      });
     }
 
     return {
@@ -719,11 +749,16 @@ function buildStripe(visitors) {
       'stripe.event.type': 'charge.succeeded',
       'stripe.object.id': `ch_${randomUUID().replace(/-/g, '').slice(0, 22)}`,
     });
-    emit('stripe.payment_intent.succeeded', new Date(at.getTime() + 2000), customer, {
-      ...money,
-      'stripe.event.type': 'payment_intent.succeeded',
-      'stripe.object.id': `pi_${randomUUID().replace(/-/g, '').slice(0, 22)}`,
-    });
+    emit(
+      'stripe.payment_intent.succeeded',
+      new Date(at.getTime() + 2000),
+      customer,
+      {
+        ...money,
+        'stripe.event.type': 'payment_intent.succeeded',
+        'stripe.object.id': `pi_${randomUUID().replace(/-/g, '').slice(0, 22)}`,
+      },
+    );
   };
 
   const subscribe = (customer, { startedAt, endedAt, upgradeAt }) => {
@@ -731,10 +766,15 @@ function buildStripe(visitors) {
     const stripeId = `sub_${randomUUID().replace(/-/g, '').slice(0, 22)}`;
     let monthly = customer.plan.monthly;
 
-    emit('stripe.customer.created', new Date(startedAt.getTime() - 60_000), customer, {
-      'stripe.event.type': 'customer.created',
-      'stripe.object.id': customer.customerId,
-    });
+    emit(
+      'stripe.customer.created',
+      new Date(startedAt.getTime() - 60_000),
+      customer,
+      {
+        'stripe.event.type': 'customer.created',
+        'stripe.object.id': customer.customerId,
+      },
+    );
 
     invoice(customer, startedAt, monthly, 'subscription_create', stripeId);
     rows.revisions.push({
@@ -841,7 +881,9 @@ function buildStripe(visitors) {
   //    attribuables, et donc les seuls qui feront vivre la carte Acquisition.
   for (const visitor of paying) {
     const startedAt = new Date(
-      visitor.firstSeen.getTime() + between(0, 14) * DAY + between(1, 20) * 3_600_000,
+      visitor.firstSeen.getTime() +
+        between(0, 14) * DAY +
+        between(1, 20) * 3_600_000,
     );
     if (startedAt >= NOW) continue;
 
@@ -963,7 +1005,9 @@ async function main() {
       'stripe_customers',
       'integrations',
     ]) {
-      await client.query(`delete from ${table} where project_id = $1`, [projectId]);
+      await client.query(`delete from ${table} where project_id = $1`, [
+        projectId,
+      ]);
     }
 
     await client.query(
@@ -983,13 +1027,38 @@ async function main() {
     await chunked(
       client,
       'sessions',
-      ['id', 'project_id', 'visitor_key', 'started_at', 'country_code', 'region',
-       'city', 'browser', 'os', 'device_type', 'is_bot', 'campaign_source',
-       'campaign_medium', 'campaign_name', 'consent'],
+      [
+        'id',
+        'project_id',
+        'visitor_key',
+        'started_at',
+        'country_code',
+        'region',
+        'city',
+        'browser',
+        'os',
+        'device_type',
+        'is_bot',
+        'campaign_source',
+        'campaign_medium',
+        'campaign_name',
+        'consent',
+      ],
       rows.sessions.map((s) => [
-        s.id, projectId, s.visitorKey, s.startedAt, s.country, s.region, s.city,
-        s.browser, s.os, s.device, s.isBot,
-        s.campaign?.[0] ?? null, s.campaign?.[1] ?? null, s.campaign?.[2] ?? null,
+        s.id,
+        projectId,
+        s.visitorKey,
+        s.startedAt,
+        s.country,
+        s.region,
+        s.city,
+        s.browser,
+        s.os,
+        s.device,
+        s.isBot,
+        s.campaign?.[0] ?? null,
+        s.campaign?.[1] ?? null,
+        s.campaign?.[2] ?? null,
         s.consent,
       ]),
       15,
@@ -998,13 +1067,25 @@ async function main() {
     await chunked(
       client,
       'events',
-      ['project_id', 'type', 'occurred_at', 'attributes', 'properties', 'source',
-       'session_id', 'visitor_key'],
+      [
+        'project_id',
+        'type',
+        'occurred_at',
+        'attributes',
+        'properties',
+        'source',
+        'session_id',
+        'visitor_key',
+      ],
       rows.events.map((e) => [
-        projectId, e.type, e.occurredAt,
+        projectId,
+        e.type,
+        e.occurredAt,
         JSON.stringify(dropUndefined(e.attributes)),
         JSON.stringify(dropUndefined(e.properties)),
-        e.source, e.sessionId, e.visitorKey,
+        e.source,
+        e.sessionId,
+        e.visitorKey,
       ]),
       8,
     );
@@ -1013,20 +1094,49 @@ async function main() {
       client,
       'stripe_customers',
       ['project_id', 'customer_id', 'visitor_id', 'learned_at'],
-      rows.customers.map((c) => [projectId, c.customerId, c.visitorId, c.learnedAt]),
+      rows.customers.map((c) => [
+        projectId,
+        c.customerId,
+        c.visitorId,
+        c.learnedAt,
+      ]),
       4,
     );
 
     await chunked(
       client,
       'stripe_subscriptions',
-      ['id', 'project_id', 'stripe_id', 'customer_id', 'status', 'currency',
-       'created_at', 'start_date', 'cancel_at_period_end', 'canceled_at',
-       'ended_at', 'collection_method', 'livemode', 'observed_at'],
+      [
+        'id',
+        'project_id',
+        'stripe_id',
+        'customer_id',
+        'status',
+        'currency',
+        'created_at',
+        'start_date',
+        'cancel_at_period_end',
+        'canceled_at',
+        'ended_at',
+        'collection_method',
+        'livemode',
+        'observed_at',
+      ],
       rows.subscriptions.map((s) => [
-        s.id, projectId, s.stripeId, s.customerId, s.status, s.currency,
-        s.createdAt, s.startDate, false, s.canceledAt, s.endedAt,
-        s.collectionMethod, false, s.endedAt ?? NOW,
+        s.id,
+        projectId,
+        s.stripeId,
+        s.customerId,
+        s.status,
+        s.currency,
+        s.createdAt,
+        s.startDate,
+        false,
+        s.canceledAt,
+        s.endedAt,
+        s.collectionMethod,
+        false,
+        s.endedAt ?? NOW,
       ]),
       14,
     );
@@ -1034,11 +1144,23 @@ async function main() {
     await chunked(
       client,
       'stripe_subscription_revisions',
-      ['project_id', 'subscription_id', 'observed_at', 'currency',
-       'monthly_before', 'monthly_after', 'status'],
+      [
+        'project_id',
+        'subscription_id',
+        'observed_at',
+        'currency',
+        'monthly_before',
+        'monthly_after',
+        'status',
+      ],
       rows.revisions.map((r) => [
-        projectId, r.subscriptionId, r.observedAt, r.currency,
-        r.before, r.after, r.status,
+        projectId,
+        r.subscriptionId,
+        r.observedAt,
+        r.currency,
+        r.before,
+        r.after,
+        r.status,
       ]),
       7,
     );

@@ -19,10 +19,7 @@ import {
 import { ProjectKeysService } from '../projects/project-keys.service';
 import { Public } from '../auth/auth.decorators';
 import { decideOptOut } from './opt-out';
-import {
-  clearVisitorCookie,
-  decideVisitorCookie,
-} from './visitor-cookie';
+import { clearVisitorCookie, decideVisitorCookie } from './visitor-cookie';
 
 /**
  * L'événement écrit, sa visite, et l'identifiant durable du visiteur quand il

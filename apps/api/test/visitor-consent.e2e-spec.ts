@@ -302,9 +302,9 @@ describe('consentement et identité du visiteur (e2e)', () => {
     it('n’efface pas une réponse quand l’événement suivant se tait', async () => {
       const projet = await projetNeuf('e2e consentement — silence après oui');
 
-      const accepte = await post(
-        evenement(projet, { consent: true }),
-      ).expect(201);
+      const accepte = await post(evenement(projet, { consent: true })).expect(
+        201,
+      );
 
       // Un site qui ne câble le bandeau que sur sa page d'accueil envoie le
       // signal une fois, puis plus rien. L'absence n'est pas une rétractation.

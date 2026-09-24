@@ -158,7 +158,9 @@ export class StripeConnectService {
     } catch (error) {
       // Le détail va au journal, jamais à l'appelant : lui dire *pourquoi* la
       // signature est refusée l'aiderait à en fabriquer une valide.
-      this.logger.warn(`Signature de webhook Stripe refusée : ${String(error)}`);
+      this.logger.warn(
+        `Signature de webhook Stripe refusée : ${String(error)}`,
+      );
 
       throw new BadRequestException('Signature invalide.');
     }

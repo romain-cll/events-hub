@@ -56,7 +56,10 @@ export class SubscriptionStore {
       // existe encore : l'upsert juste en dessous le remplace, et Postgres ne
       // rend pas l'ancienne ligne d'un `ON CONFLICT`.
       const [existing] = await tx
-        .select({ id: stripeSubscriptions.id, status: stripeSubscriptions.status })
+        .select({
+          id: stripeSubscriptions.id,
+          status: stripeSubscriptions.status,
+        })
         .from(stripeSubscriptions)
         .where(
           and(
@@ -93,10 +96,16 @@ export class SubscriptionStore {
       // série.
       if (!row) return false;
 
-      await this.record(tx, projectId, row.id, { subscription, items }, {
-        status: existing?.status ?? null,
-        items: previous,
-      });
+      await this.record(
+        tx,
+        projectId,
+        row.id,
+        { subscription, items },
+        {
+          status: existing?.status ?? null,
+          items: previous,
+        },
+      );
 
       await tx
         .delete(stripeSubscriptionItems)

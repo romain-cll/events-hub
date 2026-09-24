@@ -33,8 +33,12 @@ describe('cohortsOf', () => {
   it('regroupe par mois UTC de première visite', () => {
     const { cohorts } = cohortsOf(
       [
-        client('2026-03-02T23:00:00.000Z', [['2026-03-02T23:30:00.000Z', null]]),
-        client('2026-03-31T23:59:00.000Z', [['2026-04-01T10:00:00.000Z', null]]),
+        client('2026-03-02T23:00:00.000Z', [
+          ['2026-03-02T23:30:00.000Z', null],
+        ]),
+        client('2026-03-31T23:59:00.000Z', [
+          ['2026-04-01T10:00:00.000Z', null],
+        ]),
         client('2026-04-01T00:00:00.000Z'),
       ],
       FENETRE,
@@ -43,17 +47,20 @@ describe('cohortsOf', () => {
     // Le 31 mars à 23h59 UTC est en mars, quelle que soit l'heure locale de qui
     // regarde. Le fuseau du lecteur est une décision d'affichage, et la prendre
     // ici ferait changer une cohorte selon le pays de qui ouvre la page.
-    expect(cohorts.map((cohorte) => [cohorte.month, cohorte.customers])).toEqual(
-      [
-        ['2026-03', 2],
-        ['2026-04', 1],
-        ['2026-05', 0],
-      ],
-    );
+    expect(
+      cohorts.map((cohorte) => [cohorte.month, cohorte.customers]),
+    ).toEqual([
+      ['2026-03', 2],
+      ['2026-04', 1],
+      ['2026-05', 0],
+    ]);
   });
 
   it('rend les mois vides plutôt que de les sauter', () => {
-    const { cohorts } = cohortsOf([client('2026-05-04T00:00:00.000Z')], FENETRE);
+    const { cohorts } = cohortsOf(
+      [client('2026-05-04T00:00:00.000Z')],
+      FENETRE,
+    );
 
     // Un axe de temps troué se lit comme un axe continu : sans mars et avril à
     // zéro, un mois sans acquisition passerait pour un mois qui n'a pas existé.
@@ -101,7 +108,11 @@ describe('cohortsOf', () => {
 
   it('ne mesure pas un mois qui n’est pas écoulé', () => {
     const { cohorts } = cohortsOf(
-      [client('2026-08-10T00:00:00.000Z', [['2026-08-10T00:00:00.000Z', null]])],
+      [
+        client('2026-08-10T00:00:00.000Z', [
+          ['2026-08-10T00:00:00.000Z', null],
+        ]),
+      ],
       {
         ...FENETRE,
         from: new Date('2026-08-01T00:00:00.000Z'),

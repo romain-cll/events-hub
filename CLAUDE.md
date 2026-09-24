@@ -28,7 +28,7 @@ créer un compte jetable qui laissera une organisation orpheline derrière lui.
 
 ## Les invariants qui cassent le build
 
-`apps/api/src/architecture.spec.ts` lit les sources et échoue sur la *forme* du
+`apps/api/src/architecture.spec.ts` lit les sources et échoue sur la _forme_ du
 code. Ce ne sont pas des préférences, ce sont des tests :
 
 - **Hors de `features/`, aucun fichier ne nomme un type d'événement** — pas même
@@ -71,7 +71,7 @@ même temps que la contrainte.
 ## La frontière socle / métier
 
 Le **socle** — `core/`, `events/`, `event-types/`, `sessions/`, `privacy/`,
-`geoip/` — ne sait pas ce qu'un type d'événement *signifie*. Il route, stocke,
+`geoip/` — ne sait pas ce qu'un type d'événement _signifie_. Il route, stocke,
 compte. Les **modules métier** (`features/`) sont les seuls à avoir le droit
 d'interpréter, et c'est leur travail.
 
@@ -122,7 +122,7 @@ Deux natures de clé : `eh_pk_` publique, stockée en clair, `Origin` vérifiée
 
 Drizzle : `pnpm --filter api db:generate`, puis `db:migrate`, puis `db:check`.
 
-`drizzle-kit generate` réclame un TTY quand une table perd une colonne *et* en gagne
+`drizzle-kit generate` réclame un TTY quand une table perd une colonne _et_ en gagne
 une autre dans la même génération — il demande s'il s'agit d'un renommage. **Scinder
 en deux générations** plutôt que forcer.
 

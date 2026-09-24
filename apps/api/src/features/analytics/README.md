@@ -338,15 +338,15 @@ Tout le reste reste réversible. Les définitions de ce document sont des lectur
 
 ### État d'implémentation
 
-| Étage                       | Fichier                                           | Branché                                                              |
-| --------------------------- | ------------------------------------------------- | -------------------------------------------------------------------- |
+| Étage                       | Fichier                                      | Branché                                                              |
+| --------------------------- | -------------------------------------------- | -------------------------------------------------------------------- |
 | Attribution de session      | `sessions/session-assigner.service.ts`       | oui — à chaque ingestion, dans la transaction d'écriture             |
 | Journal brut + `started_at` | `events/event-store.service.ts` → `events()` | oui                                                                  |
-| Repli en sessions           | `sessions.ts` → `sessionsOf()`                    | oui — seul point d'entrée du module                                  |
-| Lignes de session           | `analytics.service.ts` → `sessions()`             | `GET /v1/projects/:id/analytics/sessions` — une ligne par session    |
-| Pages / audience            | `analytics.service.ts` → `summarize()`            | `GET /v1/projects/:id/analytics` — quatre agrégats de période        |
-| Acquisition                 | `entry-source.ts` → `sourceOf()`                  | oui — une provenance par ligne, depuis l'étape 33                    |
-| Entrée de session           | `sessions.ts` → `Session.entry`                   | oui — consommée par `sourceOf()`, et `entry.path` sort avec la ligne |
+| Repli en sessions           | `sessions.ts` → `sessionsOf()`               | oui — seul point d'entrée du module                                  |
+| Lignes de session           | `analytics.service.ts` → `sessions()`        | `GET /v1/projects/:id/analytics/sessions` — une ligne par session    |
+| Pages / audience            | `analytics.service.ts` → `summarize()`       | `GET /v1/projects/:id/analytics` — quatre agrégats de période        |
+| Acquisition                 | `entry-source.ts` → `sourceOf()`             | oui — une provenance par ligne, depuis l'étape 33                    |
+| Entrée de session           | `sessions.ts` → `Session.entry`              | oui — consommée par `sourceOf()`, et `entry.path` sort avec la ligne |
 
 **Ce qui a été supprimé à l'étape 33**, et qui ne doit pas revenir sans qu'on ait redécidé :
 
@@ -385,9 +385,9 @@ La clé visiteur n'y est toujours pas, et n'y sera pas. Ce qui y est depuis, c'e
 
 **Ce qui rouvrira le calcul.** Un **mode à consentement**. Le jour où un bandeau recueille un accord explicite, une identité qui survit à la journée devient discutable — et avec elle l'attribution multi-touch, le retour visiteur, la rétention. Ce n'est pas cet alias qui le décidera : il est conçu pour ne rien pouvoir de tout ça.
 
-**Ce que `sessionId` faisait là, et pourquoi il est parti.** Il identifiait la session, de façon stable d'un appel à l'autre. À côté d'un alias tiré au hasard, il annulait le tirage : deux réponses se joignent par `sessionId`, et les alias se recollent par transitivité. Aucun lecteur ne le réclamait — une ligne *est* une session.
+**Ce que `sessionId` faisait là, et pourquoi il est parti.** Il identifiait la session, de façon stable d'un appel à l'autre. À côté d'un alias tiré au hasard, il annulait le tirage : deux réponses se joignent par `sessionId`, et les alias se recollent par transitivité. Aucun lecteur ne le réclamait — une ligne _est_ une session.
 
-À dire honnêtement plutôt qu'à survendre : retirer `sessionId` retire l'identifiant *explicite et stable*, celui qu'un client serait tenté de persister. Ça ne rend pas la corrélation entre deux réponses impossible — `startedAt` et `endedAt` forment une clé naturelle quasi unique. Ce qui est empêché, c'est le rapprochement délibéré et facile ; ce n'est pas une garantie cryptographique, et ça ne se présente pas comme telle.
+À dire honnêtement plutôt qu'à survendre : retirer `sessionId` retire l'identifiant _explicite et stable_, celui qu'un client serait tenté de persister. Ça ne rend pas la corrélation entre deux réponses impossible — `startedAt` et `endedAt` forment une clé naturelle quasi unique. Ce qui est empêché, c'est le rapprochement délibéré et facile ; ce n'est pas une garantie cryptographique, et ça ne se présente pas comme telle.
 
 **Ce qui n'est pas borné : le nombre de lignes.** C'est le vrai coût du modèle, et la fenêtre est le seul garde-fou. Le jour où ça mord, ce sera une pagination — un paramètre de la même route, pas une seconde route.
 
@@ -490,7 +490,7 @@ poser un.
 publié sans son taux : le dénominateur dépend de la question. Rapporté aux
 visites qui ont répondu, le chiffre mesure la performance du bandeau ; rapporté à
 toutes les visites, il mesure la couverture de l'attribution. Les deux sont
-légitimes, aucun n'est *le* taux de consentement.
+légitimes, aucun n'est _le_ taux de consentement.
 
 **La valeur retenue est le dernier signal connu**, pas celui de l'ouverture — à
 l'inverse de la position, du client et de la campagne. Le bandeau se répond à la

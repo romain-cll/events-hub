@@ -69,7 +69,9 @@ function fakeDb({ updateFails }: { updateFails: boolean }) {
       }),
       delete: del,
       select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
-      query: { stripeCustomers: { findFirst: () => Promise.resolve(undefined) } },
+      query: {
+        stripeCustomers: { findFirst: () => Promise.resolve(undefined) },
+      },
     } as unknown as DrizzleDatabase,
   };
 }

@@ -205,12 +205,7 @@ const SOCIAL = new Set([
  * L'acquisition, c'est `direct + search + assistant + social + other`.
  */
 export type SourceKind =
-  | 'direct'
-  | 'search'
-  | 'assistant'
-  | 'social'
-  | 'other'
-  | 'internal';
+  'direct' | 'search' | 'assistant' | 'social' | 'other' | 'internal';
 
 /**
  * Ce qu'on sait d'une provenance nommée : comment elle s'écrit, et quel domaine
@@ -464,7 +459,9 @@ export function classifyReferrer(
 
   // Le fourre-tout garde l'**hôte**, jamais `null` : c'est ce qui permet à
   // l'onglet Referrers de le nommer alors même que sa nature ne dit rien.
-  return engine === undefined ? source('other', host) : source('search', engine);
+  return engine === undefined
+    ? source('other', host)
+    : source('search', engine);
 }
 
 /**

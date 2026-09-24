@@ -65,7 +65,7 @@ export function normalizeCampaign(
 
   // Les trois vides valent « pas de campagne » : écrire trois `NULL` en base
   // plutôt qu'une ligne qui prétend en porter une.
-  return campaign.source ?? campaign.medium ?? campaign.name
+  return (campaign.source ?? campaign.medium ?? campaign.name)
     ? campaign
     : null;
 }

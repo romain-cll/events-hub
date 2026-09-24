@@ -31,7 +31,9 @@ function instant(seconds: number | null | undefined): Date | null {
 }
 
 /** L'identifiant d'un champ qui peut arriver étendu ou en simple référence. */
-function idOf(value: string | { id: string } | null | undefined): string | null {
+function idOf(
+  value: string | { id: string } | null | undefined,
+): string | null {
   if (value == null) return null;
 
   return typeof value === 'string' ? value : value.id;

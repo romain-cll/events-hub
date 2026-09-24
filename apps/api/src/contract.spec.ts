@@ -170,7 +170,9 @@ export type RevenueAttributionPageConforms = Assert<
 export type RevenueSeriesPageConforms = Assert<
   Conforms<Wire<RevenueSeriesPage>, WireRevenueSeriesPage>
 >;
-export type SyncReportConforms = Assert<Conforms<Wire<SyncReport>, WireSyncReport>>;
+export type SyncReportConforms = Assert<
+  Conforms<Wire<SyncReport>, WireSyncReport>
+>;
 export type CohortsPageConforms = Assert<
   Conforms<Wire<CohortsPage>, WireCohortsPage>
 >;

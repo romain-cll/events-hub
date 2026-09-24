@@ -82,9 +82,9 @@ describe('StripeConnectService — le state', () => {
       STRIPE_CONNECT_SCOPE: 'read_write',
     });
 
-    expect(
-      new URL(large.authorizeUrl(PROJECT)).searchParams.get('scope'),
-    ).toBe('read_write');
+    expect(new URL(large.authorizeUrl(PROJECT)).searchParams.get('scope')).toBe(
+      'read_write',
+    );
   });
 
   it('refuse une portée qu’on ne sait pas demander, au démarrage', () => {
@@ -121,7 +121,11 @@ describe('StripeConnectService — le state', () => {
 
     // L'expiration est dans la charge signée : la déplacer casse la signature.
     await expect(
-      service.exchange(PROJECT, 'ac_code', `${projectId}.${plusTard}.${signature}`),
+      service.exchange(
+        PROJECT,
+        'ac_code',
+        `${projectId}.${plusTard}.${signature}`,
+      ),
     ).rejects.toThrow(/invalide/);
   });
 

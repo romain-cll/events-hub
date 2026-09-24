@@ -178,7 +178,7 @@ describe('Analytics', () => {
   // Le critère de sortie de l'étape, en un test : trois pages vues sous une
   // seule présence, une perte quand l'onglet passe derrière, puis une nouvelle
   // présence qui se termine par un clic sortant.
-  it("décrit une présence par perte de présence, pas une par page vue", async () => {
+  it('décrit une présence par perte de présence, pas une par page vue', async () => {
     document.body.innerHTML =
       '<a id="sortie" href="https://autre.test/article">Lire la suite</a>';
     start();
@@ -209,7 +209,7 @@ describe('Analytics', () => {
 
   // Naviguer dans le site n'est pas partir. Sans cette garantie, le temps actif
   // se découperait en un fragment par page et ne mesurerait plus rien.
-  it("ne perd jamais la présence sur une navigation SPA", async () => {
+  it('ne perd jamais la présence sur une navigation SPA', async () => {
     start();
 
     window.history.pushState(null, '', '/a');
@@ -228,7 +228,7 @@ describe('Analytics', () => {
   // présence n'en est pas un. Émettre ici serait faux deux fois — on
   // inventerait une sortie, et le drapeau avalerait la vraie quand elle
   // viendrait.
-  it("ne perd pas la présence sur un lien sortant qui ouvre ailleurs", async () => {
+  it('ne perd pas la présence sur un lien sortant qui ouvre ailleurs', async () => {
     document.body.innerHTML = `
       <a id="onglet" href="https://autre.test/a" target="_blank">Onglet</a>
       <a id="fichier" href="https://autre.test/f.pdf" download>PDF</a>
@@ -250,7 +250,7 @@ describe('Analytics', () => {
   // La frontière du contrat : `leave.reason` décrit l'événement, il n'est pas
   // du contexte navigateur. Le jour où il glisserait dans `attributes`, il
   // prétendrait valoir la même chose sur tous les événements — ce qui est faux.
-  it("pose leave.reason dans properties et jamais dans attributes", async () => {
+  it('pose leave.reason dans properties et jamais dans attributes', async () => {
     start();
     setVisibility('hidden');
 

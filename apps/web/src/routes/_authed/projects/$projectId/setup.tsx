@@ -25,12 +25,7 @@ import {
   InputGroupInput,
 } from '#/components/ui/input-group';
 import { Skeleton } from '#/components/ui/skeleton';
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from '#/components/ui/tabs';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/components/ui/tabs';
 import { INGESTION_ENDPOINT, SDK_SCRIPT_URL } from '#/lib/api';
 import {
   activeKey,
@@ -232,78 +227,86 @@ function Setup() {
                 </Empty>
               ) : (
                 <>
-          <Card>
-            <CardHeader>
-              <CardTitle>Your API key</CardTitle>
-              <CardDescription>
-                It ships in your bundle and anyone can read it — that is its
-                job. It names a project, it opens nothing.
-              </CardDescription>
-            </CardHeader>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Your API key</CardTitle>
+                      <CardDescription>
+                        It ships in your bundle and anyone can read it — that is
+                        its job. It names a project, it opens nothing.
+                      </CardDescription>
+                    </CardHeader>
 
-            <CardContent className="flex flex-col gap-3">
-              <InputGroup>
-                <InputGroupInput
-                  readOnly
-                  value={key.value}
-                  aria-label="API key"
-                  onFocus={(event) => {
-                    event.currentTarget.select();
-                  }}
-                />
-                <InputGroupAddon align="inline-end">
-                  <CopyButton value={key.value} label="Copy the API key" />
-                </InputGroupAddon>
-              </InputGroup>
+                    <CardContent className="flex flex-col gap-3">
+                      <InputGroup>
+                        <InputGroupInput
+                          readOnly
+                          value={key.value}
+                          aria-label="API key"
+                          onFocus={(event) => {
+                            event.currentTarget.select();
+                          }}
+                        />
+                        <InputGroupAddon align="inline-end">
+                          <CopyButton
+                            value={key.value}
+                            label="Copy the API key"
+                          />
+                        </InputGroupAddon>
+                      </InputGroup>
 
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="text-muted-foreground">
-                  Accepted from{key.allowedOrigins.length > 1 ? ':' : ''}
-                </span>
-                {key.allowedOrigins.map((origin) => (
-                  <Badge key={origin} variant="outline">
-                    {origin}
-                  </Badge>
-                ))}
-              </div>
+                      <div className="flex flex-wrap items-center gap-2 text-sm">
+                        <span className="text-muted-foreground">
+                          Accepted from
+                          {key.allowedOrigins.length > 1 ? ':' : ''}
+                        </span>
+                        {key.allowedOrigins.map((origin) => (
+                          <Badge key={origin} variant="outline">
+                            {origin}
+                          </Badge>
+                        ))}
+                      </div>
 
-              {/*
+                      {/*
                 Dit ici plutôt qu'omis : une origine non déclarée ne produit
                 aucune erreur visible — l'API répond 204 et n'écrit rien. C'est
                 exactement le genre de silence qui fait chercher le bug dans le
                 snippet pendant une heure.
               */}
-              <p className="text-muted-foreground text-sm">
-                Events sent from anywhere else are dropped silently, with no
-                error on your side.
-              </p>
-            </CardContent>
-          </Card>
+                      <p className="text-muted-foreground text-sm">
+                        Events sent from anywhere else are dropped silently,
+                        with no error on your side.
+                      </p>
+                    </CardContent>
+                  </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Add it to your site</CardTitle>
-              <CardDescription>
-                Paste this into your <code>&lt;head&gt;</code>, on every page
-                you want to measure. Nothing to install, nothing to configure —
-                your key is already in it.
-              </CardDescription>
-            </CardHeader>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Add it to your site</CardTitle>
+                      <CardDescription>
+                        Paste this into your <code>&lt;head&gt;</code>, on every
+                        page you want to measure. Nothing to install, nothing to
+                        configure — your key is already in it.
+                      </CardDescription>
+                    </CardHeader>
 
-            <CardContent className="flex flex-col gap-5">
-              <Snippet
-                code={scriptTagFor(key.value)}
-                label="Copy the script tag"
-                wrap
-              />
+                    <CardContent className="flex flex-col gap-5">
+                      <Snippet
+                        code={scriptTagFor(key.value)}
+                        label="Copy the script tag"
+                        wrap
+                      />
 
-              <p className="text-muted-foreground text-sm">
-                It collects page views, clicks, form submits, outbound clicks
-                and page leaves on its own. For your own events, call{' '}
-                <code>window.eventsHub.track(&apos;signed_up&apos;)</code>.
-              </p>
+                      <p className="text-muted-foreground text-sm">
+                        It collects page views, clicks, form submits, outbound
+                        clicks and page leaves on its own. For your own events,
+                        call{' '}
+                        <code>
+                          window.eventsHub.track(&apos;signed_up&apos;)
+                        </code>
+                        .
+                      </p>
 
-              {/*
+                      {/*
                 Replié, mais présent. Le paquet npm est le bon chemin pour une
                 application qui a déjà un bundler — le SDK y est typé, et il
                 n'y a pas de requête réseau de plus au chargement. Ce n'est
@@ -311,28 +314,27 @@ function Setup() {
                 niveau que la balise ferait hésiter là où il n'y a pas à
                 hésiter.
               */}
-              <details className="group">
-                <summary className="text-muted-foreground hover:text-foreground cursor-pointer text-sm select-none">
-                  Using a bundler? Install the package instead
-                </summary>
+                      <details className="group">
+                        <summary className="text-muted-foreground hover:text-foreground cursor-pointer text-sm select-none">
+                          Using a bundler? Install the package instead
+                        </summary>
 
-                <div className="mt-4 flex flex-col gap-4">
-                  <Snippet
-                    code="pnpm add @events-hub/sdk"
-                    label="Copy the install command"
-                    caption="Install"
-                  />
+                        <div className="mt-4 flex flex-col gap-4">
+                          <Snippet
+                            code="pnpm add @events-hub/sdk"
+                            label="Copy the install command"
+                            caption="Install"
+                          />
 
-                  <Snippet
-                    code={moduleSnippetFor(key.value)}
-                    label="Copy the module snippet"
-                    caption="Start collecting"
-                  />
-                </div>
-              </details>
-
-            </CardContent>
-          </Card>
+                          <Snippet
+                            code={moduleSnippetFor(key.value)}
+                            label="Copy the module snippet"
+                            caption="Start collecting"
+                          />
+                        </div>
+                      </details>
+                    </CardContent>
+                  </Card>
                 </>
               )}
             </TabsContent>
@@ -406,8 +408,8 @@ function ServerSetup({
       <CardContent className="flex flex-col gap-5">
         {serverKey ? (
           <p className="text-muted-foreground text-sm">
-            Put your server key in <code>EVENTS_HUB_KEY</code>. This project&apos;s
-            most recent one is{' '}
+            Put your server key in <code>EVENTS_HUB_KEY</code>. This
+            project&apos;s most recent one is{' '}
             <Badge variant="outline">{serverKey.name ?? 'unnamed'}</Badge> — if
             you no longer have its value, create a replacement and revoke it.
           </p>
@@ -418,8 +420,8 @@ function ServerSetup({
           */
           <div className="flex flex-col items-start gap-3">
             <p className="text-muted-foreground text-sm">
-              This project has no server key yet. Create one first — you will see
-              its value once, and never again.
+              This project has no server key yet. Create one first — you will
+              see its value once, and never again.
             </p>
 
             <Button asChild variant="outline" size="sm">
