@@ -77,7 +77,7 @@ export interface AnalyticsOptions {
    * côté hub, dans les réglages du projet.
    */
   apiKey: string;
-  /** URL complète de la route d'ingestion, ex. `http://localhost:3001/v1/events`. */
+  /** URL complète de la route d'ingestion, ex. `http://localhost:3003/v1/events`. */
   endpoint: string;
   /**
    * Appelé quand l'envoi d'un événement **collecté** échoue.
