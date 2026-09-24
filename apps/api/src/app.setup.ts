@@ -36,7 +36,7 @@ export function configureApp(app: INestApplication): void {
   const auth = app.get<Auth>(AUTH);
   const config = app.get(ConfigService);
   const server = app.getHttpAdapter().getInstance() as Express;
-  const webUrl = config.get<string>('WEB_URL') ?? 'http://localhost:3000';
+  const webUrl = config.get<string>('WEB_URL') ?? 'http://localhost:3002';
 
   // ## `trust proxy` : un nombre de sauts, jamais `true`
   //
