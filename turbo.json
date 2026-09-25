@@ -5,6 +5,15 @@
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      // Vite **inline** `VITE_API_URL` dans le bundle : c'est une entrée du
+      // build, pas une variable d'exécution. Non déclarée, turbo la retire de
+      // l'environnement de la tâche — le dashboard partait alors en production
+      // avec l'adresse de repli `localhost:3003`, sans que rien ne le signale.
+      //
+      // La déclarer la fait aussi entrer dans la clé de cache, ce qui est le
+      // vrai correctif : deux valeurs différentes doivent produire deux builds
+      // différents, au lieu de rejouer celui de l'autre environnement.
+      "env": ["VITE_API_URL"],
       "outputs": ["dist/**", ".output/**"]
     },
     "lint": {
