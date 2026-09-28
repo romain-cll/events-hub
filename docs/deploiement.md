@@ -21,6 +21,26 @@ fait silencieusement pour les autres.
 `GET /` sur l'API est la sonde de disponibilité — publique exprès, une sonde qui
 doit s'authentifier ne sonde plus rien.
 
+## La version de Node n'est pas un détail
+
+**Node 24 au minimum**, et `engines.node` du `package.json` racine le déclare.
+
+Ce n'est pas une préférence : `packageManager` épingle pnpm 11.22, qui exige
+Node ≥ 22.13 et charge `node:sqlite` — un module natif apparu en Node 22. Sous
+cette version, l'installation ne dégrade pas, elle **échoue** sur
+`ERR_UNKNOWN_BUILTIN_MODULE: No such built-in module: node:sqlite`, avant même
+d'avoir lu une dépendance.
+
+Le piège est qu'une plage large se résout vers le bas. `">=20"` a longtemps été
+écrit là, et un constructeur qui lit cette plage a le droit d'installer Node 20 —
+c'est exactement ce qu'a fait Railpack, et le déploiement a cassé à l'install.
+La plage déclarée doit donc être celle sur laquelle le projet tourne vraiment,
+pas la plus permissive qu'on puisse imaginer.
+
+Si le constructeur choisit quand même mal, la plupart offrent une variable pour
+forcer la main — `RAILPACK_NODE_VERSION=24` chez Railpack, qui prime sur
+`engines`.
+
 ## Les variables, et ce que leur absence coûte
 
 ### Les trois sans lesquelles rien ne tourne
