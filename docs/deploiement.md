@@ -65,15 +65,47 @@ casser — c'est l'arbitrage assumé du projet.
 
 ### Celles qui changent le comportement en silence
 
-| Variable            | Défaut                  | Ce que ça coûte de la laisser au défaut                                                                                                                                                                |
-| ------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `PORT`              | `3003`                  | —                                                                                                                                                                                                      |
-| `WEB_URL`           | `http://localhost:3002` | **la seule origine à laquelle l'API accepte d'envoyer des cookies.** Fausse en production, le dashboard reçoit des 401 sur ses propres données. L'ingestion, elle, reste ouverte à toutes les origines |
-| `API_URL`           | `http://localhost:3003` | Better Auth s'en sert pour construire les liens qu'il met dans les emails : faux, les liens d'invitation pointent sur localhost                                                                        |
-| `DATABASE_POOL_MAX` | `10`                    | ce qui doit tenir sous le `max_connections` du serveur est le **produit** par le nombre d'instances — deux API derrière un répartiteur, c'est vingt                                                    |
-| `TRUST_PROXY_HOPS`  | `0`                     | voir ci-dessous — c'est le réglage le plus dangereux du fichier                                                                                                                                        |
-| `GEOIP_DB_PATH`     | —                       | la géolocalisation est simplement désactivée : l'API démarre et ingère, les sessions n'ont pas de pays                                                                                                 |
-| `RETENTION_ENABLED` | `true`                  | voir ci-dessous                                                                                                                                                                                        |
+| Variable             | Défaut                  | Ce que ça coûte de la laisser au défaut                                                                                                                                                                |
+| -------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PORT`               | `3003`                  | —                                                                                                                                                                                                      |
+| `WEB_URL`            | `http://localhost:3002` | **la seule origine à laquelle l'API accepte d'envoyer des cookies.** Fausse en production, le dashboard reçoit des 401 sur ses propres données. L'ingestion, elle, reste ouverte à toutes les origines |
+| `API_URL`            | `http://localhost:3003` | Better Auth s'en sert pour construire les liens qu'il met dans les emails : faux, les liens d'invitation pointent sur localhost                                                                        |
+| `DATABASE_POOL_MAX`  | `10`                    | ce qui doit tenir sous le `max_connections` du serveur est le **produit** par le nombre d'instances — deux API derrière un répartiteur, c'est vingt                                                    |
+| `AUTH_COOKIE_DOMAIN` | —                       | voir ci-dessous — sans elle, déconnexion à chaque rafraîchissement dès que le dashboard et l'API sont sur deux hôtes                                                                                   |
+| `TRUST_PROXY_HOPS`   | `0`                     | voir ci-dessous — c'est le réglage le plus dangereux du fichier                                                                                                                                        |
+| `GEOIP_DB_PATH`      | —                       | la géolocalisation est simplement désactivée : l'API démarre et ingère, les sessions n'ont pas de pays                                                                                                 |
+| `RETENTION_ENABLED`  | `true`                  | voir ci-dessous                                                                                                                                                                                        |
+
+### `AUTH_COOKIE_DOMAIN`, ou la déconnexion au rafraîchissement
+
+Better Auth tourne **dans l'API** et pose donc son cookie de session sur l'hôte
+de l'API. En local ça ne se voit pas : `localhost:3002` et `localhost:3003`
+partagent le même bocal, **les cookies ignorent le port**. Sur deux hôtes, non.
+
+Le rendu serveur du dashboard n'a pas de bocal à cookies : il recopie l'en-tête
+`Cookie` de la requête entrante. Or le navigateur n'envoie à l'hôte du dashboard
+que les cookies de cet hôte-là — celui de la session, posé par l'API, n'en fait
+pas partie. Le SSR conclut que personne n'est connecté et renvoie sur `/login`.
+
+D'où le symptôme, qui a l'air d'un bug de session et n'en est pas un : **on est
+déconnecté à chaque rafraîchissement**, alors que la navigation cliquée marche —
+elle ne repasse pas par le serveur.
+
+La valeur est le plus proche ancêtre commun des deux hôtes, sans point devant :
+
+| Dashboard         | API                   | `AUTH_COOKIE_DOMAIN`         |
+| ----------------- | --------------------- | ---------------------------- |
+| `hub.exemple.com` | `api.hub.exemple.com` | `hub.exemple.com`            |
+| `app.exemple.com` | `api.exemple.com`     | `exemple.com`                |
+| `exemple.com`     | `exemple.com/api`     | — inutile, une seule origine |
+
+⚠️ Jamais un suffixe public : `com`, `co.uk` et consorts sont refusés par le
+navigateur **en silence** — le cookie n'est pas posé, et le symptôme ne change
+pas. C'est pour ça que la variable est explicite plutôt que déduite des deux
+URL : la déduction demanderait la liste des suffixes publics pour être sûre.
+
+`SameSite` reste à `lax`, et c'est suffisant : deux hôtes qui partagent un
+domaine enregistrable sont _same-site_, la restriction ne les vise pas.
 
 ### `TRUST_PROXY_HOPS`, et pourquoi jamais `true`
 

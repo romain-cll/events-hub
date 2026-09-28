@@ -86,6 +86,7 @@ function slugify(name: string): string {
 export function createAuth(db: DrizzleDatabase, config: ConfigService) {
   const webUrl = config.get<string>('WEB_URL') ?? 'http://localhost:3002';
   const apiUrl = config.get<string>('API_URL') ?? 'http://localhost:3003';
+  const cookieDomain = config.get<string>('AUTH_COOKIE_DOMAIN');
 
   return betterAuth({
     database: drizzleAdapter(db, { provider: 'pg', schema }),
@@ -93,7 +94,46 @@ export function createAuth(db: DrizzleDatabase, config: ConfigService) {
     basePath: '/v1/auth',
     secret: config.getOrThrow<string>('BETTER_AUTH_SECRET'),
     trustedOrigins: [webUrl],
-    advanced: { database: { generateId: 'uuid' } },
+    /**
+     * ## Le cookie de session doit être visible du dashboard, pas seulement de l'API
+     *
+     * Better Auth tourne **dans l'API** et pose donc ses cookies sur l'hôte de
+     * l'API. En local ça ne se voit pas : `localhost:3002` et `localhost:3003`
+     * partagent le même bocal, **les cookies ignorent le port**. Déployés sur
+     * deux hôtes, non — et c'est au rafraîchissement que ça se paie.
+     *
+     * Le rendu serveur de Start n'a pas de bocal : il recopie l'en-tête
+     * `Cookie` de la requête entrante (`forwarded-cookies.ts`). Or le navigateur
+     * n'envoie à l'hôte du dashboard que les cookies de cet hôte-là. Sans
+     * attribut `Domain`, celui de la session n'en fait pas partie : le SSR voit
+     * un visiteur déconnecté et renvoie sur `/login`. La navigation cliquée,
+     * elle, marche — elle ne repasse pas par le serveur, d'où un symptôme qui
+     * n'apparaît qu'au rafraîchissement.
+     *
+     * ## Pourquoi une variable, et pas une déduction
+     *
+     * Parce que la bonne valeur est le **plus proche ancêtre commun** des deux
+     * hôtes, et qu'aucune règle syntaxique ne le donne : la déduire demanderait
+     * la liste des suffixes publics, sans quoi on finirait par poser un cookie
+     * sur `co.uk`. C'est un fait du déploiement, au même titre que
+     * `TRUST_PROXY_HOPS` — l'exploitant le sait, le code ne peut que le deviner.
+     *
+     * Absente, rien ne change : pas d'attribut `Domain`, donc le comportement
+     * du poste de développement et celui d'un déploiement à origine unique.
+     *
+     * ⚠️ Ne pas la confondre avec le défaut de Better Auth : `enabled` sans
+     * `domain` retombe sur le hostname du `baseURL`, donc sur l'hôte de l'API —
+     * exactement ce qui ne couvre pas le dashboard.
+     *
+     * `sameSite` reste à `lax`, et c'est suffisant : deux hôtes qui partagent un
+     * domaine enregistrable sont *same-site*, la restriction ne les vise pas.
+     */
+    advanced: {
+      database: { generateId: 'uuid' },
+      ...(cookieDomain
+        ? { crossSubDomainCookies: { enabled: true, domain: cookieDomain } }
+        : {}),
+    },
     /**
      * Un nom vide n'entre pas.
      *
