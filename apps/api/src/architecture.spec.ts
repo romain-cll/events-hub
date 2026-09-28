@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { builtinModules } from 'node:module';
 import { join, relative, sep } from 'node:path';
 
 /**
@@ -379,5 +380,82 @@ describe('frontière de la clé visiteur', () => {
         readFileSync(path, 'utf8').includes(needle),
       ),
     ).toEqual([]);
+  });
+});
+
+/**
+ * Toute dépendance importée est déclarée dans `apps/api/package.json`.
+ *
+ * ## Ce que ça a coûté de ne pas l'avoir
+ *
+ * `app.setup.ts` importait `express` sans qu'il figure nulle part dans les
+ * dépendances. pnpm range strictement — un paquet non déclaré n'est pas relié
+ * dans le `node_modules` du paquet qui l'importe — et le premier déploiement
+ * est mort au démarrage sur `Cannot find module 'express'`, après une image
+ * construite et des migrations passées. Rien avant ne l'avait signalé : ni le
+ * build, ni le lint, ni les 468 tests, parce qu'aucun n'emprunte le chemin
+ * `node dist/main`.
+ *
+ * ## Pourquoi un test de forme plutôt qu'un test d'exécution
+ *
+ * Parce que la panne n'apparaît qu'au démarrage du programme émis, dans une
+ * image où le rangement de pnpm est celui de production. La reproduire
+ * demanderait de construire puis de lancer — trop cher pour une suite
+ * unitaire, et ça ne dirait toujours pas *quel* import manque.
+ *
+ * Lire les imports le dit exactement, en lisant des fichiers.
+ */
+describe('dépendances déclarées', () => {
+  /** Ce qui n'est pas un paquet : le relatif, les alias, les modules de Node. */
+  const isPackage = (specifier: string) =>
+    !specifier.startsWith('.') &&
+    !specifier.startsWith('#') &&
+    !specifier.startsWith('node:') &&
+    !builtinModules.includes(specifier);
+
+  /** `@scope/nom/sous/chemin` -> `@scope/nom` ; `nom/sous/chemin` -> `nom`. */
+  const packageOf = (specifier: string) =>
+    specifier.startsWith('@')
+      ? specifier.split('/').slice(0, 2).join('/')
+      : specifier.split('/')[0];
+
+  const manifest = JSON.parse(
+    readFileSync(join(__dirname, '..', 'package.json'), 'utf8'),
+  ) as Record<string, Record<string, string> | undefined>;
+
+  const declared = new Set([
+    ...Object.keys(manifest.dependencies ?? {}),
+    ...Object.keys(manifest.devDependencies ?? {}),
+  ]);
+
+  const imported = new Map<string, string[]>();
+
+  for (const path of sourcesOf(__dirname)) {
+    const source = readFileSync(path, 'utf8');
+
+    for (const [, fromClause, required] of source.matchAll(
+      /\bfrom\s+'([^']+)'|\brequire(?:\.resolve)?\('([^']+)'\)/g,
+    )) {
+      const specifier = fromClause ?? required;
+
+      if (!specifier || !isPackage(specifier)) continue;
+
+      const name = packageOf(specifier);
+
+      imported.set(name, [
+        ...(imported.get(name) ?? []),
+        relative(__dirname, path),
+      ]);
+    }
+  }
+
+  it('couvre bien des imports, sinon la règle ne vérifie rien', () => {
+    expect(imported.size).toBeGreaterThan(0);
+  });
+
+  // L'attendu est vide des deux côtés quand c'est déclaré ; sinon l'échec
+  // imprime les fichiers fautifs, seule information qui fasse gagner du temps.
+  it.each([...imported.keys()].sort())('« %s » est déclaré', (name) => {
+    expect(declared.has(name) ? [] : imported.get(name)).toEqual([]);
   });
 });
