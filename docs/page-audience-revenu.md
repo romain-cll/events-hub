@@ -34,7 +34,7 @@ tracés veut dire quelque chose, alors que déplacer l'une des deux le déplace
 aussi.
 
 Les deux ont été réunis parce qu'un seul dessin répond mieux à la question qu'on
-vient poser — *ce pic de trafic a-t-il rapporté ?* — et quatre choix rendent la
+vient poser — _ce pic de trafic a-t-il rapporté ?_ — et quatre choix rendent la
 lecture honnête à défaut d'être neutre : des **barres** pour le revenu contre un
 **trait** pour le trafic, deux formes que l'œil ne compare pas point par point ;
 chaque axe de la couleur de sa série ; le revenu derrière ; et aucune aire

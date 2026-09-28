@@ -259,7 +259,7 @@ nulle part : ils passent par `onError`, qui ne fait rien par défaut — un endp
 injoignable ne doit pas remplir la console d'un site à chaque clic.
 
 ```ts
-new Analytics({ projectId, endpoint, onError: console.warn });
+new Analytics({ apiKey, endpoint, onError: console.warn });
 ```
 
 ## Structure

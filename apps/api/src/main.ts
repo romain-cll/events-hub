@@ -13,6 +13,6 @@ async function bootstrap() {
 
   // Sans ça, `onApplicationShutdown` ne tourne pas et le pool `pg` reste ouvert.
   app.enableShutdownHooks();
-  await app.listen(process.env.PORT ?? 3001);
+  await app.listen(process.env.PORT ?? 3003);
 }
 bootstrap();

@@ -173,7 +173,9 @@ describe('projectionOf', () => {
   it('n’écrit rien quand l’abonnement n’a pas de client', () => {
     // Toute lecture de cohorte passe par le client : une ligne qu'aucune
     // jointure ne retrouvera vaut moins que pas de ligne.
-    expect(projectionOf(evenement(subscription({ customer: null })))).toBeNull();
+    expect(
+      projectionOf(evenement(subscription({ customer: null }))),
+    ).toBeNull();
   });
 
   it('ignore un événement qui ne parle pas d’abonnement', () => {

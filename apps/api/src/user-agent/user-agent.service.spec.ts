@@ -63,7 +63,11 @@ describe('UserAgentService — l’appareil', () => {
     ['un ordinateur', CHROME_WINDOWS, 'desktop'],
     ['un téléphone', SAFARI_IPHONE, 'mobile'],
     ['un téléphone Android', CHROME_ANDROID, 'mobile'],
-    ['une tablette Android, reconnue par l’absence de « Mobi »', CHROME_ANDROID_TABLET, 'tablet'],
+    [
+      'une tablette Android, reconnue par l’absence de « Mobi »',
+      CHROME_ANDROID_TABLET,
+      'tablet',
+    ],
     ['un iPad d’avant iPadOS 13', SAFARI_IPAD_LEGACY, 'tablet'],
   ])('range %s', (_cas, ua, attendu) => {
     expect(service.describe(ua).deviceType).toBe(attendu);

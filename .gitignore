@@ -42,3 +42,8 @@ todos.json
 # Base GeoIP (DB-IP City Lite) — 124 Mo, téléchargée hors dépôt.
 # Voir apps/api/.env.example, variable GEOIP_DB_PATH.
 apps/api/data/
+
+# Arbre de routes généré par TanStack Router (tsr generate / le plugin vite).
+# Suivi en dépôt, il se régénérait à chaque check-types en supprimant le bloc
+# `declare module` du SSR — un diff parasite à annuler à la main chaque fois.
+apps/web/src/routeTree.gen.ts

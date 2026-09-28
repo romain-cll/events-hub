@@ -11,13 +11,13 @@ decides how the event is treated.
 
 ## The two kinds of key
 
-| | `eh_pk_` — browser | `eh_sk_` — server |
-|---|---|---|
-| Where it lives | your page bundle, in the open | your backend, secret |
-| Stored as | plain text | a hash — shown once, at creation |
-| `Origin` header | required, checked against an allowlist | not sent, not checked |
-| Session | assigned, from the visitor | none |
-| Recorded `source` | `browser` | `server` |
+|                   | `eh_pk_` — browser                     | `eh_sk_` — server                |
+| ----------------- | -------------------------------------- | -------------------------------- |
+| Where it lives    | your page bundle, in the open          | your backend, secret             |
+| Stored as         | plain text                             | a hash — shown once, at creation |
+| `Origin` header   | required, checked against an allowlist | not sent, not checked            |
+| Session           | assigned, from the visitor             | none                             |
+| Recorded `source` | `browser`                              | `server`                         |
 
 Create either from **Settings → API keys** in the dashboard.
 
@@ -43,13 +43,13 @@ curl -X POST https://your-hub.example/v1/events \
   }'
 ```
 
-| Field | Required | What it is |
-|---|---|---|
-| `apiKey` | yes | `eh_pk_` or `eh_sk_` followed by 32 hex characters. |
-| `type` | yes | Your own name for the event, in `snake_case`. Anything you like — no list to register first. |
-| `occurredAt` | yes | ISO 8601 with an offset (`…Z` or `…+02:00`). When the event *happened*, not when you send it — late arrivals are placed correctly. |
-| `properties` | no | What the event says about itself. Free-form JSON, kept intact. Defaults to `{}`. |
-| `attributes` | no | Context around the event. The browser SDK puts page path, referrer and screen size here. Defaults to `{}`. |
+| Field        | Required | What it is                                                                                                                         |
+| ------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `apiKey`     | yes      | `eh_pk_` or `eh_sk_` followed by 32 hex characters.                                                                                |
+| `type`       | yes      | Your own name for the event, in `snake_case`. Anything you like — no list to register first.                                       |
+| `occurredAt` | yes      | ISO 8601 with an offset (`…Z` or `…+02:00`). When the event _happened_, not when you send it — late arrivals are placed correctly. |
+| `properties` | no       | What the event says about itself. Free-form JSON, kept intact. Defaults to `{}`.                                                   |
+| `attributes` | no       | Context around the event. The browser SDK puts page path, referrer and screen size here. Defaults to `{}`.                         |
 
 Unknown fields are **rejected**, not ignored. A misspelled `occuredAt` returns 400
 rather than silently dropping the timestamp.
@@ -76,13 +76,13 @@ something wrong.
 
 ## What comes back
 
-| Status | Meaning |
-|---|---|
-| `201` | Written. The body is the stored event. |
-| `204` | Discarded on purpose, browser keys only: the `Origin` header was missing or not on the allowlist. Nothing was written, and this is not an error to retry. |
-| `400` | The body is malformed — a bad key format, a missing field, an unknown field. |
-| `401` | The key does not exist, or has been revoked. |
-| `422` | The body is well formed but names a project that no longer exists. |
+| Status | Meaning                                                                                                                                                   |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `201`  | Written. The body is the stored event.                                                                                                                    |
+| `204`  | Discarded on purpose, browser keys only: the `Origin` header was missing or not on the allowlist. Nothing was written, and this is not an error to retry. |
+| `400`  | The body is malformed — a bad key format, a missing field, an unknown field.                                                                              |
+| `401`  | The key does not exist, or has been revoked.                                                                                                              |
+| `422`  | The body is well formed but names a project that no longer exists.                                                                                        |
 
 The `204` is deliberate. A `4xx` on a capture endpoint sends client SDKs into retry
 loops, amplifying exactly the traffic we are trying to drop. Refusals are logged
@@ -137,7 +137,11 @@ Use the SDK rather than this endpoint — it collects page views, clicks, form
 submits, outbound clicks and page leaves on its own, and sends them for you.
 
 ```html
-<script defer src="https://your-hub.example/v1/eh.js" data-api-key="eh_pk_…"></script>
+<script
+  defer
+  src="https://your-hub.example/v1/eh.js"
+  data-api-key="eh_pk_…"
+></script>
 ```
 
 For your own events: `window.eventsHub.track('signed_up')`.
@@ -151,7 +155,7 @@ enough to follow them. Nothing to display, no banner, no cookie.
 Relaying your consent platform's decision unlocks the durable mode:
 
 ```js
-window.eventsHub.setConsent(true);   // and false when it is withdrawn
+window.eventsHub.setConsent(true); // and false when it is withdrawn
 ```
 
 We never show a banner of our own — you are the controller, we are the processor.
@@ -217,18 +221,18 @@ any value your page holds. There is no cookie to read here — writing one is
 exactly what this path avoids.
 
 **Send both when you have both.** If the visitor consented, put `eh_visitor_id`
-on the Customer as described above *and* `eh_session_id` on the session. We
+on the Customer as described above _and_ `eh_session_id` on the session. We
 prefer the durable id whenever it is present; you never have to choose.
 
 ### What it buys, and what it does not
 
-| | `eh_visitor_id` | `eh_session_id` |
-|---|---|---|
-| Consent | required | none |
-| First purchase | attributed | attributed |
-| Purchase days later | attributed to the first visit | attributed to *that day's* visit |
-| Subscription renewal | attributed | never |
-| Lifetime value, cohorts, retention | yes | no |
+|                                    | `eh_visitor_id`               | `eh_session_id`                  |
+| ---------------------------------- | ----------------------------- | -------------------------------- |
+| Consent                            | required                      | none                             |
+| First purchase                     | attributed                    | attributed                       |
+| Purchase days later                | attributed to the first visit | attributed to _that day's_ visit |
+| Subscription renewal               | attributed                    | never                            |
+| Lifetime value, cohorts, retention | yes                           | no                               |
 
 The middle row is the one to understand. A visitor who finds you through a search
 on Monday and buys on Thursday opens two visits; the payment lands on the second,

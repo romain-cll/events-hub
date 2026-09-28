@@ -16,13 +16,13 @@ résultat reste plausible, et rien ne le signale.
 L'affinage fait à l'ingestion rend ces types **disjoints**, et c'est ce qui
 permet de les sommer :
 
-| Type | Ce qu'il porte |
-|---|---|
-| `stripe.subscription.started` | premier paiement d'un abonnement |
-| `stripe.subscription.renewed` | renouvellement |
-| `stripe.subscription.changed` | montée ou descente de gamme |
-| `stripe.invoice.paid` | les autres `billing_reason` — `manual`, seuils |
-| `stripe.payment.one_time` | achat ponctuel pur |
+| Type                          | Ce qu'il porte                                 |
+| ----------------------------- | ---------------------------------------------- |
+| `stripe.subscription.started` | premier paiement d'un abonnement               |
+| `stripe.subscription.renewed` | renouvellement                                 |
+| `stripe.subscription.changed` | montée ou descente de gamme                    |
+| `stripe.invoice.paid`         | les autres `billing_reason` — `manual`, seuils |
+| `stripe.payment.one_time`     | achat ponctuel pur                             |
 
 Les quatre premiers viennent tous d'`invoice.paid`, que Stripe distingue
 lui-même par `billing_reason` : **une facture n'en porte qu'un**. Le cinquième
@@ -74,7 +74,7 @@ La première version interrogeait Stripe à chaque événement pour lire la meta
 du client. Éprouvée sur un vrai abonnement, elle attribuait **deux événements sur
 douze**.
 
-La cause était une course : un site pose l'identifiant sur son client *après* le
+La cause était une course : un site pose l'identifiant sur son client _après_ le
 checkout, or les webhooks du paiement arrivent avant. On lisait un client encore
 vide, deux secondes trop tôt — et c'est le paiement, le seul qui compte, qui
 repartait muet pendant que les événements sans intérêt étaient rattachés.
@@ -149,7 +149,7 @@ ont été retenus, parce qu'un chiffre dont on ne peut pas nommer l'origine ne v
 rien.
 
 La valeur rendue est celle de la **première visite** du visiteur, pas de celle où
-il a payé. Modèle d'attribution assumé — *first touch* — qui répond à « qu'est-ce
+il a payé. Modèle d'attribution assumé — _first touch_ — qui répond à « qu'est-ce
 qui m'amène des clients », pas à « quelle page a conclu ». Elle est **lue** à
 chaque appel, jamais gelée : `attribute()` rattache des paiements
 rétroactivement, donc la première visite devient légitimement connaissable après
@@ -168,11 +168,11 @@ moteur. Les montants, eux, sont exacts.
 
 Chaque axe rend trois ensembles, et les deux derniers ne sont pas un reste :
 
-| Ensemble | Ce qu'il porte |
-|---|---|
-| `rows` | le classement, coupé à `limit` |
-| `direct` | des visiteurs **connus**, sans valeur sur cet axe |
-| `unattributed` | des paiements qu'aucun parcours ne réclame |
+| Ensemble       | Ce qu'il porte                                    |
+| -------------- | ------------------------------------------------- |
+| `rows`         | le classement, coupé à `limit`                    |
+| `direct`       | des visiteurs **connus**, sans valeur sur cet axe |
+| `unattributed` | des paiements qu'aucun parcours ne réclame        |
 
 Les afficher ensemble est la condition pour que le classement soit lisible :
 annoncer « 12 k€ venus de Google » sans dire que 30 k€ ne sont rattachés à rien

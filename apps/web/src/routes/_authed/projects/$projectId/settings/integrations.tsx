@@ -104,8 +104,8 @@ function Integrations() {
         <CardHeader>
           <CardTitle>Stripe</CardTitle>
           <CardDescription>
-            Connect your Stripe account to see which visits produced revenue.
-            We ask for read-only access and never write anything back.
+            Connect your Stripe account to see which visits produced revenue. We
+            ask for read-only access and never write anything back.
           </CardDescription>
 
           {stripe && (

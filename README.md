@@ -6,12 +6,26 @@ Monorepo Turborepo + pnpm.
 
 ```
 apps/
-  api/   # NestJS        — http://localhost:3001
-  web/   # TanStack Start — http://localhost:3000
+  api/   # NestJS         — http://localhost:3003
+  web/   # TanStack Start — http://localhost:3002
 packages/
+  api-contract/    # schémas Zod partagés API ↔ web ; l'invariant que contract.spec.ts garde
   eslint-config/   # config ESLint partagée (base / node / react)
   sdk/             # SDK navigateur : ingestion + collecteurs d'événements
 ```
+
+Les documents de référence, qui valent mieux que ce fichier sur leur sujet :
+
+| Document                                                                                 | Ce qu'il porte                                                                  |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| [`docs/deploiement.md`](docs/deploiement.md)                                             | mettre en ligne : variables d'environnement, migrations, Stripe côté exploitant |
+| [`docs/ingestion.md`](docs/ingestion.md)                                                 | envoyer des événements — clés, requête, CI, paiements                           |
+| [`docs/privacy.md`](docs/privacy.md)                                                     | ce qui est collecté, les deux modes, le droit d'opposition                      |
+| [`docs/legitimate-interest-assessment.md`](docs/legitimate-interest-assessment.md)       | la LIA du mode par défaut                                                       |
+| [`apps/api/src/features/stripe/README.md`](apps/api/src/features/stripe/README.md)       | les webhooks Stripe, et le piège des quatre événements par paiement             |
+| [`apps/api/src/features/analytics/README.md`](apps/api/src/features/analytics/README.md) | l'interprétation analytics                                                      |
+| [`packages/sdk/README.md`](packages/sdk/README.md)                                       | le SDK navigateur                                                               |
+| [`CLAUDE.md`](CLAUDE.md)                                                                 | les invariants qui cassent le build — à lire avant de toucher au socle          |
 
 ## Commandes
 
@@ -21,6 +35,7 @@ pnpm dev           # lance toutes les apps
 pnpm build
 pnpm lint
 pnpm test
+pnpm test:e2e      # e2e contre un vrai Postgres, en deux passes
 pnpm check-types
 pnpm format        # pnpm format:check en CI
 ```
@@ -28,10 +43,20 @@ pnpm format        # pnpm format:check en CI
 ## Base de données
 
 `apps/api` utilise **Drizzle ORM** (driver `node-postgres`) sur le Postgres local
-— pas de Docker. Une seule variable pilote tout, l'app comme la CLI :
+— pas de Docker.
 
 ```sh
-cp apps/api/.env.example apps/api/.env   # puis renseigner DATABASE_URL
+cp apps/api/.env.example apps/api/.env
+```
+
+`DATABASE_URL` pilote l'app comme la CLI Drizzle. Deux autres variables sont
+**bloquantes** : `VISITOR_KEY_SECRET` et `BETTER_AUTH_SECRET` sont lues par
+`getOrThrow`, et l'API refuse de démarrer sans elles. Les onze restantes sont
+optionnelles et documentées une à une dans `.env.example` ; ce qu'elles coûtent
+en production est dans [`docs/deploiement.md`](docs/deploiement.md).
+
+```sh
+openssl rand -hex 32   # une valeur pour chacun des deux secrets
 ```
 
 Côté Postgres, la convention du poste est une base + un rôle dédié par projet :
@@ -96,10 +121,19 @@ Le pool est fermé via `onApplicationShutdown`, d'où le `app.enableShutdownHook
 dans `main.ts`.
 
 La table `events` stocke l'événement brut : `id` (uuid généré en base),
-`type`, `version`, `occurred_at`, plus `attributes` et `properties` en `jsonb`
+`project_id`, `type`, `occurred_at`, `source`, `session_id` (nullable),
+`visitor_key` (nullable), plus `attributes` et `properties` en `jsonb`
 (`NOT NULL DEFAULT '{}'`, donc jamais `null` côté lecture). Les deux colonnes
 jsonb sont typées `Record<string, unknown>` en TypeScript — la forme réelle
 dépend du `type`, elle n'est pas contrainte par le schéma.
+
+Il n'y a **pas** de colonne `version` : elle a existé, ne consignait rien, et
+personne ne pouvait la remplir correctement. La compatibilité du fil est portée
+par le préfixe `/v1` de l'API. Voir [`CLAUDE.md`](CLAUDE.md#le-modèle-dévénement).
+
+La règle de rangement, qui décide où va un champ nouveau : **colonne** = axe de
+corrélation dérivé par le serveur ; **`jsonb`** = charge utile fournie par le
+client, de forme dépendante du `type`.
 
 ### Horodatage
 
@@ -126,7 +160,7 @@ ne sont pas de l'ISO 8601.
 
 ## API HTTP
 
-Le versioning est activé par l'URI (`main.ts`) : un contrôleur annoté
+Le versioning est activé par l'URI (`src/app.setup.ts`) : un contrôleur annoté
 `@Controller({ path: 'events', version: '1' })` est servi sous `/v1/events`.
 Le défaut est `VERSION_NEUTRAL`, donc les routes sans version (racine, health)
 restent à la racine au lieu d'hériter d'un `/v1` involontaire.
@@ -171,11 +205,11 @@ Ingère un événement et renvoie `201` avec la ligne telle que Postgres l'a
 écrite (`id` généré en base, valeurs par défaut appliquées).
 
 ```sh
-curl -X POST http://localhost:3001/v1/events \
+curl -X POST http://localhost:3003/v1/events \
   -H 'Content-Type: application/json' \
   -d '{
+    "apiKey": "eh_sk_0123456789abcdef0123456789abcdef",
     "type": "page.viewed",
-    "version": 1,
     "occurredAt": "2026-08-20T16:30:00+02:00",
     "attributes": { "page.path": "/pricing" },
     "properties": { "durationMs": 1200 }
@@ -185,13 +219,21 @@ curl -X POST http://localhost:3001/v1/events \
 ```json
 {
   "id": "5ad5d50d-2f2e-49cc-a5ce-d826dd0dffa5",
+  "projectId": "3f1c…",
   "type": "page.viewed",
-  "version": 1,
   "occurredAt": "2026-08-20T14:30:00.000Z",
+  "source": "server",
+  "sessionId": null,
   "attributes": { "page.path": "/pricing" },
   "properties": { "durationMs": 1200 }
 }
 ```
+
+`apiKey` porte l'authentification **et** le projet : il n'y a pas de `projectId`
+dans le corps, et il ne faut pas en remettre — le schéma est strict. C'est aussi
+ce qui rend `source` digne de confiance : il est dérivé de la **classe de clé**
+présentée (`eh_pk_` → `browser`, `eh_sk_` → `server`), jamais lu dans le payload.
+Une clé `eh_pk_` exige en plus un en-tête `Origin` déclaré sur le projet.
 
 Le schéma est **strict** : une clé inconnue fait échouer la requête. Sur une
 ingestion, un `occuredAt` mal orthographié qui passerait en 201 est le pire
@@ -210,9 +252,9 @@ une clé visiteur, écrit — et ne sait rien de ce qu'il écrit. Un type jamais
 passe :
 
 ```sh
-curl -X POST http://localhost:3001/v1/events \
+curl -X POST http://localhost:3003/v1/events \
   -H 'Content-Type: application/json' \
-  -d '{ "projectId": "…", "type": "ai_agent_visit", "version": 1, "occurredAt": "…" }'
+  -d '{ "apiKey": "eh_sk_…", "type": "ai_agent_visit", "occurredAt": "…" }'
 ```
 
 C'est la promesse qui rend les modules possibles : `error`, `api_call`,
@@ -220,15 +262,17 @@ C'est la promesse qui rend les modules possibles : `error`, `api_call`,
 pipeline est le même pour tous :
 
 ```
-HTTP → validation structurelle (Zod) → clé visiteur (HMAC) → EventStore → Postgres
+HTTP → Zod → opposition (Sec-GPC / cookie) → résolution de clé (projet + source)
+     → cookie visiteur / consentement → clé visiteur (HMAC) → session → GeoIP
+     → User-Agent → EventStore → Postgres
 ```
 
 Deux tests la tiennent, et ils ne font pas doublon :
 
-| test                             | ce qu'il attrape                                                                                                                            |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/core/core-boundary.spec.ts` | la **forme du code** : le Core ne nomme aucun type, ne compare rien à un `type`, n'indexe rien par `type`, n'importe rien de `modules/`     |
-| `test/event-stream.e2e-spec.ts`  | le **comportement** : des types inconnus traversent réellement HTTP → Postgres → `EventStore`, avec le même traitement que les types connus |
+| test                            | ce qu'il attrape                                                                                                                                                |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/architecture.spec.ts`      | la **forme du code** : hors de `features/`, aucun fichier ne nomme un type d'événement, ne compare un `type` à un littéral, ni n'indexe un comportement par lui |
+| `test/event-stream.e2e-spec.ts` | le **comportement** : des types inconnus traversent réellement HTTP → Postgres → `EventStore`, avec le même traitement que les types connus                     |
 
 Le premier voit un aiguillage écrit mais jamais atteint ; le second voit une
 connaissance métier logée ailleurs que dans une comparaison — une valeur par
@@ -237,25 +281,36 @@ dédiée. Vérifié : une violation écrite sans littéral ni `===` passe le pre
 et échoue au second.
 
 La sémantique vit donc entièrement en dehors du Core — dans le SDK d'un côté,
-dans `src/modules/` de l'autre. `AnalyticsService` est le seul endroit du
+dans `src/features/` de l'autre. `AnalyticsService` est le seul endroit du
 backend qui sache ce qu'est une page vue, et le seul qui sache où le chemin de
-la page est rangé.
+la page est rangé ; `features/stripe`, `features/events` et
+`features/event-types` interprètent chacun leur part.
 
 ### La surface de lecture du Core
 
-`EventStore` est ce que le Core offre aux modules. Il sait dénombrer, découper
-en journées, et grouper — jamais interpréter.
+`EventStore` est ce que le Core offre aux modules, et le **seul** accès à la
+table `events`. Il sait dénombrer, classer et grouper — jamais interpréter.
 
 ```ts
-countEvents(scope); // combien d'événements
-countVisitors(scope); // combien de visiteurs distincts
-countEventsByDay(scope); // la même chose par journée UTC, trous remplis
-countVisitorsByDay(scope);
-topValues(scope, selector); // les valeurs les plus fréquentes d'une clé JSON
+insert(event);                  // la seule écriture
+attribute(…);                   // rattacher un événement à un parcours
+countEvents(scope);             // combien d'événements
+countVisitors(scope);           // combien de visiteurs distincts
+countSessions(scope);
+topValues(scope, selector);     // les valeurs les plus fréquentes d'une clé JSON
+amountSeries(scope);            // une série de montants, sans savoir ce qu'ils valent
+page(scope, cursor);            // l'explorateur, par curseur
+distinctTypes(scope);           // les types rencontrés
 ```
 
+Le listing complet est dans `src/events/event-store.service.ts`. Toutes les
+lectures traversent la méthode privée `where()` : c'est là que vit toute règle
+qui doit valoir pour toutes — le filtre `serverOnly` y est. Une règle posée dans
+un module de `features/` serait oubliée par le suivant.
+
 `topValues` est la primitive de requêtage générique : l'appelant nomme une
-colonne (`attributes` ou `properties`) et une clé, le Core groupe.
+colonne (`attributes` ou `properties`) et une clé, le Core groupe. Le champ de
+scope qui restreint aux types voulus est `types: string[]`.
 
 ```ts
 store.topValues(
@@ -292,7 +347,7 @@ propres règles, le jour où il en aura vraiment besoin.
 
 ### Le module Analytics
 
-`src/modules/analytics/` est le premier interprète de l'event stream. Il tient
+`src/features/analytics/` est le premier interprète de l'event stream. Il tient
 en trois décisions, et elles sont toutes des constantes en haut d'un fichier :
 
 ```ts
@@ -301,19 +356,30 @@ const PATH_ATTRIBUTE = 'page.path'; // où le chemin est rangé
 const TOP_PAGES_LIMIT = 10; // combien de pages le classement retient
 ```
 
-`GET /v1/projects/:projectId/analytics?from=&to=&interval=day` rend :
+`GET /v1/projects/:projectId/analytics?from=&to=` rend :
 
 ```json
 {
   "from": "2026-08-16T00:00:00.000Z",
   "to": "2026-08-23T00:00:00.000Z",
+  "sessions": 31,
   "pageViews": 42,
   "uniqueVisitors": 17,
-  "topPages": [{ "value": "/", "events": 12, "visitors": 9 }],
-  "interval": "day",
-  "timeseries": [{ "start": "…", "pageViews": 6, "uniqueVisitors": 4 }]
+  "botSessions": 4,
+  "consentGranted": 9,
+  "consentDeclined": 3,
+  "bounces": 11,
+  "settledSessions": 28,
+  "topPages": [{ "value": "/", "events": 12, "visitors": 9 }]
 }
 ```
+
+Il n'y a **pas** de paramètre `interval`, ni de `timeseries` dans ce résumé : le
+schéma de query est un `strictObject`, donc `?interval=day` rend un 400. Les
+séries temporelles ont leurs propres routes. La forme exacte fait foi dans
+[`packages/api-contract/src/analytics.ts`](packages/api-contract/src/analytics.ts),
+et `src/contract.spec.ts` échoue si la réponse et le schéma divergent dans un
+sens ou dans l'autre.
 
 La chaîne complète tient en une ligne, et chaque maillon ignore le suivant :
 
@@ -345,10 +411,13 @@ stable à égalité.
 
 ### D'où viennent les visiteurs — la règle, spécifiée avant d'être branchée
 
-`src/modules/analytics/entry-source.ts` fixe la définition de la **provenance
-d'un visiteur** ; `entry-source.spec.ts` l'éprouve sur des parcours réels. Rien
-n'est câblé : pas de route, pas d'appel au Core, **pas une clé de plus collectée
-par le SDK**.
+`src/features/analytics/entry-source.ts` fixe la définition de la **provenance
+d'un visiteur** ; `entry-source.spec.ts` l'éprouve sur des parcours réels.
+
+La règle a depuis été branchée : `sourceOf()` alimente
+`GET /v1/projects/:projectId/analytics/sessions`, et le Core expose
+`entryDimension()` et `entryVisits()` pour la porter. Ce qui suit reste la
+spécification — c'est elle qui fait autorité sur le comportement.
 
 > La source d'un visiteur est le **`page.referrer` de son premier `page_view`
 > dans la fenêtre**.
@@ -392,24 +461,30 @@ routeur JS. Le SDK le remplit aussi en MPA depuis un `document.referrer` de mêm
 origine. C'est ce qui fait qu'il est absent sur une vraie arrivée, quel que soit
 le type de site — et présent dès qu'on regarde une page de milieu de visite.
 
-#### Quatre natures, dont une qui n'est pas de l'acquisition
+#### Six natures, dont une qui n'est pas de l'acquisition
 
-| `kind`     | quand                                 | `name`            |
-| ---------- | ------------------------------------- | ----------------- |
-| `direct`   | aucun referrer                        | `null`            |
-| `search`   | l'hôte porte un label de moteur connu | `google`          |
-| `referral` | tout autre hôte externe               | `blog.autre.test` |
-| `internal` | referrer de **notre propre origine**  | `shop.test`       |
+| `kind`      | quand                                 | `name`            |
+| ----------- | ------------------------------------- | ----------------- |
+| `direct`    | aucun referrer                        | `null`            |
+| `search`    | l'hôte porte un label de moteur connu | `google`          |
+| `assistant` | un assistant conversationnel connu    | `chatgpt`         |
+| `social`    | un réseau social connu                | `linkedin`        |
+| `other`     | tout autre hôte externe               | `blog.autre.test` |
+| `internal`  | referrer de **notre propre origine**  | `shop.test`       |
+
+`other` ne promet aucune interprétation : ce qu'aucun ensemble connu ne
+revendique y tombe, **avec son hôte** — donc nommable, même si sa nature ne dit
+rien.
 
 `internal` est le résidu — rechargement, navigation vers une ancre, ou visite
 attrapée après un changement de document sur un site classique. Il est **rendu**
 plutôt qu'écarté : sa part dit à quel point la lecture est polluée.
-L'acquisition, c'est les trois autres.
+L'acquisition, c'est `direct + search + assistant + social + other`.
 
 Le moteur est reconnu par **label d'hôte** (`google` couvre `google.fr` comme
 `www.google.co.uk`) — une heuristique assumée, remplaçable par une table sans
 qu'une ligne du Core bouge. La comparaison d'origine est stricte, comme dans le
-SDK : `docs.shop.test` est donc `referral`. Décider qu'un sous-domaine est « le
+SDK : `docs.shop.test` est donc `other`. Décider qu'un sous-domaine est « le
 même site » demande de savoir quels hôtes appartiennent au projet — une
 configuration, pas une donnée d'événement.
 
@@ -431,19 +506,19 @@ configuration, pas une donnée d'événement.
   précédente du site. La réponse est `internal`, et c'est la réponse honnête —
   aucune règle ne peut retrouver Google ici.
 
-#### Ce qui manque au Core, maintenant qu'on sait
+#### Ce que le Core a dû apprendre, et comment
 
 La règle a besoin, **par visiteur, du plus ancien `page_view` de la fenêtre**,
 avec trois clés lues ensemble sur cette même ligne (`page.referrer`, `page.url`,
 `page.path`) plus la présence de `navigation.from`.
 
 `topValues` ne sait rien faire de ça : il agrège une clé, il ne rend pas de
-lignes. Ce qui manque n'est donc pas une agrégation de plus mais une
+lignes. Ce qu'il fallait n'était donc pas une agrégation de plus mais une
 **projection** — « pour chaque visiteur, la première ligne, et ces colonnes-là ».
-Le « premier événement d'un visiteur » est d'ailleurs pile ce que le Core avait
-refusé de savoir jusqu'ici ; il peut le faire sans rien connaître du métier — un
-`DISTINCT ON (visitor_key) … ORDER BY occurred_at` ne mentionne ni source, ni
-landing page, ni moteur de recherche. La classification, elle, reste ici.
+C'est `entryDimension()` et `entryVisits()`, et le Core les porte sans rien
+connaître du métier : un `DISTINCT ON (visitor_key) … ORDER BY occurred_at` ne
+mentionne ni source, ni landing page, ni moteur de recherche. La classification,
+elle, reste ici.
 
 ## SDK navigateur
 
@@ -452,12 +527,12 @@ choses : poster un événement (`track()`), et transformer les signaux natifs du
 navigateur en un flux d'événements normalisé (`start()`).
 
 ```ts
-const analytics = new Analytics({ projectId, endpoint });
+const analytics = new Analytics({ apiKey, endpoint });
 analytics.start(); // page_view, click, submit, outbound_click, page_leave
 ```
 
 **Le Core n'en sait rien.** Aucun de ces types n'est connu de `POST /v1/events`,
-qui continue de n'accepter qu'un `type`, une `version` et deux objets libres.
+qui continue de n'accepter qu'un `type`, un instant et deux objets libres.
 La sémantique de `page_view` ou de `leave.reason` vit entièrement dans le SDK
 d'un côté et dans les modules de lecture de l'autre — jamais dans l'ingestion.
 

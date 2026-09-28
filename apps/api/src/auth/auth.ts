@@ -84,8 +84,8 @@ function slugify(name: string): string {
  * vérification qu'aucun email ne transporte rendrait l'inscription impossible.
  */
 export function createAuth(db: DrizzleDatabase, config: ConfigService) {
-  const webUrl = config.get<string>('WEB_URL') ?? 'http://localhost:3000';
-  const apiUrl = config.get<string>('API_URL') ?? 'http://localhost:3001';
+  const webUrl = config.get<string>('WEB_URL') ?? 'http://localhost:3002';
+  const apiUrl = config.get<string>('API_URL') ?? 'http://localhost:3003';
 
   return betterAuth({
     database: drizzleAdapter(db, { provider: 'pg', schema }),

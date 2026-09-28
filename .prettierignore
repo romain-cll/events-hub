@@ -4,3 +4,7 @@ dist
 .nitro
 .turbo
 apps/web/src/routeTree.gen.ts
+
+# Migrations Drizzle : artefacts que drizzle-kit lit et réécrit lui-même.
+# Les reformater fait diverger les snapshots de ce que `db:check` attend.
+apps/api/drizzle

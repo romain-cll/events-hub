@@ -138,7 +138,11 @@ describe('page_leave', () => {
   });
 
   it("s'en tient à l'enum fermé des raisons", () => {
-    const reasons: LeaveReason[] = ['page_hidden', 'pagehide', 'outbound_click'];
+    const reasons: LeaveReason[] = [
+      'page_hidden',
+      'pagehide',
+      'outbound_click',
+    ];
 
     for (const reason of reasons) {
       const solo = createRecorder();

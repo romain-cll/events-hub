@@ -1,14 +1,17 @@
 # Privacy, for the site that installs the hub
 
-*A compliance support document, not legal advice. It states what the code does,
+_A compliance support document, not legal advice. It states what the code does,
 precisely enough for your DPO to work from — the conclusions you draw for your own
-installation are yours.*
+installation are yours._
 
 Two things settle almost every question on this page:
 
 - **Nothing is read from or written to the visitor's device in the default mode.**
   No cookie, no local storage, nothing. That is what puts it outside Article 5(3)
-  of the ePrivacy Directive and Article 82 of the French Data Protection Act.
+  of the ePrivacy Directive and Article 82 of the French Data Protection Act. The
+  one exception proves it rather than weakening it: a visitor who _objects_ gets a
+  cookie recording that refusal, which Article 5(3) exempts as strictly
+  necessary — see [the right to object](#the-right-to-object).
 - **The IP address and the browser identification string are never stored.** They
   enter the server, three coarse labels and a visitor key are derived from them,
   and they die with the request.
@@ -22,18 +25,18 @@ The hub has one identification mechanism with two regimes. You choose which one 
 visitor is under by relaying your consent platform's answer; the hub never shows a
 banner of its own.
 
-| | **Default** | **Consented** |
-|---|---|---|
-| Written on the device | nothing | `__Host-eh_vid` on the hub's domain, 13 months, plus a readable copy `eh_visitor_id` on yours |
-| Read from the device | nothing | that cookie |
-| How the visitor is identified | `HMAC(daily secret, project id + IP + User-Agent)` | `HMAC(master secret, project id + a random UUID we issued)` |
-| How long that identity lasts | until 00:00 UTC | 13 months from the day consent was given, never extended |
-| Recognised tomorrow | no | yes |
-| Recognised on another site | no | no |
-| Answers | visitors, sessions, bounce, pages, sources, devices, countries | all of the above, plus returning visitors, revenue attribution, LTV, time to purchase |
-| ePrivacy art. 5(3) / art. 82 LIL | out of scope — no read, no write | consent required, and **you** collect it |
-| GDPR basis | legitimate interest, art. 6(1)(f) — see [the LIA](./legitimate-interest-assessment.md) | consent, art. 6(1)(a) |
-| Banner | none needed | yours |
+|                                  | **Default**                                                                            | **Consented**                                                                                 |
+| -------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Written on the device            | nothing, unless the visitor objects                                                    | `__Host-eh_vid` on the hub's domain, 13 months, plus a readable copy `eh_visitor_id` on yours |
+| Read from the device             | nothing, unless the visitor objected                                                   | that cookie                                                                                   |
+| How the visitor is identified    | `HMAC(daily secret, project id + IP + User-Agent)`                                     | `HMAC(master secret, project id + a random UUID we issued)`                                   |
+| How long that identity lasts     | until 00:00 UTC                                                                        | 13 months from the day consent was given, never extended                                      |
+| Recognised tomorrow              | no                                                                                     | yes                                                                                           |
+| Recognised on another site       | no                                                                                     | no                                                                                            |
+| Answers                          | visitors, sessions, bounce, pages, sources, devices, countries                         | all of the above, plus returning visitors, revenue attribution, LTV, time to purchase         |
+| ePrivacy art. 5(3) / art. 82 LIL | out of scope — no read, no write                                                       | consent required, and **you** collect it                                                      |
+| GDPR basis                       | legitimate interest, art. 6(1)(f) — see [the LIA](./legitimate-interest-assessment.md) | consent, art. 6(1)(a)                                                                         |
+| Banner                           | none needed                                                                            | yours                                                                                         |
 
 Both modes are **partitioned by project**: the project id is inside the hash, so
 the same person on two of your sites is two unrelated keys, and the durable cookie
@@ -44,17 +47,17 @@ build one.
 ### Switching between them
 
 ```js
-window.eventsHub.setConsent(true);   // durable identity from this event on
-window.eventsHub.setConsent(false);  // cookie erased, immediately
+window.eventsHub.setConsent(true); // durable identity from this event on
+window.eventsHub.setConsent(false); // cookie erased, immediately
 ```
 
 The signal has **three** states, and the third is not a refusal:
 
-| Signal | What happens |
-|---|---|
-| `true` | An identifier is issued on the spot, or the one already presented is honoured untouched. |
-| `false` | The cookie is erased, the copy on your domain is erased, and the visitor falls back to the derived key **on that same event** — not the next one. |
-| never sent | Nothing is written. A cookie already presented is still honoured: its existence *is* the record of an earlier consent. |
+| Signal     | What happens                                                                                                                                      |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `true`     | An identifier is issued on the spot, or the one already presented is honoured untouched.                                                          |
+| `false`    | The cookie is erased, the copy on your domain is erased, and the visitor falls back to the derived key **on that same event** — not the next one. |
+| never sent | Nothing is written. A cookie already presented is still honoured: its existence _is_ the record of an earlier consent.                            |
 
 Confusing the third with the second would wipe every visitor's identity the first
 time a site without a consent platform sent an event.
@@ -63,9 +66,9 @@ time a site without a consent platform sent an event.
 
 ### Derived from the connection, then dropped
 
-| Input | What is derived | What becomes of the input |
-|---|---|---|
-| IP address | the visitor key; country code, region name, city name | discarded when the request ends |
+| Input      | What is derived                                                          | What becomes of the input       |
+| ---------- | ------------------------------------------------------------------------ | ------------------------------- |
+| IP address | the visitor key; country code, region name, city name                    | discarded when the request ends |
 | User-Agent | the visitor key; browser name, OS name, device family, declared-bot flag | discarded when the request ends |
 
 Neither is written to the event, to the visit, or to any table. Geolocation is a
@@ -82,15 +85,15 @@ uniqueness, and OS versions are simply wrong (Windows 11 reports "Windows NT
 One row per visit — a run of events from the same visitor with no gap longer than
 thirty minutes.
 
-| Column | Content |
-|---|---|
-| visitor key | the HMAC above. Rotates daily in the default mode. |
-| started at | timestamp of the earliest event in the visit |
-| country code, region, city | coarse, all optional, resolved once when the visit opens |
-| browser, OS, device type | coarse labels, all optional |
-| is bot | true only for a client that **declared** itself a robot |
-| campaign source, medium, name | from `utm_source`, `utm_medium`, `utm_campaign`, lowercased, frozen when the visit opens |
-| consent | accepted, refused, or **empty** — empty meaning the visitor was never asked, which is the default mode. Not proof of anything: no identity, no timestamp of the act. Last answer wins, since a banner is often answered on the second page. |
+| Column                        | Content                                                                                                                                                                                                                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| visitor key                   | the HMAC above. Rotates daily in the default mode.                                                                                                                                                                                          |
+| started at                    | timestamp of the earliest event in the visit                                                                                                                                                                                                |
+| country code, region, city    | coarse, all optional, resolved once when the visit opens                                                                                                                                                                                    |
+| browser, OS, device type      | coarse labels, all optional                                                                                                                                                                                                                 |
+| is bot                        | true only for a client that **declared** itself a robot                                                                                                                                                                                     |
+| campaign source, medium, name | from `utm_source`, `utm_medium`, `utm_campaign`, lowercased, frozen when the visit opens                                                                                                                                                    |
+| consent                       | accepted, refused, or **empty** — empty meaning the visitor was never asked, which is the default mode. Not proof of anything: no identity, no timestamp of the act. Last answer wins, since a banner is often answered on the second page. |
 
 ### Stored on the event
 
@@ -105,14 +108,14 @@ correlatable to nothing — that is the design, not a gap in it.
 
 ### Sent by the browser SDK, on every event
 
-| Key | Value |
-|---|---|
-| `sdk.version` | which build sent this |
-| `page.path` | pathname |
-| `page.url` | **the full URL**, query string and fragment included |
-| `page.referrer` | omitted entirely when empty |
-| `browser.language` | `navigator.language` |
-| `screen.width`, `screen.height` | screen size in CSS pixels |
+| Key                             | Value                                                |
+| ------------------------------- | ---------------------------------------------------- |
+| `sdk.version`                   | which build sent this                                |
+| `page.path`                     | pathname                                             |
+| `page.url`                      | **the full URL**, query string and fragment included |
+| `page.referrer`                 | omitted entirely when empty                          |
+| `browser.language`              | `navigator.language`                                 |
+| `screen.width`, `screen.height` | screen size in CSS pixels                            |
 
 ⚠️ **`page.url` is sent whole.** If your URLs carry personal data — an email in a
 query string, a token in a fragment — it is stored verbatim. The hub treats both
@@ -121,13 +124,13 @@ for you. Deciding what belongs in a URL is your job, and it always was.
 
 ### Collected automatically by the SDK
 
-| Event | Properties |
-|---|---|
-| `page_view` | `navigation.type`, `navigation.from` |
-| `click` | `element.tag`, `element.id`, `element.name`, `element.type`, `element.role`, `element.href` |
-| `submit` | `form.id`, `form.name`, `form.action`, `form.method` |
-| `outbound_click` | the `element.*` above, plus `link.origin` |
-| `page_leave` | `leave.reason` |
+| Event            | Properties                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------- |
+| `page_view`      | `navigation.type`, `navigation.from`                                                        |
+| `click`          | `element.tag`, `element.id`, `element.name`, `element.type`, `element.role`, `element.href` |
+| `submit`         | `form.id`, `form.name`, `form.action`, `form.method`                                        |
+| `outbound_click` | the `element.*` above, plus `link.origin`                                                   |
+| `page_leave`     | `leave.reason`                                                                              |
 
 A form submission records the form's **identity, never its field values**. There
 is no keystroke capture, no mouse tracking, no session replay, no screenshots, no
@@ -170,15 +173,15 @@ what an event means.
 
 What that puts on you:
 
-| Obligation | What it looks like here |
-|---|---|
-| Art. 28 — a written processing agreement | to be signed with whoever operates the hub for you; if you self-host, the question does not arise |
-| Art. 30 — record of processing | one entry for audience measurement, one for revenue attribution if you use it; the tables above are the "categories of data" |
-| Art. 13 — informing visitors | the paragraph below |
-| Art. 7 — collecting and proving consent | entirely yours. **The hub keeps no proof of consent, on purpose**: duplicating your record here would make us retain data nobody asked us for. What it does keep is one anonymous flag per visit — accepted, refused, or never asked — with no identity and no timestamp of the act, so that a site can count how many visitors decline the attribution cookie. It proves nothing and is purged with its row at 25 months. |
-| Art. 15 / 17 — access and erasure | see below; the default mode is an Article 11 case |
-| Retention | 25 months, purged daily — confirm it is enabled on your instance before you declare it |
-| Where the data sits | a deployment fact. Fill it in for your own record — nobody else can. |
+| Obligation                               | What it looks like here                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Art. 28 — a written processing agreement | to be signed with whoever operates the hub for you; if you self-host, the question does not arise                                                                                                                                                                                                                                                                                                                          |
+| Art. 30 — record of processing           | one entry for audience measurement, one for revenue attribution if you use it; the tables above are the "categories of data"                                                                                                                                                                                                                                                                                               |
+| Art. 13 — informing visitors             | the paragraph below                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Art. 7 — collecting and proving consent  | entirely yours. **The hub keeps no proof of consent, on purpose**: duplicating your record here would make us retain data nobody asked us for. What it does keep is one anonymous flag per visit — accepted, refused, or never asked — with no identity and no timestamp of the act, so that a site can count how many visitors decline the attribution cookie. It proves nothing and is purged with its row at 25 months. |
+| Art. 15 / 17 — access and erasure        | see below; the default mode is an Article 11 case                                                                                                                                                                                                                                                                                                                                                                          |
+| Retention                                | 25 months, purged daily — confirm it is enabled on your instance before you declare it                                                                                                                                                                                                                                                                                                                                     |
+| Where the data sits                      | a deployment fact. Fill it in for your own record — nobody else can.                                                                                                                                                                                                                                                                                                                                                       |
 
 Mark as **server only** any event type a page must not be able to forge —
 payments, entitlements. A browser key can write `source: browser` and nothing
@@ -230,27 +233,39 @@ that is not enforced is worse than none, because it is a claim rather than a gap
 
 ## The right to object
 
-Article 21(1) makes objection to legitimate-interest processing unconditional. Two
-of the three paths are not shipped, and pretending otherwise would be the one
-mistake this document must not make.
+Article 21(1) makes objection to legitimate-interest processing unconditional. All
+five paths work today.
 
-| Path | Effect | Status |
-|---|---|---|
-| Removing the SDK for that visitor | nothing reaches the hub | works today |
-| `setConsent(false)` | the durable cookie and its copy are erased on that event; the visitor returns to the daily derived key | works today |
-| Clearing browser cookies | the durable identity is gone; a new one is only issued on a fresh consent | works today |
-| `Sec-GPC: 1` request header | intended: the event is discarded at ingestion, nothing written, `204` returned | **not implemented** |
-| `window.eventsHub.optOut()` | intended: the SDK stops emitting and remembers the choice on the device | **not implemented** |
+| Path                              | Effect                                                                                                 | Status      |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------- |
+| Removing the SDK for that visitor | nothing reaches the hub                                                                                | works today |
+| `setConsent(false)`               | the durable cookie and its copy are erased on that event; the visitor returns to the daily derived key | works today |
+| Clearing browser cookies          | the durable identity is gone; a new one is only issued on a fresh consent                              | works today |
+| `Sec-GPC: 1` request header       | the event is discarded at ingestion, nothing written, nothing stored on the device, `204` returned     | works today |
+| `window.eventsHub.optOut()`       | the SDK stops its collectors and remembers the choice on the device                                    | works today |
 
 Withdrawing consent is **not** the same as objecting: it returns a visitor to the
-default mode, it does not stop measurement. Until the two paths above ship, an
-objection in default mode has to be honoured by you — by not loading the script
-for that visitor.
+default mode, it does not stop measurement.
+
+`Sec-GPC` is honoured on the exact value `1` and nothing else — an absent, empty
+or `0` header does not say "I refuse", it says nothing, and treating any presence
+as a refusal would discard traffic on a malformed header. It sets **no cookie**:
+the browser resends the header on every request, so there is nothing to remember.
+A visitor who turns the signal off returns to the default mode immediately, which
+is the coherent outcome — they have just withdrawn what carried their refusal.
+
+`optOut()` stops the collectors and sends one last event carrying the decision;
+that event is discarded on arrival without being written, and it is what makes the
+refusal outlive the tab. `optIn()` reverses it, and deliberately does **not**
+restart the collectors — the site decides that, through `start()`.
 
 Note the small irony in `optOut()`: remembering a refusal means writing to the
 device. That write is permitted without consent precisely because it serves the
-visitor's own expressed choice, and it is why the marker will hold nothing but the
-refusal itself.
+visitor's own expressed choice — CNIL names the refusal cookie among the exempt
+trackers — and it is why the marker holds nothing but the refusal itself. The
+cookie is `__Host-eh_optout`, its value is `1`, it carries no identifier, and it
+lasts 13 months, refreshed on each event. An opt-out that told people apart would
+be the very tracker it exists to switch off.
 
 ## Retention
 
@@ -258,16 +273,16 @@ refusal itself.
 runs every day at 03:15 UTC, across the whole platform — no project is partitioned
 out of it, precisely so that none can escape it.
 
-| What | What happens at 25 months |
-|---|---|
-| A visit whose **every** event is past the limit | deleted, with all of its events |
-| A visit with any recent event | kept whole. The cut is driven by the visit, never by the date of a single event, so no orphan row and no half-emptied path is ever produced. |
-| An event with **no** visit — a payment, a deploy, a probe | kept, and its durable visitor identity is erased |
+| What                                                      | What happens at 25 months                                                                                                                    |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| A visit whose **every** event is past the limit           | deleted, with all of its events                                                                                                              |
+| A visit with any recent event                             | kept whole. The cut is driven by the visit, never by the date of a single event, so no orphan row and no half-emptied path is ever produced. |
+| An event with **no** visit — a payment, a deploy, a probe | kept, and its durable visitor identity is erased                                                                                             |
 
 The asymmetry is deliberate and it comes from the product. What the law requires
 is forgetting **who**, not forgetting that a payment happened: a revenue figure
 three years back is still countable, it simply no longer points at anyone. An
-event that belonged to a visit gets no such treatment — its value *is* the path,
+event that belonged to a visit gets no such treatment — its value _is_ the path,
 and a path with the visitor removed describes nothing.
 
 Two things to check on your own installation: that `RETENTION_ENABLED` is not set

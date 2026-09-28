@@ -106,7 +106,8 @@ describe('decideVisitorCookie — la lecture de l’en-tête', () => {
     // n'importe quoi. Ce n'est pas une frontière de sécurité — choisir sa
     // propre identité n'affecte que soi — mais du bruit n'a rien à faire dans
     // l'espace des identifiants.
-    expect(decideVisitorCookie(entete('nimporte-quoi'), undefined).visitorId,
+    expect(
+      decideVisitorCookie(entete('nimporte-quoi'), undefined).visitorId,
     ).toBeUndefined();
   });
 

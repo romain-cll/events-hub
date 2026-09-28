@@ -219,10 +219,7 @@ export class CoreService {
         // session, et la corrélation persistée sur l'événement. Le chemin
         // serveur n'a que le second — il n'a pas de visite à rattacher.
         const visitorKey = command.visitorId
-          ? this.visitorKeys.computeStable(
-              command.projectId,
-              command.visitorId,
-            )
+          ? this.visitorKeys.computeStable(command.projectId, command.visitorId)
           : null;
 
         // Deux origines, jamais deux chemins : le navigateur fait découper sa

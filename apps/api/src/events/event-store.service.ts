@@ -305,11 +305,7 @@ export interface AmountPoint {
  * qu'est un referrer.
  */
 export type EntrySessionColumn =
-  | 'campaign'
-  | 'country'
-  | 'browser'
-  | 'os'
-  | 'device';
+  'campaign' | 'country' | 'browser' | 'os' | 'device';
 
 export type EntryAxis =
   | { on: 'session'; column: EntrySessionColumn }
@@ -1176,7 +1172,13 @@ export class EventStore {
    */
   async entryDimension(
     scope: EventScope,
-    { axis, source, amount, currency, limit = DEFAULT_TOP_LIMIT }: EntrySelector,
+    {
+      axis,
+      source,
+      amount,
+      currency,
+      limit = DEFAULT_TOP_LIMIT,
+    }: EntrySelector,
   ): Promise<EntryRanking> {
     if (!Number.isInteger(limit) || limit < 1) {
       throw new RangeError(
@@ -1275,11 +1277,7 @@ export class EventStore {
                 sql<string | null>`${entry.campaignMedium}`,
                 sql<string | null>`${entry.campaignName}`,
               ]
-            : [
-                sql<string | null>`${fromEntry[axis.column]}`,
-                nothing,
-                nothing,
-              ];
+            : [sql<string | null>`${fromEntry[axis.column]}`, nothing, nothing];
 
     // Même raison que dans `topValues` : l'extraction est isolée pour que le
     // groupement porte sur des colonnes ordinaires, et non sur des expressions
@@ -1307,7 +1305,9 @@ export class EventStore {
       .leftJoinLateral(entry, sql`true`);
 
     const extracted = (
-      axis.on === 'session' ? joined : joined.leftJoinLateral(firstEvent, sql`true`)
+      axis.on === 'session'
+        ? joined
+        : joined.leftJoinLateral(firstEvent, sql`true`)
     )
       .where(this.where(scope))
       .as('extracted');
@@ -1439,7 +1439,7 @@ export class EventStore {
           startedAt: row.startedAt,
           countryCode: row.countryCode,
           campaign:
-            row.campaignSource ?? row.campaignMedium ?? row.campaignName
+            (row.campaignSource ?? row.campaignMedium ?? row.campaignName)
               ? {
                   source: row.campaignSource,
                   medium: row.campaignMedium,
@@ -1580,7 +1580,7 @@ export class EventStore {
         // colonnes à `null` valent « pas de campagne », pas « campagne aux
         // champs vides » — la distinction disparaîtrait à plat.
         const campaign =
-          campaignSource ?? campaignMedium ?? campaignName
+          (campaignSource ?? campaignMedium ?? campaignName)
             ? {
                 source: campaignSource,
                 medium: campaignMedium,
@@ -1797,7 +1797,9 @@ export class EventStore {
         this.db
           .select({ one: sql`1` })
           .from(sessions)
-          .where(and(eq(sessions.id, events.sessionId), eq(sessions.isBot, true))),
+          .where(
+            and(eq(sessions.id, events.sessionId), eq(sessions.isBot, true)),
+          ),
       ),
     );
   }
@@ -1867,9 +1869,10 @@ export class EventStore {
     // qualifie différemment selon la clause.
     const extracted = this.db
       .select({
-        start: sql<Date>`date_trunc(${unit}, ${events.occurredAt} at time zone 'UTC') at time zone 'UTC'`.as(
-          'start',
-        ),
+        start:
+          sql<Date>`date_trunc(${unit}, ${events.occurredAt} at time zone 'UTC') at time zone 'UTC'`.as(
+            'start',
+          ),
         currency: sql<string | null>`${bag} ->> ${currency}::text`.as(
           'currency',
         ),
@@ -1931,12 +1934,14 @@ export class EventStore {
   ): Promise<{ granted: number; declined: number }> {
     const [row] = await this.db
       .select({
-        granted: sql<number>`count(distinct ${events.sessionId}) filter (where ${sessions.consent})`.mapWith(
-          Number,
-        ),
-        declined: sql<number>`count(distinct ${events.sessionId}) filter (where not ${sessions.consent})`.mapWith(
-          Number,
-        ),
+        granted:
+          sql<number>`count(distinct ${events.sessionId}) filter (where ${sessions.consent})`.mapWith(
+            Number,
+          ),
+        declined:
+          sql<number>`count(distinct ${events.sessionId}) filter (where not ${sessions.consent})`.mapWith(
+            Number,
+          ),
       })
       .from(events)
       .innerJoin(sessions, eq(events.sessionId, sessions.id))

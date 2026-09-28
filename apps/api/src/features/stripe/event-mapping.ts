@@ -38,13 +38,12 @@ const PREFIX = 'stripe';
  * distinct tant que personne ne les lit. Leur inventer un type maintenant
  * figerait une interprétation qu'on n'a pas.
  */
-const BY_BILLING_REASON: Partial<
-  Record<Stripe.Invoice.BillingReason, string>
-> = {
-  subscription_create: `${PREFIX}.subscription.started`,
-  subscription_cycle: `${PREFIX}.subscription.renewed`,
-  subscription_update: `${PREFIX}.subscription.changed`,
-};
+const BY_BILLING_REASON: Partial<Record<Stripe.Invoice.BillingReason, string>> =
+  {
+    subscription_create: `${PREFIX}.subscription.started`,
+    subscription_cycle: `${PREFIX}.subscription.renewed`,
+    subscription_update: `${PREFIX}.subscription.changed`,
+  };
 
 /**
  * Les deux clés sous lesquelles le montant d'un paiement est rangé.
@@ -458,7 +457,9 @@ export function settlementRefOf(
     const intent: unknown =
       'payment_intent' in object ? object.payment_intent : undefined;
 
-    return typeof intent === 'string' ? { on: 'payment_intent', id: intent } : null;
+    return typeof intent === 'string'
+      ? { on: 'payment_intent', id: intent }
+      : null;
   }
 
   return null;

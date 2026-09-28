@@ -151,9 +151,7 @@ export const revenueCohortsSchema = z
     const upper = to ?? new Date();
     const lower =
       from ??
-      new Date(
-        Date.UTC(upper.getUTCFullYear() - 1, upper.getUTCMonth(), 1),
-      );
+      new Date(Date.UTC(upper.getUTCFullYear() - 1, upper.getUTCMonth(), 1));
 
     return { from: lower, to: upper, depth };
   })

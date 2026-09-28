@@ -120,7 +120,9 @@ const bytes = JSON.stringify(shapes).length;
 
 console.log(`${Object.keys(shapes).length} pays → ${output}`);
 console.log(`${(bytes / 1024).toFixed(1)} Ko de chemins`);
-console.log(`${Object.keys(pins).length} pays sous ${PIN_BELOW} px² → pastille`);
+console.log(
+  `${Object.keys(pins).length} pays sous ${PIN_BELOW} px² → pastille`,
+);
 
 if (skipped.length > 0) {
   // Jamais en silence : un territoire absent de la carte doit se voir ici, pas

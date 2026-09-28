@@ -8,7 +8,7 @@ n'importe quel site, sans rien partager avec notre application.
 pnpm --filter @events-hub/sdk demo:site   # build + serveur statique sur :4000
 ```
 
-Puis ouvrir <http://localhost:4000/example/> (l'API doit tourner sur `:3001`).
+Puis ouvrir <http://localhost:4000/example/> (l'API doit tourner sur `:3003`).
 
 La page n'appelle **aucun** `track()` : elle fait `analytics.start()` et laisse
 les collecteurs travailler. Un parcours complet — cliquer, chercher, naviguer,

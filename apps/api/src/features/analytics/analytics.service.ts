@@ -13,11 +13,7 @@ import type {
   AnalyticsWindowDto,
 } from './dto/analytics-query.dto';
 import { sourceOf, type Source } from './entry-source';
-import {
-  sessionsOf,
-  type SessionCampaign,
-  type SessionExit,
-} from './sessions';
+import { sessionsOf, type SessionCampaign, type SessionExit } from './sessions';
 
 /**
  * Le seul endroit du backend qui sait ce qu'est une page vue.
@@ -571,24 +567,24 @@ export class AnalyticsService {
       topPages,
       byPageCount,
     ] = await Promise.all([
-        this.events.countSessions(audience),
-        this.events.countEvents(pages),
-        this.events.countVisitors(audience),
-        this.events.countBotSessions(audience),
-        this.events.countConsent(audience),
-        this.events.topValues(pages, {
-          source: 'attributes',
-          key: PATH_ATTRIBUTE,
-          limit: TOP_PAGES_LIMIT,
-        }),
-        // Le périmètre **sans** type : la répartition compte des `page_view`,
-        // mais la clôture se juge sur le dernier événement quel qu'il soit.
-        // Voir `countSessionsBySingleEvent`.
-        this.events.countSessionsBySingleEvent(audience, {
-          type: EVENT_TYPE,
-          settledBefore: settledBefore(to),
-        }),
-      ]);
+      this.events.countSessions(audience),
+      this.events.countEvents(pages),
+      this.events.countVisitors(audience),
+      this.events.countBotSessions(audience),
+      this.events.countConsent(audience),
+      this.events.topValues(pages, {
+        source: 'attributes',
+        key: PATH_ATTRIBUTE,
+        limit: TOP_PAGES_LIMIT,
+      }),
+      // Le périmètre **sans** type : la répartition compte des `page_view`,
+      // mais la clôture se juge sur le dernier événement quel qu'il soit.
+      // Voir `countSessionsBySingleEvent`.
+      this.events.countSessionsBySingleEvent(audience, {
+        type: EVENT_TYPE,
+        settledBefore: settledBefore(to),
+      }),
+    ]);
 
     return {
       from,
