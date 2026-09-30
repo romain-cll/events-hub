@@ -1,572 +1,312 @@
 # events-hub
 
-Monorepo Turborepo + pnpm.
+**An event hub that answers one question: what actually drives revenue?**
 
-## Structure
+Web analytics count visitors. Stripe counts money. Nothing joins the two.
+events-hub ingests events from any source — browser, backend, CI, Stripe — into
+one stream, and links each payment back to the visit that produced it.
+
+![Audience & revenue dashboard](docs/screenshots/analytics.png)
+
+## Who it's for
+
+- SaaS and indie teams that sell through Stripe.
+- Who want attribution without a data warehouse or a tag manager.
+- On sites where privacy matters: cookieless by default, GDPR-aware.
+
+## What it answers
+
+- Which source brings **revenue**, not just traffic?
+- Which campaign, referrer or landing page converts, and what is a visitor worth?
+- Which pages do buyers see?
+- Did this deploy move the numbers?
+
+## Features
+
+**Ingestion**
+
+- One endpoint, `POST /v1/events`, for every source. Event types are free-form.
+- Two key classes: public `eh_pk_` for browsers (origin allowlist), secret `eh_sk_` for servers (hashed, shown once).
+- `source` is derived from the key, never read from the payload — so it can be trusted.
+- Strict validation: an unknown field is a 400, not a silently dropped value.
+- Per-type `server-only` flag: events of that type forged from a browser are ignored at read time.
+
+**Browser SDK**
+
+- One `<script>` tag, served by the hub. No build step.
+- Collects page views, clicks, form submits, outbound clicks and page leaves on its own.
+- `track()` for custom events. Also usable as a typed package in bundled apps.
+
+**Analytics**
+
+- Visitors, sessions, page views, bounce rate, compared to the previous period.
+- Acquisition by source, UTM campaign, referrer and landing page (first touch).
+- Top, entry and exit pages. Browser, OS and device. Country, region and city on a world map.
+- Sessions are cut at ingestion (30-minute gap) and persisted: every reader sees the same sessions.
+
+**Revenue**
+
+- Stripe Connect with **read-only** OAuth. No token stored.
+- Webhooks become events. Payments are attributed through the visitor id placed in Stripe metadata.
+- Conversion rate, revenue and revenue per visitor for every acquisition dimension.
+- Traffic and revenue on one chart, with deploy markers.
+- Cohorts and monthly movements (started, ended, active) in the API. Historical backfill on demand.
+- Unattributed revenue is kept and counted, never hidden.
+
+**Event explorer**
+
+- Raw event log, newest first, cursor-paginated, filterable by type.
+- Hover a row to follow its session through the log.
+
+**Workspace**
+
+- Organizations, members, invitations, multiple projects.
+- API keys: create, revoke, edit allowed origins. Revocation is immediate.
+- Guided setup that waits for the first event.
+
+**Privacy**
+
+- Default mode: nothing written to the device. IP and User-Agent are never stored.
+- Visitor key is an HMAC that rotates daily — enough to count, not to follow.
+- Consented mode: durable id in a partitioned (CHIPS) cookie, needed for cross-day attribution and LTV.
+- Honors Global Privacy Control and an explicit opt-out.
+- Data older than 25 months is purged daily.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/attribution.png" alt="Acquisition, pages, visitors and locations with revenue"></td>
+    <td width="50%"><img src="docs/screenshots/events.png" alt="Event explorer"><br><br><img src="docs/screenshots/setup.png" alt="Guided setup"></td>
+  </tr>
+</table>
+
+## How it works
+
+```
+ Browser SDK (eh_pk_) ──┐
+ Backend / CI (eh_sk_) ─┼─► POST /v1/events ─► core pipeline ─► events (Postgres)
+ Stripe webhooks ───────┘   (via features/stripe)                    │
+                                                                     ▼
+                         dashboard ◄── features/ (analytics, revenue, explorer) ◄── EventStore
+```
+
+**Ingestion pipeline**
+
+```
+Zod (strict) → opt-out (GPC / cookie) → key → project + source
+  → visitor key (HMAC) → session → GeoIP → User-Agent → EventStore → Postgres
+```
+
+**Event model**
+
+| Field        | Set by | Meaning                                                  |
+| ------------ | ------ | -------------------------------------------------------- |
+| `type`       | client | free string, e.g. `page_view`, `deployment`, `signed_up` |
+| `occurredAt` | client | when it happened (ISO 8601, stored in UTC, ms precision) |
+| `source`     | server | `browser` or `server`, from the key class                |
+| `sessionId`  | server | `null` = no visit (a deploy, a payment, a probe)         |
+| `visitorKey` | server | durable consented identity only; `null` otherwise        |
+| `attributes` | client | context (page path, referrer, screen…), `jsonb`          |
+| `properties` | client | payload, shape depends on `type`, `jsonb`                |
+
+The rule: **a column is a correlation axis the server derives; `jsonb` is what the client sends.** A client can never write a value the server is meant to guarantee.
+
+No version field on events. Compatibility lives in the `/v1` URL prefix: only optional additions inside `/v1`, breaking changes go to `/v2`.
+
+**Revenue attribution**
+
+1. The site's backend puts `eh_visitor_id` in the Stripe Checkout Session **and** Customer metadata.
+2. Stripe sends webhooks to `/v1/webhooks/stripe`.
+3. `features/stripe` maps them to disjoint event types (`stripe.subscription.started`, `…renewed`, `…changed`, `stripe.payment.one_time`…).
+4. Reads join each payment to the visitor's first visit.
+
+Without consent, `eh_session_id` still attributes a purchase to that day's visit — but not renewals.
+
+One Stripe payment fires four webhooks that all carry an amount. Revenue reads target one precise type, so the same euro is never counted four times.
+
+## Architecture decisions worth reading
+
+- **Core vs features, enforced by a test.** The core (`core/`, `events/`, `sessions/`, `privacy/`…) routes, stores and counts; it never knows what a type means. `architecture.spec.ts` fails the build if a core file names an event type — even in a comment.
+- **One read path.** `EventStore` is the only access to the `events` table. Every read goes through one private `where()`, so a rule like `server-only` cannot be forgotten by the next module.
+- **Shared contract, checked both ways.** Zod schemas in `packages/api-contract` are consumed by the dashboard; `contract.spec.ts` fails if an API response and its schema diverge in either direction.
+- **Stripe data stored verbatim.** No recomputed amount that could disagree with the Stripe dashboard.
+- **E2E against a real Postgres.** A shared harness keeps one listening server per suite — ad-hoc supertest ports failed once every ~66,000 requests, on a random suite.
+- **Privacy documented like code.** A [privacy note](docs/privacy.md) and a [legitimate interest assessment](docs/legitimate-interest-assessment.md) describe exactly what is collected.
+
+Design rationale lives in code comments and in [`docs/`](docs).
+
+## Tech stack
+
+| Area      | Tools                                                                                          |
+| --------- | ---------------------------------------------------------------------------------------------- |
+| API       | NestJS 11, Express 5, Drizzle ORM, PostgreSQL, Zod 4, Better Auth, Stripe SDK                  |
+| Dashboard | TanStack Start, TanStack Router & Query, React 19, Tailwind CSS 4, shadcn/ui, Recharts, d3-geo |
+| SDK       | TypeScript, esbuild, Vitest, jsdom — zero runtime dependencies                                 |
+| Data      | DB-IP City Lite (GeoIP, MaxMind format), `@nestjs/schedule` for retention                      |
+| Tooling   | pnpm workspaces, Turborepo, ESLint, Prettier, Jest, Supertest                                  |
+
+## Repository layout
 
 ```
 apps/
-  api/   # NestJS         — http://localhost:3003
-  web/   # TanStack Start — http://localhost:3002
+  api/            NestJS API — ingestion, auth, analytics, revenue   :3003
+  web/            TanStack Start dashboard                            :3002
 packages/
-  api-contract/    # schémas Zod partagés API ↔ web ; l'invariant que contract.spec.ts garde
-  eslint-config/   # config ESLint partagée (base / node / react)
-  sdk/             # SDK navigateur : ingestion + collecteurs d'événements
+  api-contract/   Zod schemas shared by API and dashboard
+  sdk/            browser SDK (script tag + package)
+  eslint-config/  shared lint config
+docs/             ingestion, privacy, deployment, design notes
 ```
 
-Les documents de référence, qui valent mieux que ce fichier sur leur sujet :
+## Getting started
 
-| Document                                                                                 | Ce qu'il porte                                                                  |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| [`docs/deploiement.md`](docs/deploiement.md)                                             | mettre en ligne : variables d'environnement, migrations, Stripe côté exploitant |
-| [`docs/ingestion.md`](docs/ingestion.md)                                                 | envoyer des événements — clés, requête, CI, paiements                           |
-| [`docs/privacy.md`](docs/privacy.md)                                                     | ce qui est collecté, les deux modes, le droit d'opposition                      |
-| [`docs/legitimate-interest-assessment.md`](docs/legitimate-interest-assessment.md)       | la LIA du mode par défaut                                                       |
-| [`apps/api/src/features/stripe/README.md`](apps/api/src/features/stripe/README.md)       | les webhooks Stripe, et le piège des quatre événements par paiement             |
-| [`apps/api/src/features/analytics/README.md`](apps/api/src/features/analytics/README.md) | l'interprétation analytics                                                      |
-| [`packages/sdk/README.md`](packages/sdk/README.md)                                       | le SDK navigateur                                                               |
-| [`CLAUDE.md`](CLAUDE.md)                                                                 | les invariants qui cassent le build — à lire avant de toucher au socle          |
+**Requirements:** Node ≥ 24, pnpm 11, PostgreSQL.
 
-## Commandes
+1. Install dependencies.
+
+   ```sh
+   pnpm install
+   ```
+
+2. Create a database and a role.
+
+   ```sql
+   CREATE ROLE user_events_hub LOGIN PASSWORD '...';
+   CREATE DATABASE events_hub;
+   GRANT CREATE ON DATABASE events_hub TO user_events_hub;
+   ```
+
+3. Configure the API. Set `DATABASE_URL`, `VISITOR_KEY_SECRET` and `BETTER_AUTH_SECRET` (the API refuses to start without them).
+
+   ```sh
+   cp apps/api/.env.example apps/api/.env
+   openssl rand -hex 32   # once per secret
+   ```
+
+4. Run the migrations, then start everything.
+
+   ```sh
+   pnpm db:migrate
+   pnpm dev          # dashboard on :3002, API on :3003
+   ```
+
+5. Sign up on http://localhost:3002 and create a project.
+
+**Optional**
+
+- Demo data: `pnpm --filter api db:seed "<project name or id>"` fills a project with 120 days of traffic, campaigns, bots, deploys and Stripe subscriptions.
+- Geolocation: download [DB-IP City Lite](https://db-ip.com/db/download/ip-to-city-lite) (`.mmdb`) and set `GEOIP_DB_PATH`.
+- Stripe: set `STRIPE_SECRET_KEY`, `STRIPE_CONNECT_CLIENT_ID`, `STRIPE_WEBHOOK_SECRET`. Without them the API still runs; only the Stripe connection is disabled.
+
+## Sending events
+
+From a website:
+
+```html
+<script
+  defer
+  src="https://your-hub.example/v1/eh.js"
+  data-api-key="eh_pk_…"
+></script>
+<script>
+  window.eventsHub?.track('signed_up', { plan: 'pro' });
+</script>
+```
+
+From a backend or CI:
 
 ```sh
-pnpm install
-pnpm dev           # lance toutes les apps
-pnpm build
-pnpm lint
-pnpm test
-pnpm test:e2e      # e2e contre un vrai Postgres, en deux passes
-pnpm check-types
-pnpm format        # pnpm format:check en CI
-```
-
-## Base de données
-
-`apps/api` utilise **Drizzle ORM** (driver `node-postgres`) sur le Postgres local
-— pas de Docker.
-
-```sh
-cp apps/api/.env.example apps/api/.env
-```
-
-`DATABASE_URL` pilote l'app comme la CLI Drizzle. Deux autres variables sont
-**bloquantes** : `VISITOR_KEY_SECRET` et `BETTER_AUTH_SECRET` sont lues par
-`getOrThrow`, et l'API refuse de démarrer sans elles. Les onze restantes sont
-optionnelles et documentées une à une dans `.env.example` ; ce qu'elles coûtent
-en production est dans [`docs/deploiement.md`](docs/deploiement.md).
-
-```sh
-openssl rand -hex 32   # une valeur pour chacun des deux secrets
-```
-
-Côté Postgres, la convention du poste est une base + un rôle dédié par projet :
-
-```sql
-CREATE ROLE user_events_hub LOGIN PASSWORD '...';
-CREATE DATABASE events_hub;
--- drizzle-kit crée un schéma "drizzle" pour sa table __drizzle_migrations :
--- sans ce GRANT, `db:migrate` échoue sur « permission denied for database ».
-GRANT CREATE ON DATABASE events_hub TO user_events_hub;
-```
-
-### Où vit le schéma
-
-```
-apps/api/
-  drizzle.config.ts          # config drizzle-kit (dialect, out, casing)
-  drizzle/                   # migrations SQL générées — à committer
-  src/database/
-    database.module.ts       # @Global : fournit DRIZZLE + PG_POOL
-    database.tokens.ts       # tokens d'injection + type DrizzleDatabase
-    schema/                  # une table par fichier, ré-exportée dans index.ts
-```
-
-`casing: 'snake_case'` est réglé **des deux côtés** (`drizzle()` et
-`drizzle.config.ts`) : on écrit `startsAt` en TypeScript, la colonne s'appelle
-`starts_at`. Modifier l'un sans l'autre fait diverger le SQL généré du SQL
-exécuté.
-
-### Commandes
-
-```sh
-pnpm db:generate   # schéma modifié -> nouveau fichier SQL dans drizzle/
-pnpm db:migrate    # applique les migrations en attente
-pnpm db:studio     # explorateur web
-```
-
-Depuis la racine elles passent par Turbo (`turbo run db:*`, non cachées) ; on
-peut aussi les lancer dans `apps/api` avec `pnpm db:generate`, ou cibler l'app
-avec `pnpm --filter @events-hub/api db:push` (`db:push` pousse le schéma sans
-migration — pratique en exploration, à éviter dès qu'il y a des données).
-
-### Utiliser la base dans un service
-
-```ts
-import { Inject, Injectable } from '@nestjs/common';
-import { DRIZZLE, type DrizzleDatabase } from '../database/database.module';
-import { events } from '../database/schema';
-
-@Injectable()
-export class EventsService {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDatabase) {}
-
-  findAll() {
-    return this.db.select().from(events);
-  }
-}
-```
-
-Le module est `@Global()` : pas besoin de l'importer dans chaque feature module.
-Le pool est fermé via `onApplicationShutdown`, d'où le `app.enableShutdownHooks()`
-dans `main.ts`.
-
-La table `events` stocke l'événement brut : `id` (uuid généré en base),
-`project_id`, `type`, `occurred_at`, `source`, `session_id` (nullable),
-`visitor_key` (nullable), plus `attributes` et `properties` en `jsonb`
-(`NOT NULL DEFAULT '{}'`, donc jamais `null` côté lecture). Les deux colonnes
-jsonb sont typées `Record<string, unknown>` en TypeScript — la forme réelle
-dépend du `type`, elle n'est pas contrainte par le schéma.
-
-Il n'y a **pas** de colonne `version` : elle a existé, ne consignait rien, et
-personne ne pouvait la remplir correctement. La compatibilité du fil est portée
-par le préfixe `/v1` de l'API. Voir [`CLAUDE.md`](CLAUDE.md#le-modèle-dévénement).
-
-La règle de rangement, qui décide où va un champ nouveau : **colonne** = axe de
-corrélation dérivé par le serveur ; **`jsonb`** = charge utile fournie par le
-client, de forme dépendante du `type`.
-
-### Horodatage
-
-`occurred_at` est un `timestamptz(3)`. Trois points à ne pas confondre :
-
-Malgré son nom, `timestamptz` ne stocke pas de timezone : il lit l'offset à
-l'écriture, convertit en UTC et range un instant absolu. C'est bien ce qu'on
-veut — un `+02:00` est placé au bon point de la ligne du temps, et `Z` est une
-représentation ISO 8601 valide en sortie.
-
-Deux points à ne pas casser :
-
-- **Sortie** : `pg` renvoie un `Date`, dont la sérialisation JSON est déjà
-  `2026-08-20T14:30:00.000Z`. Ne pas passer la colonne en `mode: 'string'` —
-  on récupérerait la forme Postgres (`2026-08-20 14:30:00+00`, espace au lieu
-  de `T`), qui n'est pas de l'ISO 8601.
-- **Précision bornée à 3** : un `Date` JavaScript ne descend pas sous la
-  milliseconde. Avec la précision Postgres par défaut (microseconde), une
-  valeur écrite avec 6 décimales se relit tronquée — écrit ≠ relu, en silence.
-
-À l'ingestion, valider la chaîne entrante avec un validateur standard
-(`class-validator` / `zod`) : `new Date()` avale sans broncher des formes qui
-ne sont pas de l'ISO 8601.
-
-## API HTTP
-
-Le versioning est activé par l'URI (`src/app.setup.ts`) : un contrôleur annoté
-`@Controller({ path: 'events', version: '1' })` est servi sous `/v1/events`.
-Le défaut est `VERSION_NEUTRAL`, donc les routes sans version (racine, health)
-restent à la racine au lieu d'hériter d'un `/v1` involontaire.
-
-### Validation
-
-La validation d'entrée passe par **Zod**, pas par `class-validator` : le schéma
-est la source de vérité et le type TypeScript s'en déduit (`z.infer`), au lieu
-d'avoir une classe décorée à tenir synchronisée avec un type.
-
-`ZodValidationPipe` (`src/common/pipes/`) est branché **par paramètre**, pas en
-pipe global — le schéma dépend de la route, et l'écrire à côté du handler rend
-le contrat lisible :
-
-```ts
-@Post()
-create(@Body(new ZodValidationPipe(createEventSchema)) payload: CreateEventDto) {
-  return this.eventsService.create(payload);
-}
-```
-
-Le handler reçoit la **sortie** du schéma : les `transform` et les `default`
-sont déjà appliqués (`occurredAt` est un `Date`, `attributes` vaut `{}` s'il
-était absent). D'où deux types exportés — `CreateEventPayload` (l'entrée, telle
-qu'elle arrive sur le fil) et `CreateEventDto` (la sortie, telle que le service
-la reçoit).
-
-Un échec renvoie un 400 listant **toutes** les erreurs d'un coup :
-
-```json
-{
-  "statusCode": 400,
-  "error": "Bad Request",
-  "message": "Request body validation failed",
-  "issues": [{ "path": "occurredAt", "message": "Invalid ISO datetime" }]
-}
-```
-
-### `POST /v1/events`
-
-Ingère un événement et renvoie `201` avec la ligne telle que Postgres l'a
-écrite (`id` généré en base, valeurs par défaut appliquées).
-
-```sh
-curl -X POST http://localhost:3003/v1/events \
+curl -X POST https://your-hub.example/v1/events \
   -H 'Content-Type: application/json' \
   -d '{
-    "apiKey": "eh_sk_0123456789abcdef0123456789abcdef",
-    "type": "page.viewed",
-    "occurredAt": "2026-08-20T16:30:00+02:00",
-    "attributes": { "page.path": "/pricing" },
-    "properties": { "durationMs": 1200 }
+    "apiKey": "eh_sk_…",
+    "type": "deployment",
+    "occurredAt": "2026-08-30T12:41:04Z",
+    "properties": { "release.tag": "v1.5.0" }
   }'
 ```
 
-```json
-{
-  "id": "5ad5d50d-2f2e-49cc-a5ce-d826dd0dffa5",
-  "projectId": "3f1c…",
-  "type": "page.viewed",
-  "occurredAt": "2026-08-20T14:30:00.000Z",
-  "source": "server",
-  "sessionId": null,
-  "attributes": { "page.path": "/pricing" },
-  "properties": { "durationMs": 1200 }
-}
-```
+Full guide: [`docs/ingestion.md`](docs/ingestion.md).
 
-`apiKey` porte l'authentification **et** le projet : il n'y a pas de `projectId`
-dans le corps, et il ne faut pas en remettre — le schéma est strict. C'est aussi
-ce qui rend `source` digne de confiance : il est dérivé de la **classe de clé**
-présentée (`eh_pk_` → `browser`, `eh_sk_` → `server`), jamais lu dans le payload.
-Une clé `eh_pk_` exige en plus un en-tête `Origin` déclaré sur le projet.
+## API overview
 
-Le schéma est **strict** : une clé inconnue fait échouer la requête. Sur une
-ingestion, un `occuredAt` mal orthographié qui passerait en 201 est le pire
-scénario — la donnée est perdue et personne ne le sait. `attributes` et
-`properties` sont optionnels (`{}` par défaut), le reste est obligatoire.
+All routes are prefixed with `/v1`. Project routes require a session and project membership.
 
-`occurredAt` doit être de l'ISO 8601 avec timezone ; l'offset est accepté au
-même titre que `Z` et normalisé en UTC à l'écriture. La conversion en `Date`
-dans le schéma borne au passage la précision à la milliseconde, avant l'écriture
-— voir [Horodatage](#horodatage).
+| Route                                                                             | Purpose                                      |
+| --------------------------------------------------------------------------------- | -------------------------------------------- |
+| `POST /events`                                                                    | ingest one event (API key)                   |
+| `GET /eh.js`                                                                      | browser SDK, served by the hub               |
+| `POST /webhooks/stripe`                                                           | Stripe Connect webhooks (signed)             |
+| `GET /projects/:id/analytics`                                                     | summary: visitors, sessions, bounces, pages  |
+| `GET /projects/:id/analytics/sessions`                                            | dated sessions with their source             |
+| `GET /projects/:id/analytics/locations`                                           | country, region, city                        |
+| `GET /projects/:id/analytics/technology`                                          | browser, OS, device                          |
+| `GET /projects/:id/revenue/attribution`                                           | revenue by source, campaign, referrer, page  |
+| `GET /projects/:id/revenue/series`                                                | revenue over time                            |
+| `GET /projects/:id/revenue/cohorts`                                               | retention by acquisition month               |
+| `GET /projects/:id/revenue/movements`                                             | subscriptions started and ended, per month   |
+| `POST /projects/:id/revenue/sync`                                                 | backfill Stripe history                      |
+| `GET /projects/:id/events`                                                        | raw event log, cursor-paginated              |
+| `GET /projects/:id/event-types`                                                   | registered types; `PATCH` sets `server-only` |
+| `/projects`, `/projects/:id/keys`, `/organizations`, `/projects/:id/integrations` | workspace management                         |
 
-### Le contrat est générique, et c'est gardé
+Response shapes: [`packages/api-contract`](packages/api-contract/src).
 
-`type` est une chaîne libre. Le Core valide la **forme** d'un événement, dérive
-une clé visiteur, écrit — et ne sait rien de ce qu'il écrit. Un type jamais vu
-passe :
+## Testing
 
 ```sh
-curl -X POST http://localhost:3003/v1/events \
-  -H 'Content-Type: application/json' \
-  -d '{ "apiKey": "eh_sk_…", "type": "ai_agent_visit", "occurredAt": "…" }'
+pnpm turbo lint check-types test   # lint, types, unit tests (Jest + Vitest)
+pnpm test:e2e                      # end-to-end against a real Postgres
 ```
 
-C'est la promesse qui rend les modules possibles : `error`, `api_call`,
-`webhook`, `deployment` s'ajouteront sans qu'une ligne du Core bouge. Le
-pipeline est le même pour tous :
+- Unit tests cover the pure logic: sessions, source classification, Stripe mapping, cohorts, privacy keys.
+- E2E suites go through HTTP down to Postgres, route by route.
+- The retention suite runs alone in a second pass: its assertions are cluster-wide.
+- `architecture.spec.ts` and `contract.spec.ts` guard the structure, not the behavior.
 
-```
-HTTP → Zod → opposition (Sec-GPC / cookie) → résolution de clé (projet + source)
-     → cookie visiteur / consentement → clé visiteur (HMAC) → session → GeoIP
-     → User-Agent → EventStore → Postgres
-```
+## Deployment
 
-Deux tests la tiennent, et ils ne font pas doublon :
+No Dockerfile or CI is imposed; any Node 24 host with Postgres works.
 
-| test                            | ce qu'il attrape                                                                                                                                                |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/architecture.spec.ts`      | la **forme du code** : hors de `features/`, aucun fichier ne nomme un type d'événement, ne compare un `type` à un littéral, ni n'indexe un comportement par lui |
-| `test/event-stream.e2e-spec.ts` | le **comportement** : des types inconnus traversent réellement HTTP → Postgres → `EventStore`, avec le même traitement que les types connus                     |
-
-Le premier voit un aiguillage écrit mais jamais atteint ; le second voit une
-connaissance métier logée ailleurs que dans une comparaison — une valeur par
-défaut appliquée à un seul type, un `Set` de types « connus », une colonne
-dédiée. Vérifié : une violation écrite sans littéral ni `===` passe le premier
-et échoue au second.
-
-La sémantique vit donc entièrement en dehors du Core — dans le SDK d'un côté,
-dans `src/features/` de l'autre. `AnalyticsService` est le seul endroit du
-backend qui sache ce qu'est une page vue, et le seul qui sache où le chemin de
-la page est rangé ; `features/stripe`, `features/events` et
-`features/event-types` interprètent chacun leur part.
-
-### La surface de lecture du Core
-
-`EventStore` est ce que le Core offre aux modules, et le **seul** accès à la
-table `events`. Il sait dénombrer, classer et grouper — jamais interpréter.
-
-```ts
-insert(event);                  // la seule écriture
-attribute(…);                   // rattacher un événement à un parcours
-countEvents(scope);             // combien d'événements
-countVisitors(scope);           // combien de visiteurs distincts
-countSessions(scope);
-topValues(scope, selector);     // les valeurs les plus fréquentes d'une clé JSON
-amountSeries(scope);            // une série de montants, sans savoir ce qu'ils valent
-page(scope, cursor);            // l'explorateur, par curseur
-distinctTypes(scope);           // les types rencontrés
+```sh
+pnpm install --frozen-lockfile
+pnpm turbo build
+pnpm --filter api db:migrate           # before starting the API
+node apps/api/dist/main                 # :3003
+node apps/web/.output/server/index.mjs  # :3002
 ```
 
-Le listing complet est dans `src/events/event-store.service.ts`. Toutes les
-lectures traversent la méthode privée `where()` : c'est là que vit toute règle
-qui doit valoir pour toutes — le filtre `serverOnly` y est. Une règle posée dans
-un module de `features/` serait oubliée par le suivant.
+Settings that matter in production:
 
-`topValues` est la primitive de requêtage générique : l'appelant nomme une
-colonne (`attributes` ou `properties`) et une clé, le Core groupe. Le champ de
-scope qui restreint aux types voulus est `types: string[]`.
+- `WEB_URL`: the only origin allowed to receive auth cookies.
+- `AUTH_COOKIE_DOMAIN`: required when the dashboard and API are on two hosts.
+- `TRUST_PROXY_HOPS`: number of proxies in front of the API. Never `true`: it would let clients forge their IP.
 
-```ts
-store.topValues(
-  { projectId, from, to, type: 'page_view' },
-  { source: 'attributes', key: 'page.path', limit: 10 },
-);
-// → [{ value: '/pricing', events: 3, visitors: 2 }, …]
-```
+Details (in French): [`docs/deploiement.md`](docs/deploiement.md).
 
-Le Core ne sait pas que `page.path` désigne une page. Un module de suivi
-d'erreurs demanderait `{ source: 'properties', key: 'error.name' }` sur le type
-`error` — même méthode, aucune ligne à changer ici. C'est ce qui fait du Core un
-moteur de requêtage d'event stream, et des modules ses interprètes.
+## Documentation
 
-Quatre points à connaître avant de s'en servir :
+| Document                                                                                 | Content                                      |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------- |
+| [`docs/ingestion.md`](docs/ingestion.md)                                                 | keys, request format, CI, payments           |
+| [`docs/privacy.md`](docs/privacy.md)                                                     | what is collected, the two modes, opt-out    |
+| [`docs/legitimate-interest-assessment.md`](docs/legitimate-interest-assessment.md)       | LIA for the default mode                     |
+| [`packages/sdk/README.md`](packages/sdk/README.md)                                       | SDK events and options (FR)                  |
+| [`docs/deploiement.md`](docs/deploiement.md)                                             | env variables, migrations, Stripe setup (FR) |
+| [`docs/developpement.md`](docs/developpement.md)                                         | database, HTTP API, core internals (FR)      |
+| [`apps/api/src/features/analytics/README.md`](apps/api/src/features/analytics/README.md) | metric definitions and edge cases (FR)       |
+| [`apps/api/src/features/stripe/README.md`](apps/api/src/features/stripe/README.md)       | Stripe webhooks and attribution (FR)         |
+| [`CLAUDE.md`](CLAUDE.md)                                                                 | invariants that break the build (FR)         |
 
-- **`key` est une donnée, pas du SQL.** Elle part en paramètre lié ; `source`
-  choisit entre deux colonnes connues à l'avance. Une clé biscornue rend une
-  liste vide.
-- **Les clés absentes ou à `null` sont écartées.** Pour connaître la couverture,
-  comparer la somme des `events` à `countEvents()` sur le même périmètre.
-- **La valeur est toujours du texte** — `->>` rend la forme textuelle quel que
-  soit le type JSON, et le Core n'invente pas le type attendu.
-- **L'ordre est total** : `events` décroissant puis la valeur croissante. Sans
-  ce second critère, la coupe du `limit` ne serait pas déterministe à égalité.
+## Status
 
-`limit` vaut 10 par défaut, parce que la cardinalité d'une clé JSON n'est bornée
-par rien.
+Working proof of concept: web analytics and Stripe revenue attribution are shipped.
 
-Ce que le Core **ne** fait pas : décider qu'un événement est le premier ou le
-dernier d'un visiteur. « Entrée », « sortie », « session » sont des
-interprétations, et elles appartiendront au module qui en aura besoin — avec ses
-propres règles, le jour où il en aura vraiment besoin.
+Next:
 
-### Le module Analytics
+- a per-project ingestion cap;
+- cohort and retention views in the dashboard;
+- more sources: error tracking, uptime.
 
-`src/features/analytics/` est le premier interprète de l'event stream. Il tient
-en trois décisions, et elles sont toutes des constantes en haut d'un fichier :
+## Author
 
-```ts
-const EVENT_TYPE = 'page_view'; // ce qui compte comme une page vue
-const PATH_ATTRIBUTE = 'page.path'; // où le chemin est rangé
-const TOP_PAGES_LIMIT = 10; // combien de pages le classement retient
-```
-
-`GET /v1/projects/:projectId/analytics?from=&to=` rend :
-
-```json
-{
-  "from": "2026-08-16T00:00:00.000Z",
-  "to": "2026-08-23T00:00:00.000Z",
-  "sessions": 31,
-  "pageViews": 42,
-  "uniqueVisitors": 17,
-  "botSessions": 4,
-  "consentGranted": 9,
-  "consentDeclined": 3,
-  "bounces": 11,
-  "settledSessions": 28,
-  "topPages": [{ "value": "/", "events": 12, "visitors": 9 }]
-}
-```
-
-Il n'y a **pas** de paramètre `interval`, ni de `timeseries` dans ce résumé : le
-schéma de query est un `strictObject`, donc `?interval=day` rend un 400. Les
-séries temporelles ont leurs propres routes. La forme exacte fait foi dans
-[`packages/api-contract/src/analytics.ts`](packages/api-contract/src/analytics.ts),
-et `src/contract.spec.ts` échoue si la réponse et le schéma divergent dans un
-sens ou dans l'autre.
-
-La chaîne complète tient en une ligne, et chaque maillon ignore le suivant :
-
-```
-page_view (SDK) → EventStore.topValues (générique) → Analytics (interprète) → API → dashboard
-```
-
-Trois points qui se lisent mal dans le code seul :
-
-- **`limit` n'est pas dans l'API.** Dix pages est la réponse à « quelles sont
-  les pages les plus vues », pas un réglage de l'appelant. Le schéma de query
-  est un `strictObject` : `?limit=50` rend un 400 plutôt que d'être ignoré.
-- **`topPages` est un classement, pas une décomposition.** La somme de ses
-  `events` est inférieure à `pageViews` dès qu'il y a plus de dix pages ou
-  qu'une vue n'a pas de chemin. En tirer des pourcentages du total serait faux
-  — le dashboard affiche les comptes bruts et une barre relative à la première
-  ligne.
-- **`value`, pas `path`.** Le chemin est rendu tel que le site l'a émis. Le
-  renommer laisserait croire à une normalisation que personne ne fait.
-
-Le dashboard ne calcule rien : il ne trie pas (la liste arrive ordonnée, et la
-réordonner casserait le départage déterministe du serveur), ne somme rien, ne
-comble aucun trou.
-
-`test/analytics.e2e-spec.ts` éprouve tout ça par la route : plusieurs pages,
-plusieurs visiteurs sur une même page, les autres types écartés, les vues sans
-chemin ignorées, la fenêtre respectée, le cloisonnement par projet, et l'ordre
-stable à égalité.
-
-### D'où viennent les visiteurs — la règle, spécifiée avant d'être branchée
-
-`src/features/analytics/entry-source.ts` fixe la définition de la **provenance
-d'un visiteur** ; `entry-source.spec.ts` l'éprouve sur des parcours réels.
-
-La règle a depuis été branchée : `sourceOf()` alimente
-`GET /v1/projects/:projectId/analytics/sessions`, et le Core expose
-`entryDimension()` et `entryVisits()` pour la porter. Ce qui suit reste la
-spécification — c'est elle qui fait autorité sur le comportement.
-
-> La source d'un visiteur est le **`page.referrer` de son premier `page_view`
-> dans la fenêtre**.
-
-`page.referrer` est `document.referrer` : l'URL exacte de la page d'où vient le
-visiteur, telle que le navigateur la donne. C'est _la_ provenance, et rien
-d'autre dans le flux ne la porte.
-
-#### Pourquoi « le premier `page_view` », et pas chaque vue
-
-Le referrer est figé au chargement du document et ne bouge pas des navigations
-internes sans rechargement. C'est ce qui le rend utilisable — n'importe quel
-événement de la visite porte encore l'origine du document — et c'est aussi ce
-qui interdit de le compter événement par événement : un visiteur venu de Google
-et passé sur trois pages porte le referrer Google sur les trois. Compté par
-vue, ça ferait trois arrivées Google pour une visite, avec une erreur
-exactement proportionnelle à la profondeur des visites — invisible, et d'autant
-plus grosse que le site est bon.
-
-Un visiteur, une source. Les lignes de la répartition **partitionnent** donc les
-visiteurs : la somme de leurs `visitors` vaut le total. C'est l'inverse des
-`visitors` de `topValues`, qui comptent une personne dans chaque valeur touchée.
-
-#### Le rôle, plus étroit, de `navigation.from`
-
-Il ne décide pas de la source. Il dit une seule chose : cette vue a-t-elle été
-précédée par une page du même site — donc **tient-on la page d'atterrissage**.
-
-| première vue du visiteur | source                        | `path`                       |
-| ------------------------ | ----------------------------- | ---------------------------- |
-| sans `navigation.from`   | le referrer                   | la landing                   |
-| avec `navigation.from`   | le referrer, toujours valable | une page de milieu de visite |
-
-Le second cas arrive quand la fenêtre coupe une visite en cours. Il est rendu
-comme le drapeau `isLanding` (et le total `visitorsSeenMidVisit`), pas comme un
-filtre : une visite attrapée en cours de route a quand même une provenance, et
-la jeter serait perdre un visiteur pour une question de cadrage.
-
-À noter, parce que ça change la lecture : `navigation.from` n'est pas que le
-routeur JS. Le SDK le remplit aussi en MPA depuis un `document.referrer` de même
-origine. C'est ce qui fait qu'il est absent sur une vraie arrivée, quel que soit
-le type de site — et présent dès qu'on regarde une page de milieu de visite.
-
-#### Six natures, dont une qui n'est pas de l'acquisition
-
-| `kind`      | quand                                 | `name`            |
-| ----------- | ------------------------------------- | ----------------- |
-| `direct`    | aucun referrer                        | `null`            |
-| `search`    | l'hôte porte un label de moteur connu | `google`          |
-| `assistant` | un assistant conversationnel connu    | `chatgpt`         |
-| `social`    | un réseau social connu                | `linkedin`        |
-| `other`     | tout autre hôte externe               | `blog.autre.test` |
-| `internal`  | referrer de **notre propre origine**  | `shop.test`       |
-
-`other` ne promet aucune interprétation : ce qu'aucun ensemble connu ne
-revendique y tombe, **avec son hôte** — donc nommable, même si sa nature ne dit
-rien.
-
-`internal` est le résidu — rechargement, navigation vers une ancre, ou visite
-attrapée après un changement de document sur un site classique. Il est **rendu**
-plutôt qu'écarté : sa part dit à quel point la lecture est polluée.
-L'acquisition, c'est `direct + search + assistant + social + other`.
-
-Le moteur est reconnu par **label d'hôte** (`google` couvre `google.fr` comme
-`www.google.co.uk`) — une heuristique assumée, remplaçable par une table sans
-qu'une ligne du Core bouge. La comparaison d'origine est stricte, comme dans le
-SDK : `docs.shop.test` est donc `other`. Décider qu'un sous-domaine est « le
-même site » demande de savoir quels hôtes appartiennent au projet — une
-configuration, pas une donnée d'événement.
-
-#### Ce que la règle ne peut pas savoir
-
-- **`visitor_key` tourne chaque jour UTC.** Le même humain revenu demain est un
-  autre visiteur, avec une autre source. L'attribution est quotidienne au mieux ;
-  faire mieux demanderait une identité qui survit à la journée — précisément ce
-  que ce projet a choisi de ne pas stocker.
-- **Il n'y a pas de session.** Un visiteur revenu le soir garde la source du
-  matin. `countArrivals()` mesure ce que ça coûte — le nombre d'arrivées de
-  document — sans changer l'attribution, et rendu à part pour ne jamais se
-  mélanger aux visiteurs dans un même compteur.
-- **`direct` veut dire « aucune provenance connue »**, pas « URL tapée au
-  clavier » : une `Referrer-Policy` restrictive ou un HTTPS → HTTP produit le
-  même vide.
-- **Sur un site classique, une visite coupée par la fenêtre perd sa
-  provenance** : le document a changé, le referrer pointe sur la page
-  précédente du site. La réponse est `internal`, et c'est la réponse honnête —
-  aucune règle ne peut retrouver Google ici.
-
-#### Ce que le Core a dû apprendre, et comment
-
-La règle a besoin, **par visiteur, du plus ancien `page_view` de la fenêtre**,
-avec trois clés lues ensemble sur cette même ligne (`page.referrer`, `page.url`,
-`page.path`) plus la présence de `navigation.from`.
-
-`topValues` ne sait rien faire de ça : il agrège une clé, il ne rend pas de
-lignes. Ce qu'il fallait n'était donc pas une agrégation de plus mais une
-**projection** — « pour chaque visiteur, la première ligne, et ces colonnes-là ».
-C'est `entryDimension()` et `entryVisits()`, et le Core les porte sans rien
-connaître du métier : un `DISTINCT ON (visitor_key) … ORDER BY occurred_at` ne
-mentionne ni source, ni landing page, ni moteur de recherche. La classification,
-elle, reste ici.
-
-## SDK navigateur
-
-`packages/sdk` est le client que chargent les sites instrumentés. Il fait deux
-choses : poster un événement (`track()`), et transformer les signaux natifs du
-navigateur en un flux d'événements normalisé (`start()`).
-
-```ts
-const analytics = new Analytics({ apiKey, endpoint });
-analytics.start(); // page_view, click, submit, outbound_click, page_leave
-```
-
-**Le Core n'en sait rien.** Aucun de ces types n'est connu de `POST /v1/events`,
-qui continue de n'accepter qu'un `type`, un instant et deux objets libres.
-La sémantique de `page_view` ou de `leave.reason` vit entièrement dans le SDK
-d'un côté et dans les modules de lecture de l'autre — jamais dans l'ingestion.
-
-Détail des événements, des clés produites et de la frontière
-`attributes` / `properties` : [`packages/sdk/README.md`](packages/sdk/README.md).
-
-## Versions de TypeScript
-
-Les deux apps sont volontairement sur des versions différentes, **épinglées à
-l'exact** (pas de `^`) :
-
-| app        | TypeScript | pourquoi                               |
-| ---------- | ---------- | -------------------------------------- |
-| `apps/api` | `5.9.2`    | plafonnée, voir ci-dessous             |
-| `apps/web` | `6.0.3`    | version livrée par le starter TanStack |
-
-**Ne pas monter `apps/api` en TypeScript 6.** `nest build` échoue alors en
-silence : rien n'est produit dans `dist/`, sans le moindre message d'erreur.
-La cause est que `nest build` charge deux copies de TypeScript à la fois —
-celle de l'app (résolue depuis le cwd par `lib/compiler/typescript-loader.js`)
-et celle qu'embarque `@nestjs/cli` (`require("typescript")` statique dans
-`lib/compiler/compiler.js`, épinglée en 5.9.3). Le CLI pilote donc le
-compilateur de l'app via une API interne qui diverge à partir de la 6.
-
-Deux autres plafonds sur l'API, à revérifier avant toute montée :
-
-- `typescript-eslint` → peer `typescript >=4.8.4 <6.1.0` (aucune v9 publiée)
-- `ts-jest` → peer `typescript >=4.3 <7`
-
-TypeScript 7 est donc hors de portée pour l'API, même s'il est en `latest` sur
-npm.
-
-L'écart entre les deux apps est sans conséquence tant qu'elles ne partagent pas
-de types : chacune compile de son côté et TypeScript ne va jamais en production.
-Il faudra en tenir compte le jour où un `packages/*` exposera des types consommés
-par les deux — ce code partagé devra être écrit pour le compilateur le plus
-ancien, donc en 5.9.
+Built by [@romain.caille](https://gitlab.com/romain.caille).
